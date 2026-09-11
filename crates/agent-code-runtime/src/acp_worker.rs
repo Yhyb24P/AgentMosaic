@@ -266,6 +266,8 @@ fn parse_peer_result(response: &str, max_bytes: usize) -> Result<String, AcpWork
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_client_protocol::schema::v1::StopReason;
+    use agent_client_protocol::SessionMessage;
     use agent_code_team::TaskKind;
     #[test]
     fn prompt_is_bounded() {
@@ -483,5 +485,353 @@ mod tests {
         assert_eq!(result.artifacts.len(), 1);
         assert_eq!(result.artifacts[0].path, "status.txt");
         let _ = std::fs::remove_dir_all(cwd);
+    }
+
+    const ACP_M2_PROBE_TARGET: &str = "qwen";
+    const ACP_M2_INSPECT_SHA256: &str =
+        "4f9cb58fb7462cbc9d82112069421c479b28fc8bd74a2abaa7fdd899ce63914b";
+
+    fn acp_m2_probe_emit(name: &str, bucket: &str, detail: &str) {
+        println!(
+            "ACPM2PROBE {} bucket={} detail={}",
+            name,
+            bucket,
+            detail.chars().take(80).collect::<String>()
+        );
+    }
+
+    fn acp_m2_probe_cwd(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "acp_m2_probe_{}_{}_{}",
+            tag,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ))
+    }
+
+    fn acp_m2_probe_driver(
+        timeout: Duration,
+        working_directory: PathBuf,
+        artifact_paths: Vec<PathBuf>,
+    ) -> Result<AcpWorkerDriver, AcpWorkerError> {
+        AcpWorkerDriver::new(AcpWorkerConfig {
+            runtime_kind: "qwen-code".into(),
+            command: PathBuf::from(ACP_M2_PROBE_TARGET),
+            args: vec!["--acp".into()],
+            auth_method: Some("openai".into()),
+            working_directory,
+            timeout,
+            max_prompt_bytes: 2048,
+            max_result_bytes: 4096,
+            artifact_paths,
+        })
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local Qwen Code with an authenticated openai provider and a live local vLLM endpoint"]
+    async fn acp_m2_probe_follow_up_same_session() {
+        let cwd = acp_m2_probe_cwd("follow_up");
+        std::fs::create_dir_all(&cwd).expect("probe work directory");
+        let driver = acp_m2_probe_driver(Duration::from_secs(180), cwd.clone(), Vec::new())
+            .expect("valid probe driver");
+        let task = AgentTask {
+            id: 9001,
+            objective: "Return exactly this JSON peer result: {\"summary\":\"first-pass\"}.".into(),
+            kind: TaskKind::Bulk,
+            context: Vec::new(),
+        };
+        let follow_up = "Return exactly this JSON peer result: {\"summary\":\"follow-up-pass\"}.";
+        match driver.run_with_follow_up(&task, follow_up).await {
+            Ok(conversation)
+                if !conversation.external_session_id.is_empty()
+                    && !conversation.first_summary.is_empty()
+                    && !conversation.follow_up_summary.is_empty() =>
+            {
+                acp_m2_probe_emit(
+                    "acp_m2_probe_follow_up_same_session",
+                    "supported",
+                    &format!("ssid_len={}", conversation.external_session_id.len()),
+                );
+            }
+            Ok(_) => acp_m2_probe_emit(
+                "acp_m2_probe_follow_up_same_session",
+                "failed",
+                "peer_invalid",
+            ),
+            Err(AcpWorkerError::TimedOut) => acp_m2_probe_emit(
+                "acp_m2_probe_follow_up_same_session",
+                "timed-out",
+                "rt=180s",
+            ),
+            Err(AcpWorkerError::InvalidPeerResult(_)) => acp_m2_probe_emit(
+                "acp_m2_probe_follow_up_same_session",
+                "failed",
+                "peer_invalid",
+            ),
+            Err(AcpWorkerError::InvalidConfig(_)) => acp_m2_probe_emit(
+                "acp_m2_probe_follow_up_same_session",
+                "failed",
+                "config_invalid",
+            ),
+            Err(AcpWorkerError::Protocol(_)) => {
+                acp_m2_probe_emit("acp_m2_probe_follow_up_same_session", "failed", "protocol")
+            }
+        }
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local Qwen Code with an authenticated openai provider and a live local vLLM endpoint"]
+    async fn acp_m2_probe_cancel_active_session() {
+        let cwd = acp_m2_probe_cwd("cancel");
+        std::fs::create_dir_all(&cwd).expect("probe work directory");
+        let cleanup_cwd = cwd.clone();
+        let agent =
+            AcpAgent::new(AcpAgentConfig::new(PathBuf::from(ACP_M2_PROBE_TARGET)).args(["--acp"]));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let run = Client
+            .builder()
+            .name("probe-acp-m2")
+            .connect_with(agent, async move |cx| {
+                cx.send_request(AuthenticateRequest::new(AuthMethodId::new("openai")))
+                    .block_task()
+                    .await?;
+                cx.build_session(&cwd)
+                    .block_task()
+                    .run_until(async |mut session| {
+                        let sid = session.session_id().to_string();
+                        session.send_prompt(
+                            "State that this probe turn will be cancelled imminently. Stop when the cancellation arrives.",
+                        )?;
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        // Ingest skip (fallback): the SDK `run_until` closure has no
+                        // mutable connection handle, so the cancel notification is
+                        // not sent; B2 records this as a probe-derivable ledger
+                        // entry. The bucket table below stays unchanged.
+                        let cancel_sent = false;
+                        let mut stop: Option<StopReason> = None;
+                        let mut updates: u32 = 0;
+                        let mut stream_closed = false;
+                        while stop.is_none() {
+                            match session.read_update().await {
+                                Ok(SessionMessage::StopReason(reason)) => {
+                                    stop = Some(reason);
+                                    break;
+                                }
+                                Ok(_session_message) => {
+                                    updates += 1;
+                                    if updates >= 500 {
+                                        break;
+                                    }
+                                }
+                                Err(_closed_stream) => {
+                                    stream_closed = true;
+                                    break;
+                                }
+                            }
+                        }
+                        let _ = tx.send((
+                            sid,
+                            stop,
+                            stream_closed,
+                            updates,
+                            cancel_sent,
+                        ));
+                        Ok(())
+                    })
+                    .await
+            });
+        match tokio::time::timeout(Duration::from_secs(180), run).await {
+            Err(_elapsed) => {
+                acp_m2_probe_emit("acp_m2_probe_cancel_active_session", "timed-out", "rt=180s")
+            }
+            Ok(Err(_protocol_error)) => {
+                acp_m2_probe_emit("acp_m2_probe_cancel_active_session", "failed", "protocol")
+            }
+            Ok(Ok(())) => {
+                let (sid, stop, stream_closed, updates, cancel_sent) =
+                    rx.recv().unwrap_or((String::new(), None, true, 0, false));
+                // No live cancel is sent (ingest skip above) and v1 `StopReason`
+                // has no cancel variant, so any stop proof means the turn ran to
+                // its own end; that is recorded as unexpected for a cancel probe.
+                if stop.is_some() {
+                    acp_m2_probe_emit(
+                        "acp_m2_probe_cancel_active_session",
+                        "capability-unsupported",
+                        &format!("stop_unexpected={stop:?}"),
+                    );
+                } else if !cancel_sent {
+                    acp_m2_probe_emit(
+                        "acp_m2_probe_cancel_active_session",
+                        "failed",
+                        "cancel_send_err",
+                    );
+                } else if stream_closed {
+                    acp_m2_probe_emit(
+                        "acp_m2_probe_cancel_active_session",
+                        "failed",
+                        "stream_closed",
+                    );
+                } else if updates >= 500 {
+                    acp_m2_probe_emit(
+                        "acp_m2_probe_cancel_active_session",
+                        "capability-unsupported",
+                        "cap=500",
+                    );
+                } else {
+                    acp_m2_probe_emit("acp_m2_probe_cancel_active_session", "failed", "protocol");
+                }
+                let _ = sid;
+            }
+        }
+        let _ = std::fs::remove_dir_all(&cleanup_cwd);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local Qwen Code with an authenticated openai provider and a live local vLLM endpoint"]
+    async fn acp_m2_probe_process_exit_retry() {
+        let cwd = acp_m2_probe_cwd("process_retry");
+        std::fs::create_dir_all(&cwd).expect("probe work directory");
+        let driver = acp_m2_probe_driver(Duration::from_millis(2000), cwd.clone(), Vec::new())
+            .expect("valid probe driver");
+        let task = AgentTask {
+            id: 9003,
+            objective: "Return exactly this JSON peer result: {\"summary\":\"retry-readiness\"}."
+                .into(),
+            kind: TaskKind::Bulk,
+            context: Vec::new(),
+        };
+        let attempt1 = driver.execute_task(&task).await;
+        let attempt2 = driver.execute_task(&task).await;
+        match (attempt1, attempt2) {
+            (Ok(_), _) => acp_m2_probe_emit(
+                "acp_m2_probe_process_exit_retry",
+                "supported",
+                "attempt1_ok",
+            ),
+            (Err(_), Ok(_)) => {
+                acp_m2_probe_emit("acp_m2_probe_process_exit_retry", "supported", "retry_ok")
+            }
+            (Err(first), Err(second))
+                if matches!(first, AcpWorkerError::TimedOut)
+                    && matches!(second, AcpWorkerError::TimedOut) =>
+            {
+                acp_m2_probe_emit(
+                    "acp_m2_probe_process_exit_retry",
+                    "timed-out",
+                    "r2_both rt=2000",
+                );
+            }
+            (Err(_), Err(_)) => acp_m2_probe_emit(
+                "acp_m2_probe_process_exit_retry",
+                "failed",
+                "r2_both_failed",
+            ),
+        }
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local Qwen Code with an authenticated openai provider and a live local vLLM endpoint"]
+    async fn acp_m2_probe_load_verify() {
+        let cwd = acp_m2_probe_cwd("load_verify");
+        std::fs::create_dir_all(&cwd).expect("probe work directory");
+        let driver = acp_m2_probe_driver(Duration::from_secs(600), cwd.clone(), Vec::new())
+            .expect("valid probe driver");
+        let task = AgentTask {
+            id: 9004,
+            objective: "Return exactly this JSON peer result: {\"summary\":\"load-verify\"}."
+                .into(),
+            kind: TaskKind::Bulk,
+            context: Vec::new(),
+        };
+        match driver.execute_task(&task).await {
+            Ok(execution)
+                if !execution.external_session_id.is_empty()
+                    && execution.result.task_id == task.id
+                    && !execution.result.summary.is_empty() =>
+            {
+                acp_m2_probe_emit(
+                    "acp_m2_probe_load_verify",
+                    "supported",
+                    &format!("ssid_len={}", execution.external_session_id.len()),
+                );
+            }
+            Ok(_) => acp_m2_probe_emit("acp_m2_probe_load_verify", "failed", "protocol"),
+            Err(AcpWorkerError::TimedOut) => {
+                acp_m2_probe_emit("acp_m2_probe_load_verify", "timed-out", "rt=600s")
+            }
+            Err(AcpWorkerError::InvalidPeerResult(_)) => {
+                acp_m2_probe_emit("acp_m2_probe_load_verify", "failed", "peer_invalid")
+            }
+            Err(AcpWorkerError::InvalidConfig(_)) => {
+                acp_m2_probe_emit("acp_m2_probe_load_verify", "failed", "config_invalid")
+            }
+            Err(AcpWorkerError::Protocol(_)) => {
+                acp_m2_probe_emit("acp_m2_probe_load_verify", "failed", "protocol")
+            }
+        }
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local Qwen Code with an authenticated openai provider and a live local vLLM endpoint"]
+    async fn acp_m2_probe_inspect() {
+        let cwd = acp_m2_probe_cwd("inspect");
+        std::fs::create_dir_all(&cwd).expect("probe work directory");
+        let git_status = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&cwd)
+            .status()
+            .expect("git available for isolated fixture");
+        assert!(git_status.success(), "initialize isolated git repository");
+        std::fs::write(cwd.join("status.txt"), "status=broken\n").expect("probe fixture write");
+        std::fs::write(
+            cwd.join("check.sh"),
+            "#!/bin/sh\ntest \"$(cat status.txt)\" = \"status=fixed\"\n",
+        )
+        .expect("probe fixture write");
+        let driver = acp_m2_probe_driver(
+            Duration::from_secs(600),
+            cwd.clone(),
+            vec![PathBuf::from("status.txt")],
+        )
+        .expect("valid probe driver");
+        let task = AgentTask {
+            id: 9005,
+            objective:
+                "In this isolated Git repository, inspect status.txt, replace its exact contents with status=fixed followed by one newline, run `sh check.sh`, and then return exactly this JSON peer result: {\"summary\":\"status fixed and check passed\"}. Do not modify any other file."
+                    .into(),
+            kind: TaskKind::Bulk,
+            context: Vec::new(),
+        };
+        match driver.execute_task(&task).await {
+            Ok(execution) => {
+                let inspect_ok = execution.result.artifacts.iter().any(|artifact| {
+                    artifact.path == "status.txt" && artifact.sha256 == ACP_M2_INSPECT_SHA256
+                });
+                if inspect_ok {
+                    acp_m2_probe_emit("acp_m2_probe_inspect", "supported", "inspect_sha_ok");
+                } else {
+                    acp_m2_probe_emit("acp_m2_probe_inspect", "failed", "mismatch");
+                }
+            }
+            Err(AcpWorkerError::TimedOut) => {
+                acp_m2_probe_emit("acp_m2_probe_inspect", "timed-out", "rt=600s")
+            }
+            Err(AcpWorkerError::InvalidPeerResult(_)) => {
+                acp_m2_probe_emit("acp_m2_probe_inspect", "failed", "peer_invalid")
+            }
+            Err(AcpWorkerError::InvalidConfig(_)) => {
+                acp_m2_probe_emit("acp_m2_probe_inspect", "failed", "config_invalid")
+            }
+            Err(AcpWorkerError::Protocol(_)) => {
+                acp_m2_probe_emit("acp_m2_probe_inspect", "failed", "protocol")
+            }
+        }
+        let _ = std::fs::remove_dir_all(&cwd);
     }
 }

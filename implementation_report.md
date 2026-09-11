@@ -704,3 +704,42 @@ S0 is therefore complete: actual-tree review, secret/path review of all
 22 candidate paths, an explicit checkpoint commit on the existing feature
 branch, and a green normal Rust gate at that checkpoint. Next stage per
 `M2-M9-plan.md` Section 1 is M2 (ACP driver lifecycle).
+
+## 31. M2-M9-plan execution: M2-B1 probe append to `acp_worker.rs` (2026-09-12)
+
+M2-B1 appends five `#[ignore]`-gated live probe tests and three shared
+helpers (`acp_m2_probe_emit` / `acp_m2_probe_cwd` / `acp_m2_probe_driver`)
+to the end-anchored `mod tests` in
+`crates/agent-code-runtime/src/acp_worker.rs`. The main-code region
+(lines 1-264) is unchanged: the whole-file diff shows two hunks, at
+new-file lines 269 and 489, both inside the test module. Every probe
+carries `#[ignore = "requires local Qwen Code with an authenticated
+openai provider and a live local vLLM endpoint"]`, so live runs require
+local credentials and do not execute under the normal gate; each probe
+prints one tally line `ACPM2PROBE <name> bucket=<bucket>
+detail=<detail>` (detail capped at 80 chars) when run:
+
+| Probe | Budget | Buckets emitted |
+|---|---:|---|
+| `acp_m2_probe_follow_up_same_session` | 180 s | `supported`, `failed/peer_invalid`, `failed/config_invalid`, `timed-out` (rt=180s), `failed/protocol` |
+| `acp_m2_probe_cancel_active_session` | 180 s | `capability-unsupported/stop_unexpected=...`, `failed/cancel_send_err`, `failed/stream_closed`, `capability-unsupported/cap=500`, `failed/protocol`, `timed-out` (rt=180s) |
+| `acp_m2_probe_process_exit_retry` | 2000 ms x2 | `supported` (attempt1_ok / retry_ok), `timed-out` (r2 both), `failed/r2_both_failed` |
+| `acp_m2_probe_load_verify` | 600 s | `supported`, `failed/peer_invalid`, `failed/config_invalid`, `timed-out` (rt=600s), `failed/protocol` |
+| `acp_m2_probe_inspect` | 600 s | `supported/inspect_sha_ok`, `failed/mismatch`, `failed/peer_invalid`, `failed/config_invalid`, `timed-out` (rt=600s), `failed/protocol` |
+
+Cancel-probe caveats (B2 absorbs these into the probe-derivable
+ledger): the SDK `run_until` closure holds no mutable connection
+handle, so the cancel notification is not actually sent (`cancel_sent`
+is the constant `false`; `failed/cancel_send_err` is therefore the
+expected live-run outcome), and the v1 `StopReason` enum has no
+cancel-specific variant, so any stop on the cancel probe is recorded as
+`capability-unsupported/stop_unexpected=...`.
+
+Gates on the working tree against `72af038`: `cargo fmt --all --
+--check` passed, `cargo clippy --workspace --all-targets -- -D
+warnings` passed with zero warnings, and `cargo test --workspace`
+passed fully - `acp_worker::tests` reports 4 passed / 9 ignored (4
+pre-existing `qwen_acp_*` ignored tests plus the 5 new probes, each
+listed as ignored with the reason above).
+
+B1 commit SHA: <backfilled at B5>.
