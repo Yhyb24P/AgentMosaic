@@ -77,11 +77,14 @@ Reasoner, bulk/tool work goes to a Worker or Utility, an explicit target wins, o
 the configured default. A worker result automatically becomes context for its parent task,
 the Lead, and any explicitly addressed Agent.
 
-Planned drivers (R6; not yet implemented):
+Current driver boundaries:
 
 - `NativeCodingAgentDriver` — the Rust state machine + model client + five tools.
-- `ExternalCliAgentDriver` — runs an external Coding Agent CLI; it is not wrapped in a
-  second tool loop.
+- `CodexAppServer` — bounded Codex app-server bridge with persisted external
+  thread/turn references and allowlisted collaboration tools.
+- `AcpWorkerDriver` — shared ACP boundary for Qwen/Kimi-style external coding
+  CLIs; it returns bounded structured results and configured relative artifact
+  hashes, rather than wrapping the runtime in a second tool loop.
 - `UtilityDriver` — deterministic worker for tests/build/search/batch.
 
 ## Roadmap
@@ -110,6 +113,29 @@ cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
+
+## Rust normal path (R7 in progress)
+
+The Rust binaries operate on the authoritative SQLite team board; they do not
+launch legacy Python:
+
+```bash
+# submit/status/control/recover/read selected outputs
+cargo run -p agent-code-cli -- submit ./team.db bulk "inspect and fix the task"
+cargo run -p agent-code-cli -- status ./team.db
+cargo run -p agent-code-cli -- cancel ./team.db 1
+cargo run -p agent-code-cli -- resume ./team.db 1
+cargo run -p agent-code-cli -- override ./team.db 1 worker-a
+cargo run -p agent-code-cli -- artifact ./team.db 1
+cargo run -p agent-code-cli -- final ./team.db 1
+
+# read-only interactive board view; q exits
+cargo run -p agent-code-tui -- ./team.db
+```
+
+The CLI/TUI surface is usable for local board inspection and control, but the
+full R7 product milestone is not sealed until the real-team R6 evidence and
+normal-path recovery qualification are complete. See `implementation_report.md`.
 
 ## Legacy Python (frozen reference)
 

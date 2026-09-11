@@ -121,6 +121,20 @@ impl CodexAppServer {
             .ok_or_else(|| CodexBridgeError::Protocol("turn/start response missing turn.id".into()))
     }
 
+    /// Rejoin an existing external Codex thread after an app-server restart.
+    /// The caller must still reconcile the returned native reference against
+    /// the canonical team task/run binding; a Codex thread is never task state.
+    pub fn resume_thread(&mut self, thread_id: &str) -> Result<String, CodexBridgeError> {
+        let result = self.request("thread/resume", json!({"threadId":thread_id}))?;
+        result
+            .pointer("/thread/id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                CodexBridgeError::Protocol("thread/resume response missing thread.id".into())
+            })
+    }
+
     pub fn mcp_status(&mut self, thread_id: &str) -> Result<Value, CodexBridgeError> {
         self.request(
             "mcpServerStatus/list",
@@ -230,7 +244,11 @@ impl CodexAppServer {
     }
 
     pub fn interrupt(&mut self, thread_id: &str, turn_id: &str) -> Result<(), CodexBridgeError> {
-        self.request(
+        // Local schema declares an empty object response. The observed
+        // app-server response is an acknowledgement with no material result,
+        // so this path validates correlation/error rather than requiring a
+        // payload that the operation does not define.
+        self.request_ack(
             "turn/interrupt",
             json!({"threadId":thread_id,"turnId":turn_id}),
         )?;
@@ -258,6 +276,26 @@ impl CodexAppServer {
             }
             // Notifications before a correlated response are expected and are
             // deliberately dropped here; they contain no durable payload.
+        }
+    }
+
+    /// Send a request whose local wire schema has no meaningful result body.
+    fn request_ack(&mut self, method: &str, params: Value) -> Result<(), CodexBridgeError> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.write_value(&json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))?;
+        loop {
+            let value = self.read_value()?;
+            if value.get("id") == Some(&json!(id)) {
+                if let Some(error) = value.get("error") {
+                    return Err(CodexBridgeError::Protocol(format!(
+                        "{method} returned error {error}"
+                    )));
+                }
+                return Ok(());
+            }
+            // Notifications before a correlated acknowledgement contain no
+            // durable payload and do not alter canonical task state.
         }
     }
 

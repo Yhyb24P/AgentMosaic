@@ -196,6 +196,62 @@ impl TaskBoard for SqliteTaskBoard {
         Ok(())
     }
 
+    fn commit_successful_result(
+        &mut self,
+        attempt: &TaskAttempt,
+        result: &agent_code_team::AgentTaskResult,
+    ) -> Result<(), BoardError> {
+        if attempt.task_id != result.task_id || attempt.status != TaskStatus::Succeeded {
+            return Err(BoardError::Storage(
+                "successful result does not match succeeded attempt".into(),
+            ));
+        }
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        if let Some(message) = &result.message {
+            tx.execute(
+                "INSERT INTO messages (from_agent, to_agent, body) VALUES (?1, ?2, ?3)",
+                params![message.from_agent, message.to_agent, message.body],
+            )
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        }
+        for artifact in &result.artifacts {
+            tx.execute(
+                "INSERT INTO artifacts (task_id, path, sha256) VALUES (?1, ?2, ?3)",
+                params![attempt.task_id as i64, artifact.path, artifact.sha256],
+            )
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        }
+        let changed = tx
+            .execute(
+                "UPDATE team_task_runs SET status = ?3, result = ?4, error = ?5
+                 WHERE task_id = ?1 AND attempt = ?2",
+                params![
+                    attempt.task_id as i64,
+                    attempt.attempt as i64,
+                    attempt.status.as_str(),
+                    attempt.result,
+                    attempt.error,
+                ],
+            )
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        if changed == 0 {
+            return Err(BoardError::UnknownTask(attempt.task_id));
+        }
+        let changed = tx
+            .execute(
+                "UPDATE team_tasks SET status = 'succeeded' WHERE id = ?1",
+                params![attempt.task_id as i64],
+            )
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        if changed == 0 {
+            return Err(BoardError::UnknownTask(attempt.task_id));
+        }
+        tx.commit().map_err(|e| BoardError::Storage(e.to_string()))
+    }
+
     fn record_message(&mut self, message: &AgentMessage) -> Result<(), BoardError> {
         self.conn
             .execute(
@@ -265,6 +321,24 @@ impl TaskBoard for SqliteTaskBoard {
             .collect()
     }
 
+    fn messages(&self) -> Result<Vec<AgentMessage>, BoardError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT from_agent, to_agent, body FROM messages ORDER BY id")
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(AgentMessage {
+                    from_agent: r.get(0)?,
+                    to_agent: r.get(1)?,
+                    body: r.get(2)?,
+                })
+            })
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        rows.map(|r| r.map_err(|e| BoardError::Storage(e.to_string())))
+            .collect()
+    }
+
     fn artifacts(&self, task: u64) -> Result<Vec<ArtifactMeta>, BoardError> {
         let mut stmt = self
             .conn
@@ -322,4 +396,77 @@ fn row_to_attempt(r: &Row) -> rusqlite::Result<TaskAttempt> {
         result: r.get(4)?,
         error: r.get(5)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_code_team::{AgentTaskResult, TaskBoard};
+
+    #[test]
+    fn rejected_artifact_rolls_back_the_entire_successful_result_flow() {
+        let mut board = SqliteTaskBoard::in_memory().expect("board");
+        let task = board
+            .create_task("bounded worker task", None, TaskKind::Bulk, None)
+            .expect("task");
+        board.assign(task, "worker").expect("assign");
+        board
+            .record_attempt(&TaskAttempt {
+                task_id: task,
+                attempt: 1,
+                agent_id: "worker".into(),
+                status: TaskStatus::Running,
+                result: None,
+                error: None,
+            })
+            .expect("running attempt");
+        board
+            .set_status(task, TaskStatus::Running)
+            .expect("running task");
+        board
+            .conn
+            .execute_batch(
+                "CREATE TRIGGER reject_bad_artifact BEFORE INSERT ON artifacts
+                 WHEN NEW.path = 'reject-me'
+                 BEGIN SELECT RAISE(ABORT, 'artifact rejected'); END;",
+            )
+            .expect("test trigger");
+
+        let error = board
+            .commit_successful_result(
+                &TaskAttempt {
+                    task_id: task,
+                    attempt: 1,
+                    agent_id: "worker".into(),
+                    status: TaskStatus::Succeeded,
+                    result: Some("finished".into()),
+                    error: None,
+                },
+                &AgentTaskResult {
+                    task_id: task,
+                    summary: "finished".into(),
+                    artifacts: vec![ArtifactMeta {
+                        path: "reject-me".into(),
+                        sha256: "bad".into(),
+                    }],
+                    message: Some(AgentMessage {
+                        from_agent: "worker".into(),
+                        to_agent: "lead".into(),
+                        body: "must not persist".into(),
+                    }),
+                },
+            )
+            .expect_err("artifact rejection must abort result flow");
+        assert!(matches!(error, BoardError::Storage(_)));
+        assert_eq!(
+            board.task(task).expect("task").expect("exists").status,
+            TaskStatus::Running
+        );
+        assert_eq!(
+            board.attempts(task).expect("attempts")[0].status,
+            TaskStatus::Running
+        );
+        assert!(board.messages_to("lead").expect("messages").is_empty());
+        assert!(board.artifacts(task).expect("artifacts").is_empty());
+    }
 }

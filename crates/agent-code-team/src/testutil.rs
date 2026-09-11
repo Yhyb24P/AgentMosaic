@@ -169,6 +169,9 @@ impl TaskBoard for MemBoard {
             .cloned()
             .collect())
     }
+    fn messages(&self) -> Result<Vec<AgentMessage>, BoardError> {
+        Ok(self.messages.clone())
+    }
     fn artifacts(&self, task: u64) -> Result<Vec<ArtifactMeta>, BoardError> {
         Ok(self.artifacts.get(&task).cloned().unwrap_or_default())
     }

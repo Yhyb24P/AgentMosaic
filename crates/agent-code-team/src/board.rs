@@ -5,7 +5,7 @@
 //! anything (T16). The trait is pure (no storage dependency); the SQLite
 //! implementation lives in the storage crate, which avoids a dependency cycle.
 
-use crate::registry::TaskKind;
+use crate::registry::{AgentTaskResult, TaskKind};
 
 /// The lifecycle state of a team task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,6 +15,7 @@ pub enum TaskStatus {
     Running,
     Succeeded,
     Failed,
+    Cancelled,
 }
 
 impl TaskStatus {
@@ -26,6 +27,7 @@ impl TaskStatus {
             TaskStatus::Running => "running",
             TaskStatus::Succeeded => "succeeded",
             TaskStatus::Failed => "failed",
+            TaskStatus::Cancelled => "cancelled",
         }
     }
 
@@ -37,6 +39,7 @@ impl TaskStatus {
             "running" => TaskStatus::Running,
             "succeeded" => TaskStatus::Succeeded,
             "failed" => TaskStatus::Failed,
+            "cancelled" => TaskStatus::Cancelled,
             _ => return None,
         })
     }
@@ -118,6 +121,29 @@ pub trait TaskBoard {
     /// attempt is observable as Running before the driver runs, then settles to
     /// Succeeded/Failed without being overwritten by a later retry.
     fn complete_attempt(&mut self, attempt: &TaskAttempt) -> Result<(), BoardError>;
+    /// Atomically (where the backing store supports it) commit a successful
+    /// worker result flow.  Messages and artifact references become durable
+    /// before the task is observable as succeeded, so a restart cannot expose
+    /// a terminal result without the data that grounds it.
+    fn commit_successful_result(
+        &mut self,
+        attempt: &TaskAttempt,
+        result: &AgentTaskResult,
+    ) -> Result<(), BoardError> {
+        if attempt.task_id != result.task_id || attempt.status != TaskStatus::Succeeded {
+            return Err(BoardError::Storage(
+                "successful result does not match succeeded attempt".into(),
+            ));
+        }
+        if let Some(message) = &result.message {
+            self.record_message(message)?;
+        }
+        for artifact in &result.artifacts {
+            self.record_artifact(attempt.task_id, artifact)?;
+        }
+        self.complete_attempt(attempt)?;
+        self.set_status(attempt.task_id, TaskStatus::Succeeded)
+    }
     /// Persist a directed message.
     fn record_message(&mut self, message: &AgentMessage) -> Result<(), BoardError>;
     /// Persist artifact metadata for a task.
@@ -128,6 +154,10 @@ pub trait TaskBoard {
     fn attempts(&self, task: u64) -> Result<Vec<TaskAttempt>, BoardError>;
     /// Read the messages addressed to `agent` (T09).
     fn messages_to(&self, agent: &str) -> Result<Vec<AgentMessage>, BoardError>;
+    /// Read normalized directed messages in durable insertion order.  This is
+    /// intentionally a summary surface for the product UI, not a runtime
+    /// transcript or hidden-reasoning channel.
+    fn messages(&self) -> Result<Vec<AgentMessage>, BoardError>;
     /// Read the artifact metadata for a task (T08).
     fn artifacts(&self, task: u64) -> Result<Vec<ArtifactMeta>, BoardError>;
     /// List every task id, in creation order. Used to reconstruct the task

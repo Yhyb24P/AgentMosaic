@@ -7,10 +7,12 @@
 //! composes the other crates; it adds no second tool loop and no control
 //! plane.
 
+mod acp_worker;
 mod agent;
 mod codex_app_server;
 mod dispatch;
 
+pub use acp_worker::{AcpWorkerConfig, AcpWorkerDriver, AcpWorkerError};
 pub use agent::{AgentConfig, AgentError, AgentLoop, Delivery};
 pub use codex_app_server::{CodexAppServer, CodexBridgeError, CodexBridgeEvent};
 pub use dispatch::{dispatch, ToolOutcome};

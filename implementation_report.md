@@ -370,3 +370,317 @@ recommendation remains `structured-message driver` pending authenticated
 bounded verification. Evidence: `.acc-evidence/phase25a-kimi-acp-probe.md`.
 Gate J/K/L/M/Q and cross-runtime E2E remain `NOT_RUN`; C21_TEAM_FLOW_READY
 remains `IN_PROGRESS`; no readiness is claimed.
+
+## 28. R6 productization continuation — durable result flow and Qwen ACP facts
+
+Current work continues from HEAD
+`447f170e34dcf724883ff7955689d40f5b59040d`, not from a delivery-package
+baseline. It is an uncommitted productization candidate while the R6 sequence
+continues; it is not a release candidate or a source/evidence freeze.
+
+### Codex team-result flow
+
+The task-board success path previously settled a task attempt before it wrote
+the worker's directed message and artifact metadata. A process interruption
+could therefore expose a succeeded task without its grounding result flow.
+`TaskBoard::commit_successful_result` now makes that ordering explicit. The
+SQLite override uses one transaction for directed message, artifact references,
+terminal attempt result, and task success status. A failure-injection test
+rejects the artifact insert and verifies that all of those writes roll back,
+leaving the task and attempt `running`.
+
+The real Codex harness was extended to create one bounded artifact in an
+isolated working directory after its active `ras_request_context` exchange. It
+hashes the exact artifact, commits a compact submitted-result summary, artifact
+reference, and directed lead message through the board transaction, then
+reopens SQLite and verifies all records. The live run passed; see
+`.acc-evidence/r6-codex-team-result-flow.md`. `turn/completed` remains neither
+ACC acceptance nor a trusted decision.
+
+A fresh Codex app-server process subsequently resumed the opaque persisted
+thread reference with schema-confirmed `thread/resume`; SQLite remained the
+canonical task/run source. The live interrupt probe established the explicit
+negative shape for a completed turn (`-32600`, no active turn). It does not
+prove successful cancellation of an active long-running turn, so active-turn
+cancel/recovery remains `NOT_RUN`.
+
+| R6 item | Current state | Evidence |
+|---|---|---|
+| durable result/message/artifact ordering | IMPLEMENTED_AND_TESTED | SQLite rollback injection test |
+| real Codex active collaboration → submitted team result | PASSED (narrow harness) | live Codex harness, exit 0 |
+| `C21_TEAM_FLOW_READY` | PASSED (narrow Codex flow) | same-turn collaboration, artifact hash, reopen |
+| Gate K | NOT_RUN | established full Gate K conditions are not yet all evidenced |
+
+### Qwen Code ACP
+
+The current official Qwen Code CLI is in project scope. A real local ACP
+`initialize` negotiated protocol v1 and advertised session load/resume,
+embedded-context prompt capability, and HTTP/SSE MCP capability. It also
+rejected the generic `initialized` notification with `-32601`; that behavior
+is a Qwen runtime-profile fact, not a protocol assumption. A separate live,
+stdin-held `session/new` probe returned `-32000 Authentication required`.
+No credential was inspected, no prompt/tool was sent, and no remote task was
+performed. See `docs/qwen_code_runtime_probe.md` and
+`.acc-evidence/r6-qwen-acp-initialize.md`.
+
+The official Rust ACP SDK (`agent-client-protocol` 2.1.0, Apache-2.0) is
+locked and compiled. `AcpWorkerDriver` uses its stdio process/session
+lifecycle for a bounded command/profile, bounded prompt, timeout, and
+non-persistent hashed result summary.
+
+The `BLOCKED_AUTH_REQUIRED` state was an environment condition, now resolved.
+Root cause: the ACP server rejects `session/new` when no auth type is
+selected, and a `--bare` launch does not load the user's local provider
+settings, so the selected local provider is invisible to a bare agent. The unblock sequence, observed live
+without reading or recording any credential value: launch `qwen --acp`
+without `--bare`; `initialize` advertises `authMethods: [openai,
+openai-responses]`; the client sends `authenticate` with `methodId: "openai"`;
+`session/new` then succeeds and reports `currentModelId: "qwen38(openai)"`;
+a bounded one-word `session/prompt` returned `stopReason: "end_turn"`. The
+user's `settings.json` was byte-identical before and after.
+
+`AcpWorkerDriver` gained an `auth_method` config field: when set, it sends
+`authenticate` before `session/new`. Two ignored local tests document both
+paths: the bare no-credential launch still fails with `Authentication
+required`, and the authenticated launch completes a bounded task through the
+Rust driver against local vLLM (88 s wall clock). `QWEN_ACP_AUTH` is now
+`UNBLOCKED_LOCAL_PROVIDER`; the bare path remains unauthenticated by design.
+No credential value was read or recorded.
+
+Gate J/K/L/M/Q and cross-runtime E2E remain `NOT_RUN`. No adapter READY,
+`PHASE2_ACTIVE_PROFILE_READY`, `FULL_REFERENCE_READY`, or `PRODUCT_RC_READY`
+claim is made.
+
+### R6 live Codex ↔ Qwen bounded-result evidence
+
+The real ignored harness
+`real_codex_thread_turn_uses_bounded_qwen_peer_result` now passes with exit 0
+in 34.67 seconds. It proves the live sequence Qwen isolated-Git worker
+artifact + strict peer result → durable artifact/hash and directed message →
+Codex bounded RAS context request → same-turn continuation → exact Codex
+artifact hash → SQLite reopen and external-thread/session binding recovery.
+See `.acc-evidence/r6-codex-qwen-live.md`.
+
+This is an integration milestone, not a readiness claim. The harness now
+routes the exact submitted artifact through the existing persisted ACC event
+store and a separately bound hash review; it explicitly observes
+`RESULT_SUBMITTED` before `ACCEPTED` and verifies the accepted event/artifact/
+manifest state after reopen. This narrow review does not create a product-wide
+mandatory verifier. Gate K, Gate Q, and the full cross-runtime E2E gate remain
+`NOT_RUN`; `RESULT_SUBMITTED != ACCEPTED` remains enforced.
+
+After the 600 s budget calibration (see Section 29), the same live command
+reran green in 136.09 s on the post-artifact-driver source state, so the
+earlier "cannot qualify the changed driver" limitation is lifted for this
+narrow live command. The two 180 s fail-closed exits were attributed to
+budget/contention on the shared local vLLM node, not a hung runtime; see
+`.acc-evidence/r6-codex-qwen-live.md`.
+
+## 29. R6–R8 Source-Informed Productization
+
+```json
+{"active_roadmap":"R6-R8","active_product":"heterogeneous-agent-coding-team","milestones":{"M1_CODEX_TEAM_READY":"IN_PROGRESS","M2_ACP_DRIVER_READY":"IN_PROGRESS","M3_QWEN_WORKER_READY":"IN_PROGRESS","M4_KIMI_PROFILE_CLASSIFIED":"KIMI_AUTH_REQUIRED","M5_R6_TEAM_READY":"NOT_RUN","M6_R6_SEALED":"NOT_RUN","M7_R7_NORMAL_PATH_READY":"IN_PROGRESS","M8_R8_DEBLOATED":"NOT_RUN","M9_PRODUCT_RC_READY":"NOT_RUN"}}
+```
+
+Historical A–N/J/K/L/M/Q are `HISTORICAL_COMPATIBILITY_ONLY` for this R6–R8
+roadmap. They remain unchanged unless their original criterion is separately
+satisfied by live evidence.
+
+All subsequent live Codex model turns are configured through locally
+schema-confirmed app-server overrides `model="gpt-5.5"` and
+`model_reasoning_effort="low"`. Earlier live evidence predates this cost rule
+and is retained as historical evidence only; it is not relabeled as low-cost
+execution.
+
+### Current source-informed runtime facts
+
+| Runtime | Exact local version | Driver/transport | Current live facts | State |
+|---|---|---|---|---|
+| Codex | `codex-cli 0.154.0` | app-server stdio + allowlisted RAS MCP | thread/turn, same-turn bounded context, artifact, persisted binding/reopen, thread resume, real same-thread two-task plan and durable utility follow-up | M1 in progress: full Qwen topology/final selected refs still missing |
+| Qwen Code | `0.23.3` | `qwen --acp` via `agent-client-protocol 2.1.0` | authenticated session/follow-up/coding evidence; after 600 s budget calibration the live cross-runtime command passed in 136.09 s | `IN_PROGRESS`: live bounded worker/result-artifact-to-Lead evidence exists; real ACP continuation/cancel remains required before M3 can pass |
+| Kimi Code | `0.39.1` | `kimi acp` candidate | ACP initialize live; session/task blocked by local authentication readiness | `KIMI_AUTH_REQUIRED` |
+
+Source references, protocol decisions, and licenses are recorded in
+`research-agent-system_R6_R8_source_informed_productization_delivery/SOURCE_RESEARCH.json`:
+Codex `rust-v0.154.0` (Apache-2.0), Qwen Code `v0.23.3` (Apache-2.0), Kimi
+Code `@moonshot-ai/kimi-code@0.39.1` (MIT), and the ACP SDK 2.1.0
+(Apache-2.0). No upstream source was copied into this repository.
+
+### New executable evidence
+
+| Command | Exit | Observed result | Evidence location |
+|---|---:|---|---|
+| `cargo test -p agent-code-runtime --test codex_live real_codex_thread_turn_uses_bounded_qwen_peer_result --offline -- --ignored --nocapture` | 0, then 101 after artifact-driver change, then 0 after 600 s calibration (136.09 s) | historical live Qwen → durable message → same Codex turn → exact artifact → persisted ACC review/acceptance → reopen; the two 180 s fail-closed exits were attributed to budget/contention; the calibrated rerun passed on the post-artifact-driver source | `.acc-evidence/r6-codex-qwen-live.md` |
+| `cargo test -p agent-code-runtime qwen_acp_reuses_one_authenticated_session_for_follow_up --offline -- --ignored --nocapture` | 0 | one authenticated Qwen ACP session completed first and follow-up bounded results | `.acc-evidence/r6-qwen-acp-initialize.md` |
+| `cargo test -p agent-code-runtime qwen_acp_completes_a_bounded_isolated_coding_task --offline -- --ignored --nocapture` | 0 historical, then 101 current | earlier isolated Qwen edit/check passed; current rerun timed out fail-closed at 180.01 s | `.acc-evidence/r6-qwen-acp-initialize.md` |
+| `cargo test -p agent-code-runtime --test codex_live real_codex_lead_plans_and_follows_up_on_durable_team_result --offline -- --ignored --nocapture` | 0 | real Codex, pinned to `gpt-5.5` / `low`, created a two-task plan and followed up in the same thread using a persisted utility result/artifact | `.acc-evidence/r6-codex-team-result-flow.md` |
+| `cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-features -- -D warnings && cargo test --workspace --all-features && git diff --check` | 0 | 143 passed, 0 failed, 7 ignored | fresh current-session rerun on the dirty worktree after the `gpt-5.5` / `low` Codex harness change; must still be rerun at R6 seal |
+
+The first same-session test attempt failed closed because the runtime response
+was not strict JSON. It was not persisted or treated as success. A subsequent
+exact structured-output request passed; this documents output-shape sensitivity
+without retaining the raw response.
+
+Latest complete worktree run after the external-session binding, worker-artifact,
+R7 normal-path, and low-cost Codex harness changes: `cargo fmt --all -- --check`,
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+`cargo test --workspace --all-features`, and `git diff --check` all exited 0
+in the current session; the test suite reported **143 passed, 0 failed, 7
+ignored**. This remains dirty R6 implementation evidence, not a candidate freeze.
+
+After the subsequent R7 dashboard-only query/view update, the same full command
+was rerun and again exited `0` with **143 passed, 0 failed, 7 ignored**. The
+targeted `agent-code-team`, `agent-code-storage`, `agent-code-tui`, and
+`agent-code-cli` run reported 41 passed. Neither result is a release seal.
+
+The current generic-artifact-driver cross-runtime route is `IN_PROGRESS`: its
+fresh live run timed out and wrote no phantom outcome. The earlier 34.67-second
+live pass is retained only as pre-change historical evidence; it cannot qualify
+the changed driver.
+
+A second independent authenticated Qwen coding task then timed out at the same
+180-second limit. Both subprocess trees were absent after their tests. Current
+Qwen state is therefore `BLOCKED_RUNTIME_UNRESPONSIVE`, not an auth regression;
+the two opaque log hashes are recorded in
+`.acc-evidence/r6-qwen-acp-initialize.md`. M3/M5 remain unqualified.
+
+Superseded by the 600 s budget calibration: attribution on the same task and
+fixture showed nominal completions of 17.8 s / 49.8 s, one 298 s observation
+under heavy load on the shared local vLLM node (the agent's own session is a
+contention source), and a driver artifact-collection step that runs after the
+model response and cannot extend the prompt phase. After raising the Qwen-leg
+timeout to 600 s, the live cross-runtime command reran green in 136.09 s.
+The `BLOCKED_RUNTIME_UNRESPONSIVE` label is withdrawn for this narrow live
+command. M3 is now `IN_PROGRESS`, rather than blocked: it still requires real
+ACP continuation/cancel evidence. M5 qualification still requires the full
+team topology and final selected references.
+
+### Productization blockers still being implemented
+
+- ACP cancel, child/process-tree cleanup, early-event attribution and recovery
+  must be demonstrated against the shared driver.
+- A real Codex Lead must create at least two tasks; a real Qwen Worker and a
+  deterministic Utility must run independently, with the worker artifact and
+  result entering a subsequent Lead follow-up/review task.
+- Retry/reassign, user assignment override, restart recovery, and exact final
+  selected references must be proved on that topology before M5/M6.
+- R7 CLI/TUI implementation is present but not sealed; R8 de-bloat, release
+  build, clean-install and upgrade smoke have not started.
+
+### R7 normal-path implementation
+
+`agent-code-cli` is now an executable Rust binary backed only by the existing
+SQLite team board. It supports `submit`, `status`, `cancel`, `override`,
+`resume`, `artifact`, and `final`; the integration test creates a persisted
+result and verifies each corresponding command against that same database.
+Cancellation is explicit `TaskStatus::Cancelled`, not a fabricated failure;
+resume permits only failed/cancelled tasks. `agent-code-tui` is now a
+`ratatui/crossterm` executable dashboard reading task-tree fields, attempts,
+artifact digests, and durable directed activity summaries from the same board.
+It deliberately owns no state and directs control operations to the CLI; it
+does not display raw runtime transcripts or hidden reasoning.
+
+| Command | Exit | Observed result |
+|---|---:|---|
+| `cargo test -p agent-code-cli -- --nocapture` | 0 | library inspection, CLI parsing, and normal-path board-control integration passed |
+| `cargo test -p agent-code-tui -- --nocapture` | 0 | authoritative dashboard rendering passed |
+| `cargo test -p agent-code-team -p agent-code-storage -p agent-code-tui -p agent-code-cli --all-features` | 0 | 41 targeted tests passed after adding the durable all-message TUI query/view |
+| `cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-features -- -D warnings && cargo test --workspace --all-features && git diff --check` | 0 | 143 passed, 0 failed, 7 ignored (fresh current-session rerun) |
+| `cargo run -q -p agent-code-cli -- submit <temporary-db> utility "deterministic smoke task" && cargo run -q -p agent-code-cli -- status <temporary-db>` | 0 | actual binary submitted and read task 1 from a fresh SQLite database; DB SHA-256 before local-trash cleanup: `d5b2b659e17ee414d707fee783cae55f0f2bf4e18fbac149cd85963509746db7` |
+
+README now documents these Rust commands as the normal local path. M7 remains
+`IN_PROGRESS`: the UI requires live real-team/recovery evidence before seal;
+M8 has not started and release qualification is only at prequalification.
+
+### Release-build / clean-install prequalification
+
+`cargo build --workspace --release` completed with exit 0 on the current dirty
+worktree. The resulting binary SHA-256 values were
+`agent-code-cli=01811d5416bf5815cef41d50afe42f2ee006619a11433e2b042127280b8ff54f`
+and
+`agent-code-tui=a6fc472925f60ef5813d35b49467f243b63aaf960b07edcf1a04deda07f6a0c5`.
+
+A separate temporary-root `cargo install --path crates/agent-code-cli --root
+<temporary-root> --offline` completed with exit 0. Its installed binary
+submitted and read a task in a fresh SQLite database with no workspace binary
+on the command path; installed binary SHA-256 was
+`2d38182e3fb7ede4bf0a850583b86a13f6c47f18e8cdab22155d1040666bb03b`.
+The temporary install and database were moved to local trash. This is useful
+prequalification only: exact candidate freeze, upgrade smoke, full R6 E2E and
+clean-tree evidence remain required for M9.
+
+## 30. M2-M9-plan execution: S0 preflight and checkpoint (2026-09-12)
+
+Execution is driven strictly by the root planning document
+`M2-M9-plan.md` (M0-M9 sequence) on the existing branch
+`v2/rust-agent-team` from the actual HEAD. This is a continuation of the
+R6 productization sequence, not a delivery-baseline start.
+
+### S0 preflight facts (recorded before any change)
+
+- Checkout HEAD: `447f170e34dcf724883ff7955689d40f5b59040d`
+  (`docs(runtime): record Kimi ACP probe`), on `v2/rust-agent-team`
+  (tracking `origin/v2/rust-agent-team`).
+- `git status --short`: 15 modified tracked + 5 untracked candidate paths
+  (full list in the checkpoint entry below; 22 distinct candidate paths).
+- `git diff --check`: exit `0` before and after the checkpoint.
+- SHA-256 of this report at S0 start (pre-change bytes):
+  `adfa0b5bef0b0af38e8e8b32238302cdaeb1a7efabbda8053ca61d369faba1fd`
+  (blob hash `c5168a2c...` was the earlier Phase 2.4A baseline; the pre-M2
+  worktree had accumulated sections 28-29, superseding it).
+- Toolchain: `cargo 1.94.1`, `rustc 1.94.1`.
+- Sanitized executable identities (PATH resolution plus `--version` output
+  only; no install paths, PIDs, or user-home data recorded):
+  `codex` => `codex-cli 0.154.0` (identity unchanged from Section 28),
+  `qwen` => `0.23.3` (identity unchanged), `kimi` => `0.42.0` (local Kimi
+  was upgraded after Section 27's `0.39.1` probes; Section 27 evidence is
+  recorded for the 0.39.1 generation and no new Kimi ACP probe was run in
+  this session, so M4 remains `KIMI_AUTH_REQUIRED` as before).
+
+### S0 candidate-path review (secrets / endpoint values / home paths / PIDs / raw transcripts)
+
+All 22 distinct candidate paths (15 modified tracked + 7 untracked files,
+including the expanded `crates/agent-code-cli/tests` directory) were
+scanned for credential patterns, private endpoints, absolute user-home
+paths, raw process identifiers, and transcript content. Result: no match
+in any candidate file. The only endpoint-adjacent wording found is the
+`live local vLLM endpoint` phrase inside ignored-test attribute strings and
+verbatim quotes of already-sanitized `.acc-evidence/` records; no endpoint
+values, tokens, key material, or home paths are present. `Cargo.lock`
+carries no non-`crates.io` source URL. The new `crates/agent-code-cli/src/main.rs`
+and `crates/agent-code-tui/src/main.rs` binaries operate only on the
+existing SQLite team board; neither reads environment credentials or home
+paths. This review is the exact reviewed input for the checkpoint below.
+
+### S0 checkpoint commit (explicit path list; no `git add -A`)
+
+The following 22 paths are staged explicitly, in this list's order:
+
+```text
+Cargo.lock
+Cargo.toml
+README.md
+crates/agent-code-cli/src/main.rs
+crates/agent-code-cli/tests/normal_path.rs
+crates/agent-code-runtime/Cargo.toml
+crates/agent-code-runtime/src/acp_worker.rs
+crates/agent-code-runtime/src/codex_app_server.rs
+crates/agent-code-runtime/src/lib.rs
+crates/agent-code-runtime/tests/codex_live.rs
+crates/agent-code-storage/src/board.rs
+crates/agent-code-team/src/board.rs
+crates/agent-code-team/src/scheduler.rs
+crates/agent-code-team/src/testutil.rs
+crates/agent-code-tui/Cargo.toml
+crates/agent-code-tui/src/lib.rs
+crates/agent-code-tui/src/main.rs
+docs/qwen_code_runtime_probe.md
+implementation_report.md
+.acc-evidence/r6-codex-qwen-live.md
+.acc-evidence/r6-codex-team-result-flow.md
+.acc-evidence/r6-qwen-acp-initialize.md
+```
+
+Checkpoint commit (this commit): explicitly labeled "not an R6 source/
+evidence seal and not a release candidate". Exact SHA is recorded in the
+following documentation commit after the Rust gates run on the checkpoint.

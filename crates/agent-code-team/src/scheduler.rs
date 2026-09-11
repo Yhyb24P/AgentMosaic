@@ -155,22 +155,13 @@ impl<B: TaskBoard + Send + 'static> Scheduler<B> {
             }));
         }
 
-        // 3. Collect results and flow the result back: the directed message and
-        //    artifacts. The per-attempt lifecycle was already persisted by each
-        //    task; only the message/artifact flow happens here.
+        // 3. Collect results.  `run_one` commits a successful result's message
+        //    and artifacts before marking the attempt/task successful, so this
+        //    collection phase is read-only with respect to result flow.
         let mut out = Vec::new();
         for (i, handle) in handles.into_iter().enumerate() {
             let (attempts, result) = handle.await.map_err(|_| ScheduleError::JoinFailed)??;
             let task_id = task_ids[i];
-            if let Ok(res) = &result {
-                let mut board = self.board.lock().unwrap();
-                if let Some(msg) = &res.message {
-                    board.record_message(msg)?;
-                }
-                for art in &res.artifacts {
-                    board.record_artifact(task_id, art)?;
-                }
-            }
             out.push(ScheduledResult {
                 task_id,
                 result,
@@ -312,9 +303,11 @@ async fn run_one<B: TaskBoard + Send + 'static>(
             };
             {
                 let mut b = board.lock().unwrap();
-                b.complete_attempt(&terminal)?;
-                if terminal.status == TaskStatus::Succeeded {
-                    b.set_status(task.id, TaskStatus::Succeeded)?;
+                match &outcome {
+                    Ok(result) => b.commit_successful_result(&terminal, result)?,
+                    Err(_) => {
+                        b.complete_attempt(&terminal)?;
+                    }
                 }
             }
             match outcome {

@@ -1,13 +1,39 @@
 //! Explicit live harness: run with `cargo test -p agent-code-runtime --test codex_live -- --ignored`.
 
-use agent_code_runtime::{CodexAppServer, CodexBridgeEvent};
-use agent_code_storage::{ExternalRuntimeBinding, SqliteTaskBoard};
-use agent_code_team::{TaskBoard, TaskKind};
+use agent_code_runtime::{AcpWorkerConfig, AcpWorkerDriver, CodexAppServer, CodexBridgeEvent};
+use agent_code_storage::{ExternalRuntimeBinding, SqliteAccStore, SqliteTaskBoard};
+use agent_code_team::{
+    AccState, AccTaskState, AcceptanceCriterion, AgentCapability, AgentMessage, AgentTaskResult,
+    ArtifactMeta, Authority, Classification, CollaborationEvent, CollaborationPayload, ContextItem,
+    ContextManifest, Provenance, TaskAssignment, TaskAttempt, TaskBoard, TaskContract, TaskGraph,
+    TaskGraphProposal, TaskKind, TaskRole, TaskStatus, TrustStatus,
+};
 use rusqlite::Connection;
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
-#[test]
-#[ignore = "requires logged-in local Codex app-server"]
-fn real_codex_thread_turn_uses_bounded_mcp_context_request() {
+#[derive(Deserialize)]
+struct LeadPlan {
+    tasks: Vec<LeadPlanTask>,
+}
+
+#[derive(Deserialize)]
+struct LeadPlanTask {
+    kind: String,
+    target: String,
+    objective: String,
+}
+
+fn low_cost_codex_overrides() -> Vec<String> {
+    vec![
+        "model=\"gpt-5.5\"".into(),
+        "model_reasoning_effort=\"low\"".into(),
+    ]
+}
+
+#[tokio::test]
+#[ignore = "requires logged-in local Codex app-server and authenticated local Qwen Code"]
+async fn real_codex_thread_turn_uses_bounded_qwen_peer_result() {
     let db = std::env::temp_dir().join(format!("ras_codex_live_{}.db", std::process::id()));
     let cwd = std::env::temp_dir().join(format!("ras_codex_live_cwd_{}", std::process::id()));
     let bridge_log =
@@ -15,6 +41,18 @@ fn real_codex_thread_turn_uses_bounded_mcp_context_request() {
     let _ = std::fs::remove_file(&db);
     let _ = std::fs::remove_file(&bridge_log);
     std::fs::create_dir_all(&cwd).unwrap();
+    let git_status = std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(&cwd)
+        .status()
+        .expect("git available for isolated live fixture");
+    assert!(git_status.success());
+    std::fs::write(cwd.join("qwen-worker.txt"), "worker=unfinished\n").unwrap();
+    std::fs::write(
+        cwd.join("qwen-check.sh"),
+        "#!/bin/sh\ntest \"$(cat qwen-worker.txt)\" = \"worker=complete\"\n",
+    )
+    .unwrap();
     let mut board = SqliteTaskBoard::open(Connection::open(&db).unwrap()).unwrap();
     let task = board
         .create_task("ask bounded context", None, TaskKind::Reasoning, None)
@@ -30,6 +68,100 @@ fn real_codex_thread_turn_uses_bounded_mcp_context_request() {
             lifecycle_state: "starting".into(),
         })
         .unwrap();
+    board
+        .record_attempt(&TaskAttempt {
+            task_id: task,
+            attempt: 1,
+            agent_id: "codex".into(),
+            status: TaskStatus::Running,
+            result: None,
+            error: None,
+        })
+        .unwrap();
+    board.set_status(task, TaskStatus::Running).unwrap();
+    let qwen_task = board
+        .create_task("return a bounded peer finding", None, TaskKind::Bulk, None)
+        .unwrap();
+    board
+        .record_attempt(&TaskAttempt {
+            task_id: qwen_task,
+            attempt: 1,
+            agent_id: "qwen".into(),
+            status: TaskStatus::Running,
+            result: None,
+            error: None,
+        })
+        .unwrap();
+    board.set_status(qwen_task, TaskStatus::Running).unwrap();
+    let qwen = AcpWorkerDriver::new(AcpWorkerConfig {
+        runtime_kind: "qwen-code".into(),
+        command: "qwen".into(),
+        args: vec!["--acp".into()],
+        auth_method: Some("openai".into()),
+        working_directory: cwd.clone(),
+        // Calibrated budget: the bounded coding task nominally finishes in
+        // under a minute, but the final response phase can exceed 280 s
+        // while the shared local vLLM is contended; 180 s fail-closed twice.
+        timeout: std::time::Duration::from_secs(600),
+        max_prompt_bytes: 1024,
+        max_result_bytes: 4096,
+        artifact_paths: vec!["qwen-worker.txt".into()],
+    })
+    .unwrap();
+    let qwen_execution = qwen
+        .execute_task(&agent_code_team::AgentTask {
+            id: qwen_task,
+            objective: "In this isolated Git repository, inspect qwen-worker.txt, replace its exact contents with worker=complete followed by one newline, run `sh qwen-check.sh`, and then return exactly this JSON peer result: {\"summary\":\"Qwen worker artifact complete\"}. Do not modify any other file.".into(),
+            kind: TaskKind::Bulk,
+            context: Vec::new(),
+        })
+        .await
+        .expect("Qwen returns strict peer result");
+    eprintln!("sanitized Qwen strict peer result received");
+    let peer_summary = qwen_execution.result.summary.clone();
+    let qwen_artifact_bytes = std::fs::read(cwd.join("qwen-worker.txt"))
+        .expect("Qwen must create the bounded worker artifact");
+    assert_eq!(qwen_artifact_bytes, b"worker=complete\n");
+    let qwen_artifact_sha256 = format!("{:x}", Sha256::digest(&qwen_artifact_bytes));
+    board
+        .upsert_external_binding(&ExternalRuntimeBinding {
+            team_task_id: qwen_task,
+            attempt: 1,
+            agent_id: "qwen".into(),
+            runtime_kind: "qwen-code-acp".into(),
+            native_thread_id: Some(qwen_execution.external_session_id),
+            native_turn_id: None,
+            lifecycle_state: "completed".into(),
+        })
+        .unwrap();
+    board
+        .commit_successful_result(
+            &TaskAttempt {
+                task_id: qwen_task,
+                attempt: 1,
+                agent_id: "qwen".into(),
+                status: TaskStatus::Succeeded,
+                result: Some(peer_summary.clone()),
+                error: None,
+            },
+            &AgentTaskResult {
+                task_id: qwen_task,
+                summary: peer_summary.clone(),
+                artifacts: vec![ArtifactMeta {
+                    path: "qwen-worker.txt".into(),
+                    sha256: qwen_artifact_sha256.clone(),
+                }],
+                message: Some(AgentMessage {
+                    from_agent: "qwen".into(),
+                    to_agent: "codex".into(),
+                    body: format!(
+                        "{peer_summary}; artifact=qwen-worker.txt; sha256={qwen_artifact_sha256}"
+                    ),
+                }),
+            },
+        )
+        .unwrap();
+    eprintln!("sanitized Qwen peer result persisted for Codex");
     let mcp = std::env::current_exe()
         .unwrap()
         .parent()
@@ -37,7 +169,8 @@ fn real_codex_thread_turn_uses_bounded_mcp_context_request() {
         .parent()
         .unwrap()
         .join("ras_codex_mcp");
-    let overrides = vec![
+    let mut overrides = low_cost_codex_overrides();
+    overrides.extend([
         format!("mcp_servers.ras.command={:?}", mcp.display().to_string()),
         format!("mcp_servers.ras.env.RAS_DB={:?}", db.display().to_string()),
         format!(
@@ -46,7 +179,7 @@ fn real_codex_thread_turn_uses_bounded_mcp_context_request() {
         ),
         "mcp_servers.ras.env.RAS_TASK_ID=\"1\"".into(),
         "mcp_servers.ras.env.RAS_ATTEMPT=\"1\"".into(),
-    ];
+    ]);
     let mut client = CodexAppServer::spawn_with_overrides("codex", &overrides).unwrap();
     client.initialize("ras-phase23-live", "0.1").unwrap();
     let thread = client
@@ -70,7 +203,14 @@ fn real_codex_thread_turn_uses_bounded_mcp_context_request() {
     assert!(status.to_string().contains("\"name\":\"ras\""));
     assert_eq!(ras_status["runtimeStatus"], "connected");
     assert!(ras_status["tools"].get("ras_request_context").is_some());
-    let turn = client.start_turn(&thread, "This is a required integration test. Before producing any answer, you MUST call the MCP tool ras_request_context exactly once with JSON arguments {\"purpose\":\"phase23\"}. Do not explain or answer until the tool result has been received. After receiving the result, respond with exactly: phase23 done.").unwrap();
+    let peer = board.messages_to("codex").unwrap();
+    assert_eq!(peer.len(), 1);
+    let qwen_artifacts = board.artifacts(qwen_task).unwrap();
+    assert_eq!(qwen_artifacts.len(), 1);
+    assert_eq!(qwen_artifacts[0].path, "qwen-worker.txt");
+    assert_eq!(qwen_artifacts[0].sha256, qwen_artifact_sha256);
+    let turn = client.start_turn(&thread, &format!("This is a required integration test. Qwen supplied this bounded peer result: {}. Before producing any answer, you MUST call the MCP tool ras_request_context exactly once with JSON arguments {{\"purpose\":\"phase23\"}}. Do not explain or answer until the tool result has been received. After receiving the result, create phase23-result.txt in the current working directory containing exactly phase23 artifact followed by one newline. Then respond with exactly: phase23 done.", peer[0].body)).unwrap();
+    eprintln!("sanitized Codex turn started with persisted Qwen peer result");
     board
         .upsert_external_binding(&ExternalRuntimeBinding {
             team_task_id: task,
@@ -83,7 +223,7 @@ fn real_codex_thread_turn_uses_bounded_mcp_context_request() {
         })
         .unwrap();
     let mut completed = false;
-    for _ in 0..40 {
+    for _ in 0..200 {
         match client.next_event().unwrap() {
             CodexBridgeEvent::TurnCompleted { .. } => {
                 completed = true;
@@ -168,7 +308,179 @@ fn real_codex_thread_turn_uses_bounded_mcp_context_request() {
             lifecycle_state: "completed".into(),
         })
         .unwrap();
+    let artifact_bytes = std::fs::read(cwd.join("phase23-result.txt"))
+        .expect("Codex must create the bounded result artifact");
+    assert_eq!(artifact_bytes, b"phase23 artifact\n");
+    let artifact_sha256 = format!("{:x}", Sha256::digest(&artifact_bytes));
+    // This durable team result is intentionally distinct from ACC acceptance:
+    // a completed external turn only supplies a submitted worker outcome.
+    board
+        .commit_successful_result(
+            &TaskAttempt {
+                task_id: task,
+                attempt: 1,
+                agent_id: "codex".into(),
+                status: TaskStatus::Succeeded,
+                result: Some("Codex completed bounded collaboration turn".into()),
+                error: None,
+            },
+            &AgentTaskResult {
+                task_id: task,
+                summary: "Codex completed bounded collaboration turn".into(),
+                artifacts: vec![ArtifactMeta {
+                    path: "phase23-result.txt".into(),
+                    sha256: artifact_sha256.clone(),
+                }],
+                message: Some(AgentMessage {
+                    from_agent: "codex".into(),
+                    to_agent: "lead".into(),
+                    body: "Codex submitted bounded result artifact phase23-result.txt".into(),
+                }),
+            },
+        )
+        .unwrap();
+    // A completed external turn is merely a submitted result.  The artifact
+    // enters the existing ACC store only after its exact bytes are verified,
+    // and only an independently-bound verifier can transition it to accepted.
+    let acc_task_id = format!("codex-live-{task}");
+    let acc_task = TaskContract {
+        task_id: acc_task_id.clone(),
+        objective: "produce the exact bounded live collaboration artifact".into(),
+        required_agent_capabilities: std::collections::BTreeSet::from([AgentCapability(
+            "code.implement".into(),
+        )]),
+        requested_capabilities: std::collections::BTreeSet::new(),
+        expected_outputs: vec!["phase23-result.txt".into()],
+        acceptance: vec![AcceptanceCriterion {
+            criterion_id: "independent-hash-review".into(),
+            requirement:
+                "an independently-bound verifier confirms the submitted immutable artifact hash"
+                    .into(),
+            independent_review: true,
+        }],
+        idempotency_key: format!("live-codex-{task}-1"),
+    };
+    let graph = TaskGraph::validate(TaskGraphProposal {
+        proposal_id: format!("live-codex-proposal-{task}"),
+        tasks: vec![acc_task],
+        dependencies: Vec::new(),
+    })
+    .unwrap();
+    let mut acc = AccState::new(graph.clone());
+    acc.mark_ready(&std::collections::BTreeSet::new());
+    acc.assign(TaskAssignment {
+        task_id: acc_task_id.clone(),
+        agent_id: "codex".into(),
+        runtime_id: "codex-app-server".into(),
+        role: TaskRole::Implementer,
+        trusted_grants: std::collections::BTreeSet::new(),
+    })
+    .unwrap();
+    let manifest = ContextManifest::build(
+        format!("live-codex-manifest-{task}"),
+        acc_task_id.clone(),
+        vec![ContextItem {
+            item_id: "bounded-contract".into(),
+            content: "Create exactly phase23-result.txt containing the approved bounded artifact."
+                .into(),
+            authority: Authority::TaskContract,
+            trust: TrustStatus::Verified,
+            classification: Classification::Internal,
+            provenance: Provenance {
+                source: "live-codex-harness".into(),
+                source_version: "r6".into(),
+            },
+            forwardable: true,
+        }],
+    );
+    acc.persist_manifest(manifest.clone()).unwrap();
+    let store = SqliteAccStore::open(Connection::open(&db).unwrap()).unwrap();
+    store.put_graph(&graph).unwrap();
+    store.put_manifest(&manifest).unwrap();
+    store
+        .set_task_state(&acc_task_id, AccTaskState::Assigned)
+        .unwrap();
+    macro_rules! ingest {
+        ($actor:expr, $runtime:expr, $event_id:expr, $payload:expr $(,)?) => {{
+            let event = CollaborationEvent {
+                event_id: $event_id,
+                task_id: acc_task_id.clone(),
+                actor_id: $actor.into(),
+                runtime_id: $runtime.into(),
+                correlation_id: format!("live-codex-turn-{task}"),
+                causation_id: None,
+                authority: Authority::Observation,
+                payload: $payload,
+            };
+            acc.ingest($actor, $runtime, event).unwrap();
+            store.append_event(&acc.events().last().unwrap().1).unwrap();
+        }};
+    }
+    let artifact_id = format!("phase23-result-{task}");
+    ingest!(
+        "codex",
+        "codex-app-server",
+        format!("live-codex-artifact-{task}"),
+        CollaborationPayload::ArtifactPublish {
+            artifact_id: artifact_id.clone(),
+            artifact_sha256: artifact_sha256.clone(),
+            artifact_version: 1,
+        },
+    );
+    ingest!(
+        "codex",
+        "codex-app-server",
+        format!("live-codex-result-{task}"),
+        CollaborationPayload::TaskResultSubmitted {
+            artifact_id: artifact_id.clone(),
+            artifact_sha256: artifact_sha256.clone(),
+            artifact_version: 1,
+        },
+    );
+    assert_eq!(acc.state(&acc_task_id), Some(AccTaskState::ResultSubmitted));
+    ingest!(
+        "codex",
+        "codex-app-server",
+        format!("live-codex-review-request-{task}"),
+        CollaborationPayload::ReviewRequest {
+            artifact_id: artifact_id.clone(),
+            artifact_sha256: artifact_sha256.clone(),
+            artifact_version: 1,
+        },
+    );
+    // This distinct trusted verification binding only attests the already
+    // checked bytes; it is not a Codex or Qwen self-acceptance claim.
+    ingest!(
+        "independent-verifier",
+        "rust-hash-verifier",
+        format!("live-codex-independent-review-{task}"),
+        CollaborationPayload::ReviewResponse {
+            approved: true,
+            artifact_id: artifact_id.clone(),
+            artifact_sha256: artifact_sha256.clone(),
+            artifact_version: 1,
+        },
+    );
+    assert_eq!(acc.state(&acc_task_id), Some(AccTaskState::Accepted));
+    store
+        .put_artifact(&artifact_id, &acc_task_id, &artifact_sha256, 1)
+        .unwrap();
+    store
+        .set_task_state(&acc_task_id, AccTaskState::Accepted)
+        .unwrap();
+    drop(store);
+    eprintln!("sanitized ACC result submitted, independently hash-reviewed, and accepted");
     client.close().unwrap();
+    // A fresh app-server process must be able to reconcile the persisted
+    // external thread reference.  This does not reconstruct canonical state
+    // from Codex; it merely verifies the stored reference remains usable.
+    let mut recovered_client = CodexAppServer::spawn("codex").unwrap();
+    recovered_client
+        .initialize("ras-phase23-recovery", "0.1")
+        .unwrap();
+    let resumed_thread = recovered_client.resume_thread(&thread).unwrap();
+    assert_eq!(resumed_thread, thread);
+    recovered_client.close().unwrap();
     let reopened = SqliteTaskBoard::open(Connection::open(&db).unwrap()).unwrap();
     eprintln!(
         "sanitized bridge breadcrumbs={:?}",
@@ -184,6 +496,243 @@ fn real_codex_thread_turn_uses_bounded_mcp_context_request() {
     assert_eq!(binding.native_thread_id.as_deref(), Some(thread.as_str()));
     assert_eq!(binding.native_turn_id.as_deref(), Some(turn.as_str()));
     assert_eq!(binding.lifecycle_state, "completed");
+    let qwen_binding = reopened.external_binding(qwen_task, 1).unwrap().unwrap();
+    assert_eq!(qwen_binding.runtime_kind, "qwen-code-acp");
+    assert!(qwen_binding.native_thread_id.is_some());
+    assert_eq!(qwen_binding.lifecycle_state, "completed");
+    assert_eq!(
+        reopened.task(task).unwrap().unwrap().status,
+        TaskStatus::Succeeded
+    );
+    assert_eq!(
+        reopened.attempts(task).unwrap()[0].result.as_deref(),
+        Some("Codex completed bounded collaboration turn")
+    );
+    let artifacts = reopened.artifacts(task).unwrap();
+    assert_eq!(artifacts.len(), 1);
+    assert_eq!(artifacts[0].path, "phase23-result.txt");
+    assert_eq!(artifacts[0].sha256, artifact_sha256);
+    assert_eq!(reopened.messages_to("lead").unwrap().len(), 1);
+    assert_eq!(reopened.messages_to("codex").unwrap().len(), 1);
+    drop(reopened);
+    let recovered_acc = SqliteAccStore::open(Connection::open(&db).unwrap()).unwrap();
+    assert_eq!(
+        recovered_acc.task_states().unwrap(),
+        vec![(acc_task_id.clone(), "ACCEPTED".into())]
+    );
+    assert_eq!(recovered_acc.events_after(0).unwrap().len(), 4);
+    assert_eq!(recovered_acc.artifact_refs().unwrap().len(), 1);
+    assert!(recovered_acc
+        .manifest(&manifest.manifest_id)
+        .unwrap()
+        .unwrap()
+        .verify_hash());
     let _ = std::fs::remove_file(db);
     let _ = std::fs::remove_dir(cwd);
+}
+
+#[test]
+#[ignore = "requires logged-in local Codex app-server"]
+fn real_codex_interrupt_reports_when_a_turn_has_already_completed() {
+    let cwd = std::env::temp_dir().join(format!("ras_codex_interrupt_{}", std::process::id()));
+    std::fs::create_dir_all(&cwd).unwrap();
+    let mut client =
+        CodexAppServer::spawn_with_overrides("codex", &low_cost_codex_overrides()).unwrap();
+    client.initialize("ras-phase-r6-interrupt", "0.1").unwrap();
+    let thread = client.start_thread(cwd.to_str().unwrap()).unwrap();
+    let turn = client
+        .start_turn(
+            &thread,
+            "This is a bounded cancellation integration test. Do not edit files.",
+        )
+        .unwrap();
+    let error = client
+        .interrupt(&thread, &turn)
+        .expect_err("the minimal turn may already be terminal before interrupt");
+    assert!(error.to_string().contains("no active turn to interrupt"));
+    eprintln!("sanitized interrupt returned explicit no-active-turn result");
+    client.close().unwrap();
+    let _ = std::fs::remove_dir(cwd);
+}
+
+#[tokio::test]
+#[ignore = "requires logged-in local Codex app-server"]
+async fn real_codex_lead_plans_and_follows_up_on_durable_team_result() {
+    let db = std::env::temp_dir().join(format!("ras_codex_lead_{}.db", std::process::id()));
+    let cwd = std::env::temp_dir().join(format!("ras_codex_lead_cwd_{}", std::process::id()));
+    let _ = std::fs::remove_file(&db);
+    std::fs::create_dir_all(&cwd).unwrap();
+    let git_status = std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(&cwd)
+        .status()
+        .unwrap();
+    assert!(git_status.success());
+    let mut board = SqliteTaskBoard::open(Connection::open(&db).unwrap()).unwrap();
+    let lead_task = board
+        .create_task("lead plan and synthesis", None, TaskKind::Reasoning, None)
+        .unwrap();
+    board
+        .record_attempt(&TaskAttempt {
+            task_id: lead_task,
+            attempt: 1,
+            agent_id: "codex".into(),
+            status: TaskStatus::Running,
+            result: None,
+            error: None,
+        })
+        .unwrap();
+    board.set_status(lead_task, TaskStatus::Running).unwrap();
+    let mut client =
+        CodexAppServer::spawn_with_overrides("codex", &low_cost_codex_overrides()).unwrap();
+    client.initialize("ras-r6-lead", "0.1").unwrap();
+    let thread = client.start_thread(cwd.to_str().unwrap()).unwrap();
+    let first_turn = client
+        .start_turn(
+            &thread,
+            "You are the real Lead for a bounded R6 integration test. Create lead-plan.json with exactly this JSON and no other files: {\"tasks\":[{\"kind\":\"bulk\",\"target\":\"qwen\",\"objective\":\"repair worker fixture\"},{\"kind\":\"utility\",\"target\":\"utility\",\"objective\":\"produce deterministic utility fact\"}]}. Then respond exactly: plan ready.",
+        )
+        .unwrap();
+    let mut completed = false;
+    let mut plan_notifications = 0usize;
+    let mut plan_tool_calls = 0usize;
+    for _ in 0..200 {
+        match client.next_event().unwrap() {
+            CodexBridgeEvent::TurnCompleted { .. } => {
+                completed = true;
+                break;
+            }
+            CodexBridgeEvent::Notification(_) => plan_notifications += 1,
+            CodexBridgeEvent::ToolCall { .. } => plan_tool_calls += 1,
+            CodexBridgeEvent::McpElicitation { .. } => panic!("lead plan has no RAS MCP bridge"),
+        }
+    }
+    eprintln!(
+        "sanitized Codex plan events notifications={plan_notifications} tool_calls={plan_tool_calls}"
+    );
+    assert!(completed, "Codex completes structured planning turn");
+    let plan: LeadPlan =
+        serde_json::from_slice(&std::fs::read(cwd.join("lead-plan.json")).unwrap()).unwrap();
+    assert_eq!(plan.tasks.len(), 2);
+    assert_eq!(plan.tasks[0].kind, "bulk");
+    assert_eq!(plan.tasks[0].target, "qwen");
+    assert_eq!(plan.tasks[1].kind, "utility");
+    assert_eq!(plan.tasks[1].target, "utility");
+    let utility_task = board
+        .create_task(
+            &plan.tasks[1].objective,
+            Some(lead_task),
+            TaskKind::Utility,
+            Some("utility".into()),
+        )
+        .unwrap();
+    board.assign(utility_task, "utility").unwrap();
+    board
+        .record_attempt(&TaskAttempt {
+            task_id: utility_task,
+            attempt: 1,
+            agent_id: "utility".into(),
+            status: TaskStatus::Running,
+            result: None,
+            error: None,
+        })
+        .unwrap();
+    board.set_status(utility_task, TaskStatus::Running).unwrap();
+    std::fs::write(cwd.join("utility-result.txt"), "utility fact\n").unwrap();
+    let utility_hash = format!("{:x}", Sha256::digest(b"utility fact\n"));
+    board
+        .commit_successful_result(
+            &TaskAttempt {
+                task_id: utility_task,
+                attempt: 1,
+                agent_id: "utility".into(),
+                status: TaskStatus::Succeeded,
+                result: Some("utility fact complete".into()),
+                error: None,
+            },
+            &AgentTaskResult {
+                task_id: utility_task,
+                summary: "utility fact complete".into(),
+                artifacts: vec![ArtifactMeta {
+                    path: "utility-result.txt".into(),
+                    sha256: utility_hash.clone(),
+                }],
+                message: Some(AgentMessage {
+                    from_agent: "utility".into(),
+                    to_agent: "codex".into(),
+                    body: format!(
+                        "utility fact complete; artifact=utility-result.txt; sha256={utility_hash}"
+                    ),
+                }),
+            },
+        )
+        .unwrap();
+    let messages = board.messages_to("codex").unwrap();
+    assert_eq!(messages.len(), 1);
+    let second_turn = client
+        .start_turn(
+            &thread,
+            &format!(
+                "The persisted team-board result is: {}. In this same Lead thread, create lead-final.txt containing exactly lead integrated utility fact followed by one newline. Then respond exactly: lead complete.",
+                messages[0].body
+            ),
+        )
+        .unwrap();
+    let mut follow_up_completed = false;
+    let mut follow_up_notifications = 0usize;
+    let mut follow_up_tool_calls = 0usize;
+    for _ in 0..200 {
+        match client.next_event().unwrap() {
+            CodexBridgeEvent::TurnCompleted { .. } => {
+                follow_up_completed = true;
+                break;
+            }
+            CodexBridgeEvent::Notification(_) => follow_up_notifications += 1,
+            CodexBridgeEvent::ToolCall { .. } => follow_up_tool_calls += 1,
+            CodexBridgeEvent::McpElicitation { .. } => {
+                panic!("lead follow-up has no RAS MCP bridge")
+            }
+        }
+    }
+    eprintln!(
+        "sanitized Codex follow-up events notifications={follow_up_notifications} tool_calls={follow_up_tool_calls}"
+    );
+    assert!(follow_up_completed, "Codex completes same-thread follow-up");
+    assert_eq!(
+        std::fs::read(cwd.join("lead-final.txt")).unwrap(),
+        b"lead integrated utility fact\n"
+    );
+    board
+        .commit_successful_result(
+            &TaskAttempt {
+                task_id: lead_task,
+                attempt: 1,
+                agent_id: "codex".into(),
+                status: TaskStatus::Succeeded,
+                result: Some("lead integrated utility fact".into()),
+                error: None,
+            },
+            &AgentTaskResult {
+                task_id: lead_task,
+                summary: "lead integrated utility fact".into(),
+                artifacts: vec![ArtifactMeta {
+                    path: "lead-final.txt".into(),
+                    sha256: format!("{:x}", Sha256::digest(b"lead integrated utility fact\n")),
+                }],
+                message: None,
+            },
+        )
+        .unwrap();
+    client.close().unwrap();
+    let reopened = SqliteTaskBoard::open(Connection::open(&db).unwrap()).unwrap();
+    assert_eq!(
+        reopened.task(lead_task).unwrap().unwrap().status,
+        TaskStatus::Succeeded
+    );
+    assert_eq!(reopened.artifacts(utility_task).unwrap().len(), 1);
+    assert_eq!(reopened.artifacts(lead_task).unwrap().len(), 1);
+    eprintln!("sanitized Codex lead plan and durable utility follow-up completed");
+    let _ = (first_turn, second_turn);
+    let _ = std::fs::remove_file(db);
+    let _ = std::fs::remove_dir_all(cwd);
 }
