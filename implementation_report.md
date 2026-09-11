@@ -681,6 +681,26 @@ implementation_report.md
 .acc-evidence/r6-qwen-acp-initialize.md
 ```
 
-Checkpoint commit (this commit): explicitly labeled "not an R6 source/
-evidence seal and not a release candidate". Exact SHA is recorded in the
-following documentation commit after the Rust gates run on the checkpoint.
+S0 checkpoint commit: `914b9ba134fcdd5f4cd0c4758b8080d39eed97a5`
+(`chore: checkpoint R6 pre-M2 productization state`, 22 paths, 3902
+insertions). This commit is explicitly **not** an R6 source/evidence
+seal and **not** a release candidate; it is the reviewed S0 checkpoint
+only.
+
+### S0 gate on the checkpoint
+
+| Command | Exit | Observed result |
+|---|---:|---|
+| `cargo fmt --all -- --check` | 0 | passed |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 | passed, no warnings |
+| `cargo test --workspace --all-features` | 0 | 143 passed, 0 failed, 7 ignored across 32 test binaries (matches the post-R7 update baseline) |
+| `git diff --check` | 0 | passed (worktree clean at the checkpoint) |
+
+All S0 gates ran at `914b9ba`; the checkpoint tree itself is untouched by
+this section (this documentation record commits on top of it). Executed
+at `2026-09-12T03:03:03+08:00` on `cargo 1.94.1` / `rustc 1.94.1`.
+
+S0 is therefore complete: actual-tree review, secret/path review of all
+22 candidate paths, an explicit checkpoint commit on the existing feature
+branch, and a green normal Rust gate at that checkpoint. Next stage per
+`M2-M9-plan.md` Section 1 is M2 (ACP driver lifecycle).
