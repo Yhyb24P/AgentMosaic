@@ -830,3 +830,54 @@ evidence for actually supported relevant actions; that live condition is not
 met in this repository (no qwen driver / live harness / credentials).
 M3-M9 remain start-blocked on M2 live evidence; the next direction is
 user-specified.
+
+## 36. M2-M9 operation action guide baseline + pre-flight (2026-09-12)
+
+Baseline: branch `v2/rust-agent-team` at `2cab44e` (B5 commit, full 40-char
+id `2cab44ecbdfa85ad1eb7768ba718e204978750e9`), clean worktree
+(`git status --short` empty, `git diff --check` clean).
+`sha256sum implementation_report.md` at baseline:
+`012699dca21b6626f7ac0aed09bd89c7e4d471aaf3efe3b82212f16d5b37686f`.
+
+Milestone status lines per the action guide:
+
+```text
+M2_B1_B3_B5_CLOSEOUT = PASSED
+M2_ACP_DRIVER_READY  = UNKNOWN / NOT_PASSED
+```
+
+M3-M9 remain NOT_STARTED; B4 stays record-only as of section 34; gate lines
+for M1/M4/M5-M9 are created at first entry into each stage. M2 live evidence
+from this repository remains the unlock prerequisite for M3, M1 (real
+topology part), and M5 -> M6.
+
+Pre-flight gates against `2cab44ecbdfa85ad1eb7768ba718e204978750e9`, all
+passed:
+1. `git status --short` - empty.
+2. `git diff --check` - clean.
+3. `cargo fmt --all -- --check` - exit 0.
+4. `cargo clippy --workspace --all-targets --all-features -- -D warnings` -
+   exit 0, zero warnings.
+5. `cargo test -p agent-code-runtime` - exit 0: lib 11 passed / 9 ignored,
+   `acp_m2_lifecycle` 9 passed / 0 failed, `codex_live` 3 ignored, `e2e`
+   1 passed, doc-tests 0.
+6. Versions recorded: rustc 1.94.1 (e408947bf 2026-03-25), cargo 1.94.1
+   (29ea6fb6a 2026-09-24), codex-cli 0.154.0, qwen 0.23.3
+
+Sandbox granted for M2 live probes (user-authorized this session, bounded
+execution): the local `qwen` binary v0.23.3 (npm-global) is in use; a
+fresh test directory may be the qwen working directory; execution stays on
+`qwen --acp` stdio only; every step is timeout-bounded with a bounded
+event state; no shell/network/credentials are read or copied, and evidence
+records contain no credential values, PIDs, or home paths (action-guide
+rules 4/7, ACM section 2). The operator-specified `codex qw` path that
+launches the local model is recorded for later M1/M5 live work only; it is
+not used at this stage.
+
+This section is recorded in this checkpoint commit; the tested source is
+`2cab44ecbdfa85ad1eb7768ba718e204978750e9` and the checkpoint commit sha
+itself is the next-prerequisite evidence path for the M2 live-probe stage.
+
+Next: B - M2 live capability reconnaissance (action guide section 4.3); a
+missing credential state records `BLOCKED_AUTH_REQUIRED` and does not mock
+PASS.
