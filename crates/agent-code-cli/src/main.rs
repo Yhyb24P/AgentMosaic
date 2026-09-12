@@ -88,8 +88,8 @@ fn parse_concurrency(value: &str) -> Result<i64, String> {
     let limit: i64 = value
         .parse()
         .map_err(|_| "invalid max-concurrency".to_string())?;
-    if limit < 0 {
-        return Err("negative max-concurrency".to_string());
+    if limit <= 0 {
+        return Err("max-concurrency must be greater than zero".to_string());
     }
     Ok(limit)
 }
@@ -265,5 +265,23 @@ mod tests {
     #[test]
     fn rejects_unknown_command() {
         assert!(run(&["unknown".into(), ":memory:".into()]).is_err());
+    }
+
+    #[test]
+    fn registry_rejects_zero_concurrency_before_persisting_it() {
+        let result = run(&[
+            "register".into(),
+            ":memory:".into(),
+            "worker".into(),
+            "worker".into(),
+            "worker".into(),
+            "acp".into(),
+            "qwen".into(),
+            "--acp".into(),
+            "0".into(),
+            "-".into(),
+        ]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("greater than zero"));
     }
 }

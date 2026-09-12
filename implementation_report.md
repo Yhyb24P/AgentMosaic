@@ -479,7 +479,7 @@ budget/contention on the shared local vLLM node, not a hung runtime; see
 ## 29. R6–R8 Source-Informed Productization
 
 ```json
-{"active_roadmap":"R6-R8","active_product":"heterogeneous-agent-coding-team","milestones":{"M1_CODEX_TEAM_READY":"IN_PROGRESS","M2_ACP_DRIVER_READY":"IN_PROGRESS","M3_QWEN_WORKER_READY":"IN_PROGRESS","M4_KIMI_PROFILE_CLASSIFIED":"KIMI_AUTH_REQUIRED","M5_R6_TEAM_READY":"NOT_RUN","M6_R6_SEALED":"NOT_RUN","M7_R7_NORMAL_PATH_READY":"IN_PROGRESS","M8_R8_DEBLOATED":"NOT_RUN","M9_PRODUCT_RC_READY":"NOT_RUN"}}
+{"active_roadmap":"R6-R8","active_product":"heterogeneous-agent-coding-team","milestones":{"M1_CODEX_TEAM_READY":"IN_PROGRESS","M2_ACP_DRIVER_READY":"UNKNOWN","M3_QWEN_WORKER_READY":"IN_PROGRESS","M4_KIMI_PROFILE_CLASSIFIED":"KIMI_AUTH_REQUIRED","M5_R6_TEAM_READY":"NOT_RUN","M6_R6_SEALED":"NOT_RUN","M7_R7_NORMAL_PATH_READY":"NOT_PASSED","M8_R8_DEBLOATED":"NOT_RUN","M9_PRODUCT_RC_READY":"NOT_RUN"}}
 ```
 
 Historical A–N/J/K/L/M/Q are `HISTORICAL_COMPATIBILITY_ONLY` for this R6–R8
@@ -997,3 +997,24 @@ Scope note: only item 2's durable-registry + no-legacy-Python half is
 delivered here; driver readiness (M7_R7_NORMAL_PATH_READY) remains
 NOT_PASSED and the 10-capability matrix above stands as-is.
 Commits: d8305df -> this commit.
+
+## 39. M7 registry validation follow-up (2026-09-12)
+
+Post-slice review found a configuration contradiction: the CLI accepted
+`max-concurrency=0`, while `AgentRegistry` rejects zero concurrency before any
+task can be scheduled. The CLI now rejects zero before writing the durable
+registry record, preserving the registry/scheduler invariant rather than
+allowing a configuration that cannot run.
+
+Verification on the resulting worktree:
+
+- `cargo fmt --all -- --check`: exit 0;
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`:
+  exit 0;
+- `cargo test --workspace --all-features`: exit 0, 157 passed, 0 failed,
+  12 ignored;
+- `git diff --check`: exit 0.
+
+This is a fail-closed registry validation repair only. It starts no external
+driver and does not change M2 (`UNKNOWN / NOT_PASSED`), M3 (`IN_PROGRESS`), or
+M7 (`NOT_PASSED`).
