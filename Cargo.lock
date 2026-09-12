@@ -62,11 +62,13 @@ dependencies = [
 name = "agent-code-cli"
 version = "0.1.0"
 dependencies = [
+ "agent-code-runtime",
  "agent-code-storage",
  "agent-code-team",
  "rusqlite",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

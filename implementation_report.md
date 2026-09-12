@@ -1018,3 +1018,22 @@ Verification on the resulting worktree:
 This is a fail-closed registry validation repair only. It starts no external
 driver and does not change M2 (`UNKNOWN / NOT_PASSED`), M3 (`IN_PROGRESS`), or
 M7 (`NOT_PASSED`).
+
+## 40. M7 slice 2: registered ACP CLI smoke (2026-09-12)
+
+The CLI now has a bounded `run-acp` path. It loads a registered ACP worker,
+rejects missing/non-ACP/malformed/terminal configuration before launch, writes
+the task attempt as running before the external call, and on success persists
+the worker result plus opaque external-session binding through the existing
+SQLite board. On driver error it settles the attempt and task as failed.
+
+A real isolated Qwen ACP smoke registered `qwen --acp`, submitted one bounded
+task, and invoked `run-acp` with auth method `openai`, no artifact paths, and a
+180-second timeout. It exited 0 in 10.3 seconds; the authoritative board
+reported task 1 succeeded. Sanitized evidence is
+`.acc-evidence/r7-cli-acp-smoke.md`.
+
+This proves one normal-path registered ACP launch and durable result flow. It
+does not prove continuation, active cancel, restart recovery, Codex execution,
+or the multi-agent UX required for M2/M3/M7. Their current states remain
+M2 `UNKNOWN`, M3 `IN_PROGRESS`, and M7 `NOT_PASSED`.

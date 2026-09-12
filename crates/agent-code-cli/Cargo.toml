@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 agent-code-storage = { path = "../agent-code-storage" }
 agent-code-team = { path = "../agent-code-team" }
+agent-code-runtime = { path = "../agent-code-runtime" }
 serde.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
+tokio.workspace = true

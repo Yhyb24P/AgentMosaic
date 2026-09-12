@@ -1,13 +1,17 @@
 //! Small Rust normal-path CLI for the durable team board.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use agent_code_storage::{AgentRegistryRecord, SqliteAgentRegistry, SqliteTaskBoard};
-use agent_code_team::{DriverKind, TaskBoard, TaskKind, TaskStatus};
+use agent_code_runtime::{AcpWorkerConfig, AcpWorkerDriver};
+use agent_code_storage::{
+    AgentRegistryRecord, ExternalRuntimeBinding, SqliteAgentRegistry, SqliteTaskBoard,
+};
+use agent_code_team::{AgentTask, DriverKind, TaskAttempt, TaskBoard, TaskKind, TaskStatus};
 use rusqlite::Connection;
 
 fn usage() -> &'static str {
-    "usage: agent-code-cli <register|registry|submit|status|cancel|override|resume|artifact|final> <database> [fields]"
+    "usage: agent-code-cli <register|registry|run-acp|submit|status|cancel|override|resume|artifact|final> <database> [fields]"
 }
 
 fn open(path: &str) -> Result<SqliteTaskBoard, String> {
@@ -145,6 +149,141 @@ fn registry_list(database: &str, limit: Option<&str>) -> Result<String, String> 
     Ok(lines)
 }
 
+fn run_acp(database: &str, fields: &[String]) -> Result<String, String> {
+    if !(5..=6).contains(&fields.len()) {
+        return Err("run-acp requires task-id agent-id working-directory auth-method-or-- timeout-seconds [artifact-paths-csv]".into());
+    }
+    let task_id = fields[0]
+        .parse::<u64>()
+        .map_err(|_| "invalid task id".to_string())?;
+    let agent_id = &fields[1];
+    let working_directory = PathBuf::from(&fields[2]);
+    let auth_method = parse_optional_field(&fields[3])?;
+    let timeout_seconds = fields[4]
+        .parse::<u64>()
+        .map_err(|_| "invalid timeout seconds".to_string())?;
+    if timeout_seconds == 0 {
+        return Err("timeout seconds must be greater than zero".into());
+    }
+    let artifact_paths = fields
+        .get(5)
+        .map(|value| csv_list(value).into_iter().map(PathBuf::from).collect())
+        .unwrap_or_default();
+    let registry = SqliteAgentRegistry::open(database).map_err(|e| format!("run-acp: {e}"))?;
+    let agent = registry
+        .get_agent(agent_id)
+        .map_err(|e| format!("run-acp: {e}"))?
+        .ok_or_else(|| format!("run-acp: unknown registered agent {agent_id}"))?;
+    if agent.driver_kind.as_deref() != Some("acp") {
+        return Err("run-acp requires an agent registered with driver-kind acp".into());
+    }
+    let executable = agent
+        .executable
+        .ok_or_else(|| "run-acp: registered ACP agent has no executable".to_string())?;
+    let driver_args: Vec<String> = serde_json::from_str(
+        agent
+            .driver_args_json
+            .as_deref()
+            .ok_or_else(|| "run-acp: registered ACP agent has no args".to_string())?,
+    )
+    .map_err(|_| "run-acp: stored driver args are not a JSON string array".to_string())?;
+    let mut board = open(database)?;
+    let task = board
+        .task(task_id)
+        .map_err(|e| format!("run-acp: {e:?}"))?
+        .ok_or_else(|| format!("run-acp: missing task {task_id}"))?;
+    if matches!(task.status, TaskStatus::Succeeded | TaskStatus::Running) {
+        return Err("run-acp requires a pending, assigned, failed, or cancelled task".into());
+    }
+    let attempt = board
+        .attempts(task_id)
+        .map_err(|e| format!("run-acp: {e:?}"))?
+        .len() as u32
+        + 1;
+    board
+        .assign(task_id, agent_id)
+        .map_err(|e| format!("run-acp: {e:?}"))?;
+    board
+        .record_attempt(&TaskAttempt {
+            task_id,
+            attempt,
+            agent_id: agent_id.clone(),
+            status: TaskStatus::Running,
+            result: None,
+            error: None,
+        })
+        .map_err(|e| format!("run-acp: {e:?}"))?;
+    board
+        .set_status(task_id, TaskStatus::Running)
+        .map_err(|e| format!("run-acp: {e:?}"))?;
+    let driver = AcpWorkerDriver::new(AcpWorkerConfig {
+        runtime_kind: format!("registered-acp:{agent_id}"),
+        command: PathBuf::from(executable),
+        args: driver_args,
+        auth_method,
+        working_directory,
+        timeout: Duration::from_secs(timeout_seconds),
+        max_prompt_bytes: 4096,
+        max_result_bytes: 4096,
+        artifact_paths,
+    })
+    .map_err(|e| format!("run-acp: {e}"))?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .map_err(|e| format!("run-acp: {e}"))?;
+    let execution = runtime.block_on(driver.execute_task(&AgentTask {
+        id: task_id,
+        objective: task.objective,
+        kind: task.kind,
+        context: Vec::new(),
+    }));
+    match execution {
+        Ok(execution) => {
+            board
+                .upsert_external_binding(&ExternalRuntimeBinding {
+                    team_task_id: task_id,
+                    attempt,
+                    agent_id: agent_id.clone(),
+                    runtime_kind: "acp".into(),
+                    native_thread_id: Some(execution.external_session_id),
+                    native_turn_id: None,
+                    lifecycle_state: "completed".into(),
+                })
+                .map_err(|e| format!("run-acp: {e}"))?;
+            board
+                .commit_successful_result(
+                    &TaskAttempt {
+                        task_id,
+                        attempt,
+                        agent_id: agent_id.clone(),
+                        status: TaskStatus::Succeeded,
+                        result: Some(execution.result.summary.clone()),
+                        error: None,
+                    },
+                    &execution.result,
+                )
+                .map_err(|e| format!("run-acp: {e:?}"))?;
+            Ok(format!("completed task={task_id} agent={agent_id}"))
+        }
+        Err(error) => {
+            let text = error.to_string();
+            board
+                .complete_attempt(&TaskAttempt {
+                    task_id,
+                    attempt,
+                    agent_id: agent_id.clone(),
+                    status: TaskStatus::Failed,
+                    result: None,
+                    error: Some(text.clone()),
+                })
+                .and_then(|_| board.set_status(task_id, TaskStatus::Failed))
+                .map_err(|e| format!("run-acp: {e:?}"))?;
+            Err(format!("run-acp: {text}"))
+        }
+    }
+}
+
 fn run(args: &[String]) -> Result<String, String> {
     let command = args
         .first()
@@ -243,6 +382,7 @@ fn run(args: &[String]) -> Result<String, String> {
         }
         "register" => register_agent(database, &args[2..]),
         "registry" => registry_list(database, args.get(2).map(String::as_str)),
+        "run-acp" => run_acp(database, &args[2..]),
         _ => Err(usage().into()),
     }
 }
