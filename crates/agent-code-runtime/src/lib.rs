@@ -12,7 +12,9 @@ mod agent;
 mod codex_app_server;
 mod dispatch;
 
-pub use acp_worker::{AcpWorkerConfig, AcpWorkerDriver, AcpWorkerError};
+pub use acp_worker::{
+    AcpCancellation, AcpCancellationListener, AcpWorkerConfig, AcpWorkerDriver, AcpWorkerError,
+};
 pub use agent::{AgentConfig, AgentError, AgentLoop, Delivery};
 pub use codex_app_server::{CodexAppServer, CodexBridgeError, CodexBridgeEvent};
 pub use dispatch::{dispatch, ToolOutcome};

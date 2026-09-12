@@ -1090,3 +1090,34 @@ M2_ACP_DRIVER_READY       = UNKNOWN / NOT_PASSED
 M3_QWEN_WORKER_READY      = IN_PROGRESS
 M7_R7_NORMAL_PATH_READY   = NOT_PASSED
 ```
+
+## 43. M2 cancellable driver seam (2026-09-12)
+
+`AcpWorkerDriver` now exposes a bounded, caller-owned cancellation pair:
+`AcpCancellation` and `AcpCancellationListener`. The pair does not accept or
+persist a native session ID. During a live task the driver obtains the foreign
+session ID only from the session it created, sends the official typed stable-v1
+`session/cancel` notification, drains the active session until it sees
+`StopReason::Cancelled`, then returns `AcpWorkerError::Cancelled`. A terminal
+success result cannot be produced on that branch.
+
+The non-ignored lifecycle test
+`caller_cancellation_sends_session_cancel_and_requires_peer_confirmation`
+passed (exit `0`; 1 passed, 0 failed; 0.05 seconds) with the existing isolated
+ACP mock. It asserts that the driver waits for the peer confirmation rather
+than treating an internal flag, connection close, or process termination as a
+cancelled turn. The live ignored Qwen test was then re-run through the same
+driver entry point: exit `0`; 1 passed, 0 failed, 21 filtered out; 1.23 seconds;
+sanitized observation `peer_confirmed_cancel`.
+
+This improves the generic ACP driver's in-process lifecycle contract and is
+recorded in `.acc-evidence/r7-cli-acp-smoke.md`. It does **not** yet provide a
+durable cross-process run manager: the current synchronous `run-acp` CLI
+cannot route a separate `cancel` invocation to its live cancellation trigger.
+Thus this does not close U04/M7, retry/reassign/recovery, or the full M2 gate:
+
+```text
+M2_ACP_DRIVER_READY       = UNKNOWN / NOT_PASSED
+M3_QWEN_WORKER_READY      = IN_PROGRESS
+M7_R7_NORMAL_PATH_READY   = NOT_PASSED
+```

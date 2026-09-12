@@ -50,3 +50,28 @@ retained.
 This verifies the driver-facing protocol primitive only. It does not make the
 separate CLI `cancel` command an active cross-process cancellation operation,
 nor does it establish retry or recovery readiness.
+
+## Cancellable-driver API verification
+
+The active-cancel probe now exercises `AcpWorkerDriver` rather than a
+test-only direct SDK exchange. A caller owns an in-process
+`AcpCancellation` trigger; the driver derives the native session reference
+from its live session, sends the typed stable-v1 `session/cancel` notification,
+and returns `AcpWorkerError::Cancelled` only after the peer supplies
+`StopReason::Cancelled`. The trigger is not serializable and cannot name a
+foreign session, so it cannot replace the board's canonical task state.
+
+Two commands completed with exit code `0`:
+
+- `cargo test -p agent-code-runtime --test acp_m2_lifecycle
+  caller_cancellation_sends_session_cancel_and_requires_peer_confirmation
+  -- --nocapture` — 1 passed, 0 failed; deterministic ACP mock confirms that
+  a request without the peer stop confirmation cannot be reported as cancel.
+- `cargo test -p agent-code-runtime acp_m2_probe_cancel_active_session --
+  --ignored --nocapture` — 1 passed, 0 failed, 21 filtered out, 1.23 seconds;
+  local Qwen ACP returned `peer_confirmed_cancel`.
+
+No foreign session value, prompt, response, credential, endpoint, raw frame,
+PID, or temporary path was retained. The CLI still lacks a durable process
+manager/control channel for forwarding a separate process's `cancel` command
+to this in-process trigger; that remaining normal-path gap remains explicit.

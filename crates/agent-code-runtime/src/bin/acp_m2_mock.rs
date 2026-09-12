@@ -22,6 +22,7 @@ enum Mode {
     Sync,
     Slow,
     Hang,
+    CancelWait,
     Crash,
 }
 
@@ -38,6 +39,7 @@ fn parse_mode(args: &[String]) -> Result<Mode, String> {
                     "sync" => Mode::Sync,
                     "slow" => Mode::Slow,
                     "hang" => Mode::Hang,
+                    "cancel-wait" => Mode::CancelWait,
                     "crash" => Mode::Crash,
                     other => return Err(format!("unknown mode: {other}")),
                 };
@@ -68,6 +70,7 @@ fn main() {
 
     let stdin = io::stdin();
 
+    let mut pending_prompt: Option<Value> = None;
     for line in stdin.lock().lines() {
         match line {
             Ok(line) => {
@@ -75,7 +78,7 @@ fn main() {
                 if line.is_empty() {
                     continue;
                 }
-                match handle_line(line, mode) {
+                match handle_line(line, mode, &mut pending_prompt) {
                     LineOutcome::Done => {}
                     LineOutcome::Crash => {
                         std::process::exit(1);
@@ -92,7 +95,7 @@ enum LineOutcome {
     Crash,
 }
 
-fn handle_line(line: &str, mode: Mode) -> LineOutcome {
+fn handle_line(line: &str, mode: Mode, pending_prompt: &mut Option<Value>) -> LineOutcome {
     let value = match serde_json::from_str::<Value>(line) {
         Ok(value) => value,
         Err(_) => return LineOutcome::Done,
@@ -126,6 +129,10 @@ fn handle_line(line: &str, mode: Mode) -> LineOutcome {
                 Mode::Slow => {
                     std::thread::sleep(std::time::Duration::from_millis(SLOW_CHUNK_DELAY_MS));
                 }
+                Mode::CancelWait => {
+                    *pending_prompt = id;
+                    return LineOutcome::Done;
+                }
                 Mode::Sync | Mode::Crash => {}
             }
             if !matches!(mode, Mode::Hang) {
@@ -142,7 +149,12 @@ fn handle_line(line: &str, mode: Mode) -> LineOutcome {
                 }),
             );
         }
-        Some("authenticate") | Some("session/cancel") => {
+        Some("session/cancel") => {
+            if let Some(prompt_id) = pending_prompt.take() {
+                write_response(&Some(prompt_id), json!({ "stopReason": "cancelled" }));
+            }
+        }
+        Some("authenticate") => {
             write_response(&id, json!({}));
         }
         Some(unknown) => {

@@ -3,12 +3,15 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use agent_client_protocol::schema::v1::{AuthMethodId, AuthenticateRequest};
-use agent_client_protocol::{AcpAgent, AcpAgentConfig, Client};
+use agent_client_protocol::schema::v1::{
+    AuthMethodId, AuthenticateRequest, CancelNotification, StopReason,
+};
+use agent_client_protocol::{AcpAgent, AcpAgentConfig, Client, SessionMessage};
 use agent_code_team::{AgentDriver, AgentTask, AgentTaskResult, ArtifactMeta};
 use async_trait::async_trait;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use tokio::sync::watch;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcpWorkerConfig {
@@ -32,6 +35,7 @@ pub enum AcpWorkerError {
     InvalidConfig(String),
     Protocol(String),
     TimedOut,
+    Cancelled,
     InvalidPeerResult(String),
 }
 
@@ -41,6 +45,7 @@ impl std::fmt::Display for AcpWorkerError {
             Self::InvalidConfig(s) => write!(f, "invalid ACP worker configuration: {s}"),
             Self::Protocol(s) => write!(f, "ACP protocol error: {s}"),
             Self::TimedOut => write!(f, "ACP worker timed out"),
+            Self::Cancelled => write!(f, "ACP worker cancelled"),
             Self::InvalidPeerResult(s) => write!(f, "invalid ACP peer result: {s}"),
         }
     }
@@ -70,6 +75,48 @@ pub struct AcpTaskExecution {
     pub result: AgentTaskResult,
 }
 
+/// A caller-owned cancellation trigger for one ACP task execution.  It does
+/// not carry a session id: the live driver derives the foreign reference from
+/// the session it actually opened, so callers cannot redirect cancellation to
+/// an arbitrary runtime session.
+#[derive(Clone, Debug)]
+pub struct AcpCancellation {
+    sender: watch::Sender<bool>,
+}
+
+/// The driver-side half of an [`AcpCancellation`] pair.  It is intentionally
+/// not serializable or durable; durable task state remains on the team board.
+#[derive(Debug)]
+pub struct AcpCancellationListener {
+    receiver: watch::Receiver<bool>,
+}
+
+impl AcpCancellation {
+    pub fn new() -> (Self, AcpCancellationListener) {
+        let (sender, receiver) = watch::channel(false);
+        (Self { sender }, AcpCancellationListener { receiver })
+    }
+
+    /// Request cancellation. Repeated requests are idempotent.
+    pub fn cancel(&self) {
+        self.sender.send_replace(true);
+    }
+}
+
+impl AcpCancellationListener {
+    async fn cancelled(&mut self) {
+        if *self.receiver.borrow() {
+            return;
+        }
+        let _ = self.receiver.changed().await;
+    }
+}
+
+enum AcpRunOutcome {
+    Completed(String, String),
+    Cancelled,
+}
+
 impl AcpWorkerDriver {
     pub fn new(config: AcpWorkerConfig) -> Result<Self, AcpWorkerError> {
         if config.runtime_kind.trim().is_empty()
@@ -91,6 +138,18 @@ impl AcpWorkerDriver {
         Ok(Self { config })
     }
     pub async fn run(&self, task: &AgentTask) -> Result<(String, String), AcpWorkerError> {
+        let (_cancellation, mut listener) = AcpCancellation::new();
+        self.run_with_cancellation(task, &mut listener).await
+    }
+
+    /// Run one bounded task and honor a caller-owned cancellation request on
+    /// the exact live ACP session. A cancellation is confirmed only after the
+    /// peer returns the stable-v1 `cancelled` stop reason.
+    pub async fn run_with_cancellation(
+        &self,
+        task: &AgentTask,
+        cancellation: &mut AcpCancellationListener,
+    ) -> Result<(String, String), AcpWorkerError> {
         let prompt = bounded_prompt(task, self.config.max_prompt_bytes);
         let agent =
             AcpAgent::new(AcpAgentConfig::new(&self.config.command).args(self.config.args.clone()));
@@ -108,15 +167,40 @@ impl AcpWorkerDriver {
                     .block_task()
                     .run_until(async |mut session| {
                         let session_id = session.session_id().to_string();
-                        session.send_prompt(prompt)?;
-                        Ok((session_id, session.read_to_string().await?))
+                        session.send_prompt(&prompt)?;
+                        let connection = session.connection().clone();
+                        let native_session_id = session.session_id().clone();
+                        tokio::select! {
+                            response = session.read_to_string() => {
+                                Ok(AcpRunOutcome::Completed(session_id, response?))
+                            }
+                            _ = cancellation.cancelled() => {
+                                connection.send_notification(CancelNotification::new(native_session_id))?;
+                                loop {
+                                    match session.read_update().await? {
+                                        SessionMessage::StopReason(StopReason::Cancelled) => break,
+                                        SessionMessage::StopReason(reason) => {
+                                            return Err(agent_client_protocol::Error::internal_error()
+                                                .data(format!("ACP cancel returned unexpected stop reason: {reason:?}")));
+                                        }
+                                        SessionMessage::SessionMessage(_) => {}
+                                        _ => {}
+                                    }
+                                }
+                                Ok(AcpRunOutcome::Cancelled)
+                            }
+                        }
                     })
                     .await
             });
-        tokio::time::timeout(self.config.timeout, run)
+        match tokio::time::timeout(self.config.timeout, run)
             .await
             .map_err(|_| AcpWorkerError::TimedOut)?
-            .map_err(|e| AcpWorkerError::Protocol(e.to_string()))
+            .map_err(|e| AcpWorkerError::Protocol(e.to_string()))?
+        {
+            AcpRunOutcome::Completed(session_id, response) => Ok((session_id, response)),
+            AcpRunOutcome::Cancelled => Err(AcpWorkerError::Cancelled),
+        }
     }
 
     /// Sends the follow-up through the same ACP session, rather than opening
@@ -208,7 +292,21 @@ impl AcpWorkerDriver {
     }
 
     pub async fn execute_task(&self, task: &AgentTask) -> Result<AcpTaskExecution, AcpWorkerError> {
-        let (external_session_id, response) = self.run(task).await?;
+        let (_cancellation, mut listener) = AcpCancellation::new();
+        self.execute_task_with_cancellation(task, &mut listener)
+            .await
+    }
+
+    /// Execute one task with an in-process cancellation handle.  Successful
+    /// results remain the existing team result shape; cancelled tasks never
+    /// produce a result that a caller could commit as success.
+    pub async fn execute_task_with_cancellation(
+        &self,
+        task: &AgentTask,
+        cancellation: &mut AcpCancellationListener,
+    ) -> Result<AcpTaskExecution, AcpWorkerError> {
+        let (external_session_id, response) =
+            self.run_with_cancellation(task, cancellation).await?;
         let summary = parse_peer_result(&response, self.config.max_result_bytes)?;
         let artifacts = self.collect_artifacts()?;
         Ok(AcpTaskExecution {
@@ -310,8 +408,6 @@ fn parse_peer_result(response: &str, max_bytes: usize) -> Result<String, AcpWork
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v1::{CancelNotification, StopReason};
-    use agent_client_protocol::SessionMessage;
     use agent_code_team::TaskKind;
     #[test]
     fn prompt_is_bounded() {
@@ -670,6 +766,11 @@ mod tests {
                 "timed-out",
                 "rt=180s",
             ),
+            Err(AcpWorkerError::Cancelled) => acp_m2_probe_emit(
+                "acp_m2_probe_follow_up_same_session",
+                "failed",
+                "unexpected_cancelled",
+            ),
             Err(AcpWorkerError::InvalidPeerResult(_)) => acp_m2_probe_emit(
                 "acp_m2_probe_follow_up_same_session",
                 "failed",
@@ -692,112 +793,39 @@ mod tests {
     async fn acp_m2_probe_cancel_active_session() {
         let cwd = acp_m2_probe_cwd("cancel");
         std::fs::create_dir_all(&cwd).expect("probe work directory");
-        let cleanup_cwd = cwd.clone();
-        let agent =
-            AcpAgent::new(AcpAgentConfig::new(PathBuf::from(ACP_M2_PROBE_TARGET)).args(["--acp"]));
-        let (tx, rx) = std::sync::mpsc::channel();
-        let run = Client
-            .builder()
-            .name("probe-acp-m2")
-            .connect_with(agent, async move |cx| {
-                cx.send_request(AuthenticateRequest::new(AuthMethodId::new("openai")))
-                    .block_task()
-                    .await?;
-                cx.build_session(&cwd)
-                    .block_task()
-                    .run_until(async |mut session| {
-                        let sid = session.session_id().to_string();
-                        session.send_prompt(
-                            "State that this probe turn will be cancelled imminently. Stop when the cancellation arrives.",
-                        )?;
-                        tokio::time::sleep(Duration::from_millis(200)).await;
-                        // ACP v1 specifies `session/cancel` as a typed
-                        // notification. `ActiveSession` retains the live
-                        // connection, so send it against the exact session rather
-                        // than treating process termination as cancellation.
-                        let cancel_sent = session
-                            .connection()
-                            .send_notification(CancelNotification::new(session.session_id().clone()))
-                            .is_ok();
-                        let mut stop: Option<StopReason> = None;
-                        let mut updates: u32 = 0;
-                        let mut stream_closed = false;
-                        while stop.is_none() {
-                            match session.read_update().await {
-                                Ok(SessionMessage::StopReason(reason)) => {
-                                    stop = Some(reason);
-                                    break;
-                                }
-                                Ok(_session_message) => {
-                                    updates += 1;
-                                    if updates >= 500 {
-                                        break;
-                                    }
-                                }
-                                Err(_closed_stream) => {
-                                    stream_closed = true;
-                                    break;
-                                }
-                            }
-                        }
-                        let _ = tx.send((
-                            sid,
-                            stop,
-                            stream_closed,
-                            updates,
-                            cancel_sent,
-                        ));
-                        Ok(())
-                    })
-                    .await
-            });
+        let driver = acp_m2_probe_driver(Duration::from_secs(180), cwd.clone(), Vec::new())
+            .expect("valid probe driver");
+        let (cancellation, mut listener) = AcpCancellation::new();
+        let task = AgentTask {
+            id: 9002,
+            objective: "State that this probe turn will be cancelled imminently. Stop when the cancellation arrives.".into(),
+            kind: TaskKind::Bulk,
+            context: Vec::new(),
+        };
+        let run = tokio::spawn(async move {
+            driver
+                .execute_task_with_cancellation(&task, &mut listener)
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        cancellation.cancel();
         match tokio::time::timeout(Duration::from_secs(180), run).await {
-            Err(_elapsed) => {
+            Err(_) => {
                 acp_m2_probe_emit("acp_m2_probe_cancel_active_session", "timed-out", "rt=180s")
             }
-            Ok(Err(_protocol_error)) => {
-                acp_m2_probe_emit("acp_m2_probe_cancel_active_session", "failed", "protocol")
-            }
-            Ok(Ok(())) => {
-                let (sid, stop, stream_closed, updates, cancel_sent) =
-                    rx.recv().unwrap_or((String::new(), None, true, 0, false));
-                if stop == Some(StopReason::Cancelled) && cancel_sent {
-                    acp_m2_probe_emit(
-                        "acp_m2_probe_cancel_active_session",
-                        "supported",
-                        &format!("sid_len={}", sid.len()),
-                    );
-                } else if stop.is_some() {
-                    acp_m2_probe_emit(
-                        "acp_m2_probe_cancel_active_session",
-                        "failed",
-                        &format!("stop_unexpected={stop:?}"),
-                    );
-                } else if !cancel_sent {
-                    acp_m2_probe_emit(
-                        "acp_m2_probe_cancel_active_session",
-                        "failed",
-                        "cancel_send_err",
-                    );
-                } else if stream_closed {
-                    acp_m2_probe_emit(
-                        "acp_m2_probe_cancel_active_session",
-                        "failed",
-                        "stream_closed",
-                    );
-                } else if updates >= 500 {
-                    acp_m2_probe_emit(
-                        "acp_m2_probe_cancel_active_session",
-                        "capability-unsupported",
-                        "cap=500",
-                    );
-                } else {
-                    acp_m2_probe_emit("acp_m2_probe_cancel_active_session", "failed", "protocol");
-                }
-                let _ = sid;
-            }
+            Ok(Err(_)) => acp_m2_probe_emit("acp_m2_probe_cancel_active_session", "failed", "join"),
+            Ok(Ok(Err(AcpWorkerError::Cancelled))) => acp_m2_probe_emit(
+                "acp_m2_probe_cancel_active_session",
+                "supported",
+                "peer_confirmed_cancel",
+            ),
+            Ok(Ok(Err(_))) | Ok(Ok(Ok(_))) => acp_m2_probe_emit(
+                "acp_m2_probe_cancel_active_session",
+                "failed",
+                "cancel_not_confirmed",
+            ),
         }
-        let _ = std::fs::remove_dir_all(&cleanup_cwd);
+        let _ = std::fs::remove_dir_all(&cwd);
     }
 
     #[tokio::test]
@@ -874,6 +902,9 @@ mod tests {
             Err(AcpWorkerError::TimedOut) => {
                 acp_m2_probe_emit("acp_m2_probe_load_verify", "timed-out", "rt=600s")
             }
+            Err(AcpWorkerError::Cancelled) => {
+                acp_m2_probe_emit("acp_m2_probe_load_verify", "failed", "unexpected_cancelled")
+            }
             Err(AcpWorkerError::InvalidPeerResult(_)) => {
                 acp_m2_probe_emit("acp_m2_probe_load_verify", "failed", "peer_invalid")
             }
@@ -931,6 +962,9 @@ mod tests {
             }
             Err(AcpWorkerError::TimedOut) => {
                 acp_m2_probe_emit("acp_m2_probe_inspect", "timed-out", "rt=600s")
+            }
+            Err(AcpWorkerError::Cancelled) => {
+                acp_m2_probe_emit("acp_m2_probe_inspect", "failed", "unexpected_cancelled")
             }
             Err(AcpWorkerError::InvalidPeerResult(_)) => {
                 acp_m2_probe_emit("acp_m2_probe_inspect", "failed", "peer_invalid")

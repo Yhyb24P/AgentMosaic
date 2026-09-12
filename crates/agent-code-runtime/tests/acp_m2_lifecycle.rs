@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use agent_code_runtime::{AcpWorkerConfig, AcpWorkerDriver, AcpWorkerError};
+use agent_code_runtime::{AcpCancellation, AcpWorkerConfig, AcpWorkerDriver, AcpWorkerError};
 use agent_code_team::{AgentDriver, AgentTask, TaskKind};
 
 const MOCK: &str = env!("CARGO_BIN_EXE_acp_m2_mock");
@@ -168,6 +168,35 @@ async fn hang_is_mapped_to_timed_out() {
     }
     assert!(gone, "mock was not gone within the 2s post-timeout window");
 
+    let _ = std::fs::remove_dir_all(&cwd);
+}
+
+#[tokio::test]
+async fn caller_cancellation_sends_session_cancel_and_requires_peer_confirmation() {
+    let cwd = mock_cwd("cancel");
+    let pid_file = mock_pid_file(&cwd);
+    let driver = AcpWorkerDriver::new(valid_config(&cwd, "cancel-wait"))
+        .expect("valid cancellable mock driver");
+    let (cancellation, mut listener) = AcpCancellation::new();
+    let task = task_for(30);
+    let run = tokio::spawn(async move {
+        driver
+            .execute_task_with_cancellation(&task, &mut listener)
+            .await
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    cancellation.cancel();
+    let outcome = tokio::time::timeout(Duration::from_secs(2), run)
+        .await
+        .expect("cancelled run should settle")
+        .expect("join cancelled run");
+    assert!(
+        matches!(outcome, Err(AcpWorkerError::Cancelled)),
+        "expected peer-confirmed cancellation, got {outcome:?}"
+    );
+
+    kill_pid_from(&pid_file).ok();
     let _ = std::fs::remove_dir_all(&cwd);
 }
 
