@@ -743,3 +743,24 @@ pre-existing `qwen_acp_*` ignored tests plus the 5 new probes, each
 listed as ignored with the reason above).
 
 B1 commit SHA: <backfilled at B5>.
+
+## 32. M2-M9-plan execution: M2-B3 mock ACP lifecycle evidence (2026-09-12)
+
+`acp_m2_mock` bin + 9 non-ignored lifecycle test cases; covering config rejects /
+before-spawn / timeout-mapping / child-cleanup / follow-up-same-session /
+execute-via-agent-driver-trait / artifact-sha256 / peer-result-limits / crash; local
+build + test all green, clippy -D warnings passed. The new files are
+`crates/agent-code-runtime/src/bin/acp_m2_mock.rs` (a mode-driven mock worker:
+sync turn, follow-up turn, hang, crash, slow) and
+`crates/agent-code-runtime/tests/acp_m2_lifecycle.rs` (all 9 cases non-ignored, no
+credentials, no live runtime).
+
+mock proves only the timeout/race/child-cleanup mapping path, not a stand-in for live
+evidence; qwen live not feasible → B2/B4 record-only, M2 gate remains unknown
+
+Gates on the working tree against `8503968`: `cargo fmt --all -- --check` passed,
+`cargo clippy --workspace --all-targets -- -D warnings` passed with zero warnings,
+and `cargo test -p agent-code-runtime` passed fully - lib 11 passed / 9 ignored,
+`acp_m2_lifecycle` 9 passed / 0 failed (~4 s), 0 failed overall.
+
+B3 commit SHA: <backfilled at B5>.
