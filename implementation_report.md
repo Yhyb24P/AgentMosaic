@@ -742,7 +742,7 @@ passed fully - `acp_worker::tests` reports 4 passed / 9 ignored (4
 pre-existing `qwen_acp_*` ignored tests plus the 5 new probes, each
 listed as ignored with the reason above).
 
-B1 commit SHA: <backfilled at B5>.
+B1 commit SHA: 8503968.
 
 ## 32. M2-M9-plan execution: M2-B3 mock ACP lifecycle evidence (2026-09-12)
 
@@ -763,4 +763,70 @@ Gates on the working tree against `8503968`: `cargo fmt --all -- --check` passed
 and `cargo test -p agent-code-runtime` passed fully - lib 11 passed / 9 ignored,
 `acp_m2_lifecycle` 9 passed / 0 failed (~4 s), 0 failed overall.
 
-B3 commit SHA: <backfilled at B5>.
+B3 commit SHA: 38734b2.
+
+## 34. M2-M9-plan execution: M2-B5 pre-flight check (2026-09-12)
+
+- Starting state on `38734b2`: no qwen ACP driver in this repository, no live
+  Codex app-server harness, no on-machine credentials.
+- M2-B2 live check (spec): bounded real-qwen ACP lifecycle observation is not
+  feasible without them -> closed record-only; B2 adds no new files, tests,
+  or live gates.
+- M2-B4 live check (spec): same -> closed record-only; B4 adds no new files,
+  tests, or live gates.
+- Evidence boundary: B3 (`acp_m2_mock` + `acp_m2_lifecycle`) proves
+  timeout/race/child-cleanup/mapping behavior only; per the plan rules, mock
+  tests can prove mapper/cleanup behavior only and cannot make M2 pass
+  without matching live evidence.
+- M2 gate at B5 pre-flight: unknown (unchanged since sections 31/32).
+- Next prerequisite: M3-M9 start on M2 live evidence, or a user-directed
+  decision.
+
+## 35. M2-M9-plan execution: M2-B5 closing gate record (2026-09-12)
+
+Gates against the B3 tree (`38734b2`), all exit 0:
+1. `cargo fmt --all -- --check` - exit 0.
+2. `cargo clippy --workspace --all-targets -- -D warnings` - exit 0, zero
+   warnings.
+3. `cargo test -p agent-code-runtime` - exit 0: `acp_m2_lifecycle` 9 passed /
+   0 failed / 0 ignored (~4 s); suite remainder in this crate: `codex_live`
+   3 ignored, `e2e` 1 passed, doc-tests 0.
+4. B2 qwen live observation - not feasible in repo (see section 34) ->
+   record-only.
+5. B4 qwen live observation - not feasible in repo (see section 34) ->
+   record-only.
+
+[LOG] `acp_m2_lifecycle` tests, all PASS (no PIDs or secrets recorded):
+1. `invalid_configs_are_rejected_before_spawn` - 9 variants (blank
+   runtime_kind, empty command, nonexistent cwd, zero timeout, zero
+   max_prompt_bytes, zero max_result_bytes, absolute artifact path, empty
+   artifact, `../escape` artifact) -> `AcpWorkerError::InvalidConfig` before
+   spawn, no filesystem side effects.
+2. `single_run_returns_session_id_and_raw` - session id `acp-m2-mock-session`;
+   raw result `{"summary":"mock-ok-0"}`.
+3. `follow_up_is_same_session_bounded_pull` - same-session
+   `run_with_follow_up`: `mock-ok-0` then `mock-ok-1`.
+4. `hang_is_mapped_to_timed_out` - 500 ms bound -> `TimedOut`; pid file
+   `mock.pid` written; backstop kill checks show the mock process is gone
+   within the bounded 2 s window (PID values not recorded).
+5. `crash_is_mapped_to_protocol_error` - mock crash ->
+   `AcpWorkerError::Protocol`.
+6. `slow_mode_completes_within_bounded_timeout` - 8 s bound, delayed mock
+   chunks -> `mock-ok-0` / `mock-ok-1`.
+7. `run_task_via_agent_driver_trait` - `Box<dyn AgentDriver>` trait dispatch
+   -> `mock-ok-0`.
+8. `result_limit_is_enforced` - `max_result_bytes = 4` ->
+   `AcpWorkerError::InvalidPeerResult` (bounded result pull).
+9. `execute_task_collects_relative_artifacts` - session
+   `acp-m2-mock-session`; single relative artifact `out.txt`; sha256 stored
+   as 64-character hex.
+
+M2-B family commit record: B1 = `8503968`; B3 = `38734b2`; B5 = this
+docs-only commit.
+
+M2 gate status at B5 close: unknown. Per the plan, M2 is PASSED only with
+official Rust ACP SDK integration, lifecycle/error/cleanup tests, and live
+evidence for actually supported relevant actions; that live condition is not
+met in this repository (no qwen driver / live harness / credentials).
+M3-M9 remain start-blocked on M2 live evidence; the next direction is
+user-specified.
