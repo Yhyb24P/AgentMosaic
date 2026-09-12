@@ -310,7 +310,7 @@ fn parse_peer_result(response: &str, max_bytes: usize) -> Result<String, AcpWork
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v1::StopReason;
+    use agent_client_protocol::schema::v1::{CancelNotification, StopReason};
     use agent_client_protocol::SessionMessage;
     use agent_code_team::TaskKind;
     #[test]
@@ -711,11 +711,14 @@ mod tests {
                             "State that this probe turn will be cancelled imminently. Stop when the cancellation arrives.",
                         )?;
                         tokio::time::sleep(Duration::from_millis(200)).await;
-                        // Ingest skip (fallback): the SDK `run_until` closure has no
-                        // mutable connection handle, so the cancel notification is
-                        // not sent; B2 records this as a probe-derivable ledger
-                        // entry. The bucket table below stays unchanged.
-                        let cancel_sent = false;
+                        // ACP v1 specifies `session/cancel` as a typed
+                        // notification. `ActiveSession` retains the live
+                        // connection, so send it against the exact session rather
+                        // than treating process termination as cancellation.
+                        let cancel_sent = session
+                            .connection()
+                            .send_notification(CancelNotification::new(session.session_id().clone()))
+                            .is_ok();
                         let mut stop: Option<StopReason> = None;
                         let mut updates: u32 = 0;
                         let mut stream_closed = false;
@@ -758,13 +761,16 @@ mod tests {
             Ok(Ok(())) => {
                 let (sid, stop, stream_closed, updates, cancel_sent) =
                     rx.recv().unwrap_or((String::new(), None, true, 0, false));
-                // No live cancel is sent (ingest skip above) and v1 `StopReason`
-                // has no cancel variant, so any stop proof means the turn ran to
-                // its own end; that is recorded as unexpected for a cancel probe.
-                if stop.is_some() {
+                if stop == Some(StopReason::Cancelled) && cancel_sent {
                     acp_m2_probe_emit(
                         "acp_m2_probe_cancel_active_session",
-                        "capability-unsupported",
+                        "supported",
+                        &format!("sid_len={}", sid.len()),
+                    );
+                } else if stop.is_some() {
+                    acp_m2_probe_emit(
+                        "acp_m2_probe_cancel_active_session",
+                        "failed",
                         &format!("stop_unexpected={stop:?}"),
                     );
                 } else if !cancel_sent {

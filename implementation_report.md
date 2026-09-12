@@ -1057,3 +1057,36 @@ This proves one normal-path registered ACP launch and durable result flow. It
 does not prove continuation, active cancel, restart recovery, Codex execution,
 or the multi-agent UX required for M2/M3/M7. Their current states remain
 M2 `UNKNOWN`, M3 `IN_PROGRESS`, and M7 `NOT_PASSED`.
+
+## 42. M2 typed stable-v1 active-cancel verification (2026-09-12)
+
+The previous ignored ACP cancel probe contained an explicit no-send fallback;
+that cannot qualify a runtime capability. It now uses the locally installed
+official ACP SDK's typed stable-v1 `CancelNotification` (`session/cancel`) via
+the exact live `ActiveSession` connection, then requires the protocol-defined
+`StopReason::Cancelled`. It does not kill the process or infer cancellation
+from connection closure.
+
+Executed command:
+
+```text
+cargo test -p agent-code-runtime acp_m2_probe_cancel_active_session -- --ignored --nocapture
+```
+
+Result: exit `0`; 1 passed, 0 failed, 21 filtered out; elapsed 1.51 seconds.
+The only emitted external-reference observation was session-id length `36`;
+the actual id, prompt, model output, endpoint, credential, raw protocol frames,
+PID, and temporary path were not retained. The sanitized evidence is appended
+to `.acc-evidence/r7-cli-acp-smoke.md`.
+
+This is real active-cancel protocol evidence, but is deliberately narrow: the
+current `run-acp` command is synchronous and its separate CLI `cancel` command
+does not yet route an active cancellation request to a running external ACP
+session. Error/retry and full restart/reconcile behavior are also still
+unqualified. Therefore milestone states remain unchanged:
+
+```text
+M2_ACP_DRIVER_READY       = UNKNOWN / NOT_PASSED
+M3_QWEN_WORKER_READY      = IN_PROGRESS
+M7_R7_NORMAL_PATH_READY   = NOT_PASSED
+```
