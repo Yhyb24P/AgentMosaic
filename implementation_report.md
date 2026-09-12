@@ -1019,6 +1019,26 @@ This is a fail-closed registry validation repair only. It starts no external
 driver and does not change M2 (`UNKNOWN / NOT_PASSED`), M3 (`IN_PROGRESS`), or
 M7 (`NOT_PASSED`).
 
+## 41. M2 stable-v1 resume primitive (2026-09-12)
+
+`AcpWorkerDriver::resume_with_follow_up` now uses the official stable-v1 typed
+`resume_session` builder only when the caller explicitly supplies an opaque
+persisted external session ID. It sends one bounded follow-up and returns only
+the strict summary; it neither reconstructs canonical board state nor replays
+the prior task. Empty external IDs fail closed.
+
+The ignored live Qwen test
+`qwen_acp_resumes_a_persisted_session_for_a_follow_up` exited 0 in 22.63
+seconds (1 passed, 0 failed, 21 filtered). It established a bounded seed
+session, reconnected, resumed it with the typed stable-v1 operation, and
+received a strict follow-up summary. Sanitized evidence is appended to
+`.acc-evidence/r7-cli-acp-smoke.md`.
+
+This closes only the previously unprobed resume primitive. M2 remains
+`UNKNOWN / NOT_PASSED` because active cancel, error/retry and full recovery
+requirements are not all independently qualified; M3 remains `IN_PROGRESS`
+and M7 remains `NOT_PASSED`.
+
 ## 40. M7 slice 2: registered ACP CLI smoke (2026-09-12)
 
 The CLI now has a bounded `run-acp` path. It loads a registered ACP worker,

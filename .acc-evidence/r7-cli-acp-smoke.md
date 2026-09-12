@@ -19,3 +19,15 @@ raw frame, PID, or absolute temporary path is retained. This is evidence that
 the registered CLI ACP path can start and persist one bounded worker task; it
 does not establish continuation, active cancel, recovery, a Codex runtime, or
 R7/M2/M3 readiness.
+
+## Stable-v1 resume follow-up
+
+The ignored Rust test
+`qwen_acp_resumes_a_persisted_session_for_a_follow_up` ran against local
+`qwen --acp` with the configured `openai` auth method. It created one bounded
+seed session, used only its opaque returned session ID in a fresh ACP
+connection's typed stable-v1 `session/resume` builder, and completed one strict
+follow-up result. Exit code was `0`: 1 passed, 0 failed, 21 filtered out, in
+22.63 seconds. No session ID, prompt, response, credential, endpoint, or raw
+frame is retained. This proves the narrow resume primitive, not automatic task
+replay or recovery readiness.

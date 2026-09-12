@@ -163,6 +163,50 @@ impl AcpWorkerDriver {
         })
     }
 
+    /// Resume a runtime-advertised stable-v1 session and send one bounded
+    /// follow-up. The caller supplies the opaque external id recovered from
+    /// the existing board binding; it is never treated as canonical task
+    /// state and no prior task is replayed automatically.
+    pub async fn resume_with_follow_up(
+        &self,
+        external_session_id: &str,
+        follow_up: &str,
+    ) -> Result<String, AcpWorkerError> {
+        if external_session_id.trim().is_empty() {
+            return Err(AcpWorkerError::InvalidConfig(
+                "external session id is required for resume".into(),
+            ));
+        }
+        let prompt = bounded_follow_up(follow_up, self.config.max_prompt_bytes);
+        let agent =
+            AcpAgent::new(AcpAgentConfig::new(&self.config.command).args(self.config.args.clone()));
+        let cwd = self.config.working_directory.clone();
+        let session_id = external_session_id.to_string();
+        let run = Client
+            .builder()
+            .name("agent-code-r6")
+            .connect_with(agent, async move |cx| {
+                if let Some(method) = &self.config.auth_method {
+                    cx.send_request(AuthenticateRequest::new(AuthMethodId::new(method.as_str())))
+                        .block_task()
+                        .await?;
+                }
+                let restored = cx
+                    .resume_session(session_id, &cwd)
+                    .block_task()
+                    .start_session()
+                    .await?;
+                let (mut session, _response) = restored.into_parts();
+                session.send_prompt(prompt)?;
+                session.read_to_string().await
+            });
+        let response = tokio::time::timeout(self.config.timeout, run)
+            .await
+            .map_err(|_| AcpWorkerError::TimedOut)?
+            .map_err(|e| AcpWorkerError::Protocol(e.to_string()))?;
+        parse_peer_result(&response, self.config.max_result_bytes)
+    }
+
     pub async fn execute_task(&self, task: &AgentTask) -> Result<AcpTaskExecution, AcpWorkerError> {
         let (external_session_id, response) = self.run(task).await?;
         let summary = parse_peer_result(&response, self.config.max_result_bytes)?;
@@ -298,6 +342,31 @@ mod tests {
     }
 
     #[test]
+    fn resume_rejects_an_empty_external_session_id() {
+        let cwd = std::env::temp_dir();
+        let driver = AcpWorkerDriver::new(AcpWorkerConfig {
+            runtime_kind: "test".into(),
+            command: PathBuf::from("test-agent"),
+            args: Vec::new(),
+            auth_method: None,
+            working_directory: cwd,
+            timeout: Duration::from_secs(1),
+            max_prompt_bytes: 64,
+            max_result_bytes: 64,
+            artifact_paths: Vec::new(),
+        })
+        .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let error = runtime
+            .block_on(driver.resume_with_follow_up("", "continue"))
+            .unwrap_err();
+        assert!(matches!(error, AcpWorkerError::InvalidConfig(_)));
+    }
+
+    #[test]
     fn artifact_collection_is_relative_hashed_and_fail_closed() {
         let cwd = std::env::temp_dir().join(format!(
             "agent_code_acp_artifacts_{}_{}",
@@ -429,6 +498,41 @@ mod tests {
         assert!(!result.external_session_id.is_empty());
         assert!(!result.first_summary.is_empty());
         assert!(!result.follow_up_summary.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local Qwen Code with an authenticated openai provider and a live local vLLM endpoint"]
+    async fn qwen_acp_resumes_a_persisted_session_for_a_follow_up() {
+        let driver = AcpWorkerDriver::new(AcpWorkerConfig {
+            runtime_kind: "qwen-code".into(),
+            command: PathBuf::from("qwen"),
+            args: vec!["--acp".into()],
+            auth_method: Some("openai".into()),
+            working_directory: std::env::temp_dir(),
+            timeout: Duration::from_secs(180),
+            max_prompt_bytes: 1024,
+            max_result_bytes: 4096,
+            artifact_paths: Vec::new(),
+        })
+        .expect("valid local Qwen profile");
+        let (session_id, _) = driver
+            .run(&AgentTask {
+                id: 3,
+                objective: "Return exactly this JSON peer result: {\"summary\":\"resume-seed\"}."
+                    .into(),
+                kind: TaskKind::Bulk,
+                context: Vec::new(),
+            })
+            .await
+            .expect("seed session completes");
+        let summary = driver
+            .resume_with_follow_up(
+                &session_id,
+                "Return exactly this JSON peer result: {\"summary\":\"resume-follow-up\"}.",
+            )
+            .await
+            .expect("resumed session completes follow-up");
+        assert_eq!(summary, "resume-follow-up");
     }
 
     #[tokio::test]
