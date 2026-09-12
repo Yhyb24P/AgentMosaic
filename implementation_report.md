@@ -881,3 +881,63 @@ itself is the next-prerequisite evidence path for the M2 live-probe stage.
 Next: B - M2 live capability reconnaissance (action guide section 4.3); a
 missing credential state records `BLOCKED_AUTH_REQUIRED` and does not mock
 PASS.
+
+## 37. M2 live capability reconnaissance vs local `qwen --acp` (2026-09-12)
+
+Executed against checkpoint
+`57be775307aab9db813838f19ac4bde1cda71c6f` ("chore: checkpoint before
+m2-live-probe"; section 36 pre-flight 6/6 green re-verified the clean tree
+directly before the probe). `executed_at 2026-09-12T05:15:32Z` (driver log
+start; probes finished within seconds).
+
+Driver: `python3 /tmp/m2acp_probe_evidence/probeD_driver.py` (operator local,
+10284 B, sha `95074d07d2d27f50001c42dc7cce64e77f2db421009b717a323f71a7246b787f`)
+drives one local `qwen --acp` process (v0.23.3, fully exposed via stdio) as a
+drive-only I/O script — no shell, no network; driver exit 0. Sandbox cwd
+`/tmp/m2acp_probe_cwd` (fresh empty directory per user direction;
+`session/new` sent `mcpServers: []`; no project files or `.env`). No
+credentials read or copied; the evidence records hold no credential values,
+PIDs, or home paths.
+
+Committed evidence (both updated in this commit):
+- `.acc-evidence/r6-acp-driver-m2.md` (5434 B, sha
+  `711d52ad62d7047a3205fadfefb61f1be97a3e010b58e6e71aae7411d2cdeb2a`) —
+  the 10-capability x 8-field matrix with sample-line citations.
+- `.acc-evidence/r6-acp-driver-m2-samples.jsonl` (29 rows, sha
+  `3d313c68ad3a0079138e179475df4464d975beb4697277f80baba76aa5814cac`
+   re-verified on the commit path)
+  trims from the full 971-record notify stream (995-line driver log, sha
+  `978b13f5fd2f999c9698bb5c2aff2becf640236259be31fbda31f022738396a2`), which
+  stays operator-local and is not committed under the 16 KiB / 50-event
+  evidence admission bounds.
+
+Capability verdicts (field matrix in the md): initialize, session/new (+
+fresh UUIDv4 identity), bounded prompt, same-session follow-up, active
+cancel, session/load, session/list, and auth observation are documented as
+SUPPORTED with live evidence. The error/retry shape (JSON-RPC -32601 dump,
+retry equivalence) is recorded as UNKNOWN, formal-shape-only. Resume:
+NOT_PROBED — no resume frame was pre-named or sent in this run, per action
+guide section 4.3.
+
+Milestone lines:
+
+```text
+M2_LIVE_RECON        = COMPLETED
+M2_ACP_DRIVER_READY  = UNKNOWN / NOT_PASSED
+M3_QWEN_WORKER_READY = IN_PROGRESS
+```
+
+Scope clause (action guide section 4.4): this single live probe proves only
+what was held and does not establish full driver readiness; the driver's
+product-grade gate still requires the B3 post-hoc minimums (at least one
+real follow-up primitive, a recovered/observed session, and a verified
+cancel — md "M2 gate" section). The section 33 B4 record-only line stays
+empty as designed; the JSON milestone lines of this report
+(line 482, the section 29 JSON block) are not updated by this section.
+
+The operator-specified `codex qw` local-model path was not used at this
+stage; it remains recorded for M1/M5 live work per section 36.
+
+Next: A - M7 slice 1 (live normal-path driver work against
+`M7_R7_NORMAL_PATH_READY`), following the action guide's step 4 execution
+procedure after this B closeout.
