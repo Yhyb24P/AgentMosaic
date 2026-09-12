@@ -467,6 +467,9 @@ mod tests {
                 tier: AgentTier::Reasoner,
                 tags: Vec::new(),
                 max_concurrency: 1,
+                driver_kind: None,
+                executable: None,
+                driver_args: Vec::new(),
             },
             AgentConfig {
                 id: "worker-a".into(),
@@ -474,6 +477,9 @@ mod tests {
                 tier: AgentTier::Worker,
                 tags: Vec::new(),
                 max_concurrency: 1,
+                driver_kind: None,
+                executable: None,
+                driver_args: Vec::new(),
             },
             AgentConfig {
                 id: "utility-a".into(),
@@ -481,6 +487,9 @@ mod tests {
                 tier: AgentTier::Utility,
                 tags: Vec::new(),
                 max_concurrency: 1,
+                driver_kind: None,
+                executable: None,
+                driver_args: Vec::new(),
             },
         ])
         .expect("a full tier set is valid");

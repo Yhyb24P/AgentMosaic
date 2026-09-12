@@ -31,6 +31,9 @@ fn cfg(id: &str, tier: AgentTier) -> AgentConfig {
         tier,
         tags: Vec::new(),
         max_concurrency: 2,
+        driver_kind: None,
+        executable: None,
+        driver_args: Vec::new(),
     }
 }
 

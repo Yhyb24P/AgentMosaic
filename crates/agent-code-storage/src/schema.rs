@@ -2,7 +2,8 @@
 /// and `tool_calls.request` on top of the R3 (version 1) schema. Version 3
 /// extends the team tables for the durable task board: task parent/kind/
 /// target/assignee, run attempt/result/error, and task-keyed artifacts.
-pub const SCHEMA_VERSION: i32 = 7;
+/// Version 8 adds the durable runtime agent registry (agent_registry).
+pub const SCHEMA_VERSION: i32 = 8;
 
 /// The durable journal schema. Deliberately small; it does not reproduce the
 /// legacy qualification/audit schema.
@@ -125,6 +126,16 @@ CREATE TABLE IF NOT EXISTS runtime_collaboration_records (
     response_summary TEXT,
     UNIQUE (runtime_kind, native_call_id)
 );
+CREATE TABLE IF NOT EXISTS agent_registry (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    tier TEXT NOT NULL,
+    driver_kind TEXT,
+    executable TEXT,
+    driver_args_json TEXT,
+    max_concurrency INTEGER NOT NULL,
+    tags_json TEXT
+);
 "#;
 
 /// Idempotently bring `conn` up to [`SCHEMA_VERSION`]. A fresh database is
@@ -173,6 +184,19 @@ pub fn migrate(conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error> {
             runtime_kind TEXT NOT NULL, native_call_id TEXT NOT NULL, kind TEXT NOT NULL,
             payload_summary TEXT NOT NULL, response_summary TEXT,
             UNIQUE (runtime_kind, native_call_id)
+         );",
+    )?;
+    // R7 -> R8: the durable runtime agent registry.
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS agent_registry (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            tier TEXT NOT NULL,
+            driver_kind TEXT,
+            executable TEXT,
+            driver_args_json TEXT,
+            max_concurrency INTEGER NOT NULL,
+            tags_json TEXT
          );",
     )?;
     // `artifacts` gains a nullable `task_id` and a nullable `session_id`, so a

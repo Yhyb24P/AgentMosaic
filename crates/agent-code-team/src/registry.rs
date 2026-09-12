@@ -3,9 +3,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 /// The capability/cost tier of a team Agent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentTier {
     Reasoner,
     Worker,
@@ -56,14 +57,46 @@ impl TaskKind {
     }
 }
 
+/// How an Agent runs behind its driver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DriverKind {
+    Native,
+    Acp,
+    Cli,
+}
+
+impl DriverKind {
+    /// The durable string form.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DriverKind::Native => "native",
+            DriverKind::Acp => "acp",
+            DriverKind::Cli => "cli",
+        }
+    }
+
+    /// Restore a kind from its string form.
+    pub fn restore(s: &str) -> Option<Self> {
+        Some(match s {
+            "native" => DriverKind::Native,
+            "acp" => DriverKind::Acp,
+            "cli" => DriverKind::Cli,
+            _ => return None,
+        })
+    }
+}
+
 /// Configuration for a team Agent.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     pub id: String,
     pub name: String,
     pub tier: AgentTier,
     pub tags: Vec<String>,
     pub max_concurrency: usize,
+    pub driver_kind: Option<DriverKind>,
+    pub executable: Option<String>,
+    pub driver_args: Vec<String>,
 }
 
 /// A unit of work delegated to an Agent.
@@ -210,6 +243,9 @@ mod tests {
             tier,
             tags: Vec::new(),
             max_concurrency: 2,
+            driver_kind: None,
+            executable: None,
+            driver_args: Vec::new(),
         }
     }
 

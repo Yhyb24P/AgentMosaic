@@ -66,6 +66,7 @@ dependencies = [
  "agent-code-team",
  "rusqlite",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

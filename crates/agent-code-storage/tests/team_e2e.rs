@@ -171,6 +171,9 @@ fn build_registry() -> AgentRegistry {
             tier: AgentTier::Reasoner,
             tags: Vec::new(),
             max_concurrency: 2,
+            driver_kind: None,
+            executable: None,
+            driver_args: Vec::new(),
         },
         AgentConfig {
             id: "worker-a".into(),
@@ -178,6 +181,9 @@ fn build_registry() -> AgentRegistry {
             tier: AgentTier::Worker,
             tags: Vec::new(),
             max_concurrency: 2,
+            driver_kind: None,
+            executable: None,
+            driver_args: Vec::new(),
         },
         AgentConfig {
             id: "worker-b".into(),
@@ -185,6 +191,9 @@ fn build_registry() -> AgentRegistry {
             tier: AgentTier::Worker,
             tags: Vec::new(),
             max_concurrency: 2,
+            driver_kind: None,
+            executable: None,
+            driver_args: Vec::new(),
         },
         AgentConfig {
             id: "utility-a".into(),
@@ -192,6 +201,9 @@ fn build_registry() -> AgentRegistry {
             tier: AgentTier::Utility,
             tags: Vec::new(),
             max_concurrency: 2,
+            driver_kind: None,
+            executable: None,
+            driver_args: Vec::new(),
         },
     ])
     .expect("a full tier set is valid")

@@ -87,6 +87,11 @@ Current driver boundaries:
   hashes, rather than wrapping the runtime in a second tool loop.
 - `UtilityDriver` — deterministic worker for tests/build/search/batch.
 
+M7 slice 1 (report section 38) extends the same journal with a durable runtime
+registry (`agent_registry`, schema v8): the CLI `register`/`registry` verbs record and
+list registrations (tier, driver kind, executable, driver args, concurrency, tags)
+without launching any driver or legacy Python.
+
 ## Roadmap
 
 The active plan is `R0 -> R8` in [docs/v2/ROADMAP.md](docs/v2/ROADMAP.md):
@@ -128,6 +133,10 @@ cargo run -p agent-code-cli -- resume ./team.db 1
 cargo run -p agent-code-cli -- override ./team.db 1 worker-a
 cargo run -p agent-code-cli -- artifact ./team.db 1
 cargo run -p agent-code-cli -- final ./team.db 1
+
+# record and list agent registrations in the durable runtime registry
+cargo run -p agent-code-cli -- register ./team.db acp-worker acp-worker worker acp codex "--acp,local" 2 "qwen,local-model"
+cargo run -p agent-code-cli -- registry ./team.db
 
 # read-only interactive board view; q exits
 cargo run -p agent-code-tui -- ./team.db

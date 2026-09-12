@@ -23,7 +23,7 @@ pub use lead::{
     reconstruct_team_result, Lead, LeadBrain, LeadContext, LeadDecision, LeadError, TeamResult,
 };
 pub use registry::{
-    AgentConfig, AgentDriver, AgentRegistry, AgentTask, AgentTaskResult, AgentTier, RegistryError,
-    TaskKind,
+    AgentConfig, AgentDriver, AgentRegistry, AgentTask, AgentTaskResult, AgentTier, DriverKind,
+    RegistryError, TaskKind,
 };
 pub use scheduler::{ScheduleError, ScheduledResult, Scheduler, TaskSpec};

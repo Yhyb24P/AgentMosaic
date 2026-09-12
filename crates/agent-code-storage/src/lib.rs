@@ -4,11 +4,13 @@ mod acc_store;
 mod board;
 mod journal;
 mod observations;
+mod registry_store;
 mod schema;
 
 pub use acc_store::SqliteAccStore;
 pub use board::{ExternalRuntimeBinding, RuntimeCollaborationRecord, SqliteTaskBoard};
 pub use journal::SqliteJournal;
+pub use registry_store::{AgentRegistryRecord, SqliteAgentRegistry};
 pub use schema::{migrate, SCHEMA, SCHEMA_VERSION};
 
 #[cfg(test)]

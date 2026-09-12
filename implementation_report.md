@@ -941,3 +941,59 @@ stage; it remains recorded for M1/M5 live work per section 36.
 Next: A - M7 slice 1 (live normal-path driver work against
 `M7_R7_NORMAL_PATH_READY`), following the action guide's step 4 execution
 procedure after this B closeout.
+
+## 38. M7 slice 1: durable runtime registry + Rust-only normal path (2026-09-12)
+
+Executed against `d8305df` (head prior to this commit; section 37 closeout).
+Action guide items 1-2 delivered in a single commit with the 14 listed paths.
+
+Item 1 - durable agent registry: PASS.
+- team: AgentConfig gains driver_kind / executable / driver_args; new
+  DriverKind enums with TaskKind-style as_str / restore.
+- storage: schema v8 adds agent_registry DDL plus the idempotent R7->R8
+  migration; new SqliteAgentRegistry store with 4 unit tests.
+- cli: register / registry sub-commands (hand-written argv, no external
+  parser crate).
+
+Item 2 - Rust-only normal path: PASS with a scoped verdict (the no-driver
+half). The URL and the six verbs (submit, status, cancel, override, resume,
+artifact) plus final all executed through the new binary against a
+:memory: board, and register / registry round-trip the durable v8 store
+(pattern in the repo's Rust-only E2E; driver never started). Minutes below.
+
+Capability verdicts: unchanged in this commit. Point at section 37:
+8 capabilities SUPPORTED with live evidence; error/retry UNKNOWN
+(formal-shape only); resume NOT_PROBED, per action guide section 4.3.
+
+Milestone lines (values preserved from section 37; new line below):
+
+```text
+M2_LIVE_RECON        = COMPLETED
+M2_ACP_DRIVER_READY  = UNKNOWN / NOT_PASSED
+M3_QWEN_WORKER_READY = IN_PROGRESS
+M7_R7_NORMAL_PATH_READY = NOT_PASSED
+```
+
+(M7_R7_NORMAL_PATH_READY: driver readiness is NOT_PASSED - no qwen / codex
+process was launched in this slice; the acp + codex values written by the
+register demo are recorded config, not runs. The value-confirm channel is
+the operator-specified codex qw local-model path, recorded in section 36
+and pending M3; M3_QWEN_WORKER_READY stays IN_PROGRESS.)
+
+Verification gates, after the section-38 insertion and before the commit:
+- cargo fmt --all -- --check: clean (exit 0)
+- cargo clippy --workspace --all-targets -- -D warnings: exit 0
+- cargo test --workspace: exit 0 - 157 passed, 0 failed, 12 ignored
+  (baseline carried forward)
+- git diff --check (all 14 paths staged): clean, no whitespace errors
+- git status post-staging: clean, entire working tree is the 14 paths
+
+Commit file set: 13 guide manifest items + Cargo.lock, co-committed because
+the cli manifest gained serde_json (used by register / registry); this keeps
+locked builds reproducible and matches the repository's commit
+history, which routinely carries Cargo.lock. 14 paths total.
+
+Scope note: only item 2's durable-registry + no-legacy-Python half is
+delivered here; driver readiness (M7_R7_NORMAL_PATH_READY) remains
+NOT_PASSED and the 10-capability matrix above stands as-is.
+Commits: d8305df -> this commit.
