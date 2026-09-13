@@ -1178,6 +1178,20 @@ clippy, test, and diff checks exited `0`; 171 passed, 0 failed, 11 ignored.
 This closes the public recovery seam but is not yet a real-runtime interruption
 and reconciliation drill; `M5_R6_TEAM_READY` remains `NOT_RUN`.
 
+## 49. M5 combined scheduler topology (2026-09-13)
+
+The focused ignored live harness passed at current source: exit `0`; 1 passed,
+0 failed, 0 ignored, 3 filtered out; 39.83 seconds. Sanitized log SHA-256:
+`73c98957a44ebb0d34ebbc936ede61c12bb277445de3c80afaa49386ab4d8c04`.
+It preserves two deterministic failed attempts for an explicitly targeted
+worker, reassigns the same task to real Qwen ACP, runs a scheduler-owned real
+Codex Lead over bounded persisted context, persists exact artifacts/final refs,
+and reopens SQLite. It then exercises explicit recover/resume on the same task
+id as attempt 2. The recovery trigger is deterministic; it is not evidence of
+a real Qwen process interruption. Full Rust CI passed: 172 passed, 0 failed,
+11 ignored. M5 remains `NOT_RUN` pending a true live runtime interruption and
+reconcile drill.
+
 ## 46. Codex Lead follow-up from persisted board context (2026-09-13)
 
 The real Codex Lead harness no longer inserts a teammate result into the

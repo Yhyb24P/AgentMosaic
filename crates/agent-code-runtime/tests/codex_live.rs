@@ -688,6 +688,15 @@ impl AgentDriver for LiveUtility {
     }
 }
 
+struct DeterministicFailingWorker;
+
+#[async_trait]
+impl AgentDriver for DeterministicFailingWorker {
+    async fn run_task(&self, _task: agent_code_team::AgentTask) -> Result<AgentTaskResult, String> {
+        Err("intentional bounded reassignment trigger".into())
+    }
+}
+
 #[tokio::test]
 #[ignore = "requires authenticated local Qwen Code; runs one bounded scheduler-managed ACP task"]
 async fn real_scheduler_runs_qwen_worker_and_utility_on_one_board() {
@@ -720,6 +729,16 @@ async fn real_scheduler_runs_qwen_worker_and_utility_on_one_board() {
         AgentConfig {
             id: "qwen".into(),
             name: "qwen".into(),
+            tier: AgentTier::Worker,
+            tags: Vec::new(),
+            max_concurrency: 1,
+            driver_kind: None,
+            executable: None,
+            driver_args: Vec::new(),
+        },
+        AgentConfig {
+            id: "worker-fail".into(),
+            name: "worker-fail".into(),
             tier: AgentTier::Worker,
             tags: Vec::new(),
             max_concurrency: 1,
@@ -778,11 +797,12 @@ async fn real_scheduler_runs_qwen_worker_and_utility_on_one_board() {
     let mut drivers: BTreeMap<String, Arc<dyn AgentDriver>> = BTreeMap::new();
     drivers.insert("codex".into(), Arc::new(codex));
     drivers.insert("qwen".into(), Arc::new(qwen));
+    drivers.insert("worker-fail".into(), Arc::new(DeterministicFailingWorker));
     drivers.insert("utility".into(), Arc::new(LiveUtility));
     let board = SqliteTaskBoard::open(Connection::open(&db).unwrap()).unwrap();
-    let mut scheduler = Scheduler::new(registry, drivers, board, 1);
+    let mut scheduler = Scheduler::new(registry, drivers, board, 2);
     let results = scheduler.schedule(&[
-        TaskSpec { objective: "In this isolated Git repository, replace worker.txt with exactly worker=complete followed by one newline, run sh check.sh, then return exactly this JSON peer result: {\"summary\":\"scheduler Qwen worker complete\"}. Do not modify any other file.".into(), kind: TaskKind::Bulk, target: Some("qwen".into()), parent: None, context: Vec::new() },
+        TaskSpec { objective: "In this isolated Git repository, replace worker.txt with exactly worker=complete followed by one newline, run sh check.sh, then return exactly this JSON peer result: {\"summary\":\"scheduler Qwen worker complete\"}. Do not modify any other file.".into(), kind: TaskKind::Bulk, target: Some("worker-fail".into()), parent: None, context: Vec::new() },
         TaskSpec { objective: "produce deterministic utility result".into(), kind: TaskKind::Utility, target: Some("utility".into()), parent: None, context: Vec::new() },
     ]).await.unwrap();
     for result in &results {
@@ -810,6 +830,12 @@ async fn real_scheduler_runs_qwen_worker_and_utility_on_one_board() {
         b"worker=complete\n"
     );
     let qwen_task = results[0].task_id;
+    assert_eq!(results[0].attempts.len(), 3);
+    assert!(results[0].attempts[..2]
+        .iter()
+        .all(|attempt| attempt.agent_id == "worker-fail" && attempt.status == TaskStatus::Failed));
+    assert_eq!(results[0].attempts[2].agent_id, "qwen");
+    assert_eq!(results[0].attempts[2].status, TaskStatus::Succeeded);
     {
         let board = scheduler.board().lock().unwrap();
         assert_eq!(
@@ -817,7 +843,7 @@ async fn real_scheduler_runs_qwen_worker_and_utility_on_one_board() {
             TaskStatus::Succeeded
         );
         assert_eq!(board.artifacts(qwen_task).unwrap().len(), 1);
-        let binding = board.external_binding(qwen_task, 1).unwrap().unwrap();
+        let binding = board.external_binding(qwen_task, 3).unwrap().unwrap();
         assert_eq!(binding.lifecycle_state, "completed");
         assert_eq!(board.messages_to("codex").unwrap().len(), 1);
     }
@@ -835,25 +861,62 @@ async fn real_scheduler_runs_qwen_worker_and_utility_on_one_board() {
     let lead_task = lead_results[0].task_id;
     let lead_bytes = std::fs::read(cwd.join("lead-final.txt")).unwrap();
     assert_eq!(lead_bytes, b"scheduler lead complete\n");
-    let mut board = scheduler.board().lock().unwrap();
-    let lead_binding = board.external_binding(lead_task, 1).unwrap().unwrap();
-    assert_eq!(lead_binding.lifecycle_state, "completed");
-    assert!(lead_binding.native_thread_id.is_some());
-    assert!(lead_binding.native_turn_id.is_some());
-    assert_eq!(board.artifacts(lead_task).unwrap().len(), 1);
-    let qwen_artifact = board.artifacts(qwen_task).unwrap().pop().unwrap();
-    board
-        .record_final_refs(
-            lead_task,
-            &[qwen_task, lead_task],
-            &[SelectedArtifactRef {
-                task_id: qwen_task,
-                artifact: qwen_artifact,
-            }],
-        )
+    let recovery_task = {
+        let mut board = scheduler.board().lock().unwrap();
+        let lead_binding = board.external_binding(lead_task, 1).unwrap().unwrap();
+        assert_eq!(lead_binding.lifecycle_state, "completed");
+        assert!(lead_binding.native_thread_id.is_some());
+        assert!(lead_binding.native_turn_id.is_some());
+        assert_eq!(board.artifacts(lead_task).unwrap().len(), 1);
+        let qwen_artifact = board.artifacts(qwen_task).unwrap().pop().unwrap();
+        board
+            .record_final_refs(
+                lead_task,
+                &[qwen_task, lead_task],
+                &[SelectedArtifactRef {
+                    task_id: qwen_task,
+                    artifact: qwen_artifact,
+                }],
+            )
+            .unwrap();
+        assert_eq!(board.runtime_collaboration(lead_task, 1).unwrap().len(), 1);
+        let recovery_task = board
+            .create_task(
+                "recover a scheduler-owned utility task",
+                None,
+                TaskKind::Utility,
+                Some("utility".into()),
+            )
+            .unwrap();
+        board.assign(recovery_task, "utility").unwrap();
+        board
+            .record_attempt(&TaskAttempt {
+                task_id: recovery_task,
+                attempt: 1,
+                agent_id: "utility".into(),
+                status: TaskStatus::Running,
+                result: None,
+                error: None,
+            })
+            .unwrap();
+        board
+            .set_status(recovery_task, TaskStatus::Running)
+            .unwrap();
+        recovery_task
+    };
+    let mut reopened = SqliteTaskBoard::open(Connection::open(&db).unwrap()).unwrap();
+    let recovered = reopened
+        .recover_interrupted_attempt(recovery_task)
+        .unwrap()
         .unwrap();
-    assert_eq!(board.runtime_collaboration(lead_task, 1).unwrap().len(), 1);
-    drop(board);
+    assert_eq!(recovered.status, TaskStatus::Failed);
+    reopened
+        .set_status(recovery_task, TaskStatus::Pending)
+        .unwrap();
+    drop(reopened);
+    let resumed = scheduler.resume_existing(recovery_task).await.unwrap();
+    assert!(resumed.result.is_ok());
+    assert_eq!(resumed.attempts[0].attempt, 2);
     let reopened = SqliteTaskBoard::open(Connection::open(&db).unwrap()).unwrap();
     assert_eq!(
         reopened.task(lead_task).unwrap().unwrap().status,
@@ -863,6 +926,11 @@ async fn real_scheduler_runs_qwen_worker_and_utility_on_one_board() {
         reopened.final_refs(lead_task).unwrap().0,
         vec![qwen_task, lead_task]
     );
+    assert_eq!(
+        reopened.task(recovery_task).unwrap().unwrap().status,
+        TaskStatus::Succeeded
+    );
+    assert_eq!(reopened.attempts(recovery_task).unwrap().len(), 2);
     let _ = std::fs::remove_file(db);
     let _ = std::fs::remove_dir_all(cwd);
 }

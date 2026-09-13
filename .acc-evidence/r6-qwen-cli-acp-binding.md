@@ -183,3 +183,20 @@ was not a strict peer result; they are not counted as successful evidence.
 This live pass is stronger M5 partial evidence, but retry, reassignment, user
 override, and recovery have not yet been demonstrated together in this real
 topology, so M5 remains `NOT_RUN`.
+
+## M5 combined scheduler topology
+
+The same live harness now also exercises scheduler retry/reassignment and an
+explicit recover/resume path on the same SQLite board. Its focused command
+passed with exit `0`: 1 passed, 0 failed, 0 ignored, 3 filtered out; 39.83
+seconds. Sanitized log SHA-256:
+`73c98957a44ebb0d34ebbc936ede61c12bb277445de3c80afaa49386ab4d8c04`.
+
+An explicit target first routes the bulk task to a deterministic failing worker
+for two preserved failed attempts, then the scheduler reassigns it to the real
+Qwen ACP driver. Codex Lead is scheduler-dispatched and consumes the bounded
+persisted result projection. The harness also persists a synthetic interrupted
+utility attempt, reopens the board, runs the public recovery operation, then
+explicitly resumes the same task id as attempt 2. The Qwen/Codex execution is
+real; the failure and interruption triggers are deterministic harness faults,
+not claims of a real Qwen process crash.
