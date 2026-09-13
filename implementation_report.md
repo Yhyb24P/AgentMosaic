@@ -6,6 +6,13 @@ This is the authoritative current-state block. Everything below it is retained
 as historical evidence; sections marked `SUPERSEDED_BY_PRODUCT_SELF_AUDIT` were
 disproved by the independent `product_self_audit.md` (2026-09-13).
 
+- Release preparation: **v0.1.0**, first stable public release of the Rust
+  heterogeneous-Agent product line, published as a GitHub Release (not a
+  prerelease, no crates.io publication). The release tag points at the
+  release-prep documentation commit, whose executable source is byte-identical
+  to the frozen candidate below; see `docs/releases/v0.1.0.md` and `CHANGELOG.md`.
+  The workspace version is already `0.1.0` with `publish = false`, so the release
+  required no `Cargo.toml`/`Cargo.lock` change.
 - Source candidate: branch `v2/rust-agent-team`, commit
   `89ac979d333fe3fc2e311fb566f3ab0056bec4c5` (frozen). The frozen candidate's
   executable source is unchanged by every later evidence/report commit; the

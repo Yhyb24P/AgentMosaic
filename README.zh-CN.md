@@ -1,5 +1,12 @@
 # research-agent-system
 
+> **v0.1.0 正式发布。** Rust 异构 Agent 产品线的首个稳定公开发行版：一个目标进，
+> 一个持久化的团队结果出。Codex 是参考的高智能 Lead，Qwen Code 是参考的 Worker，
+> 结果与 artifact 通过持久化 board 自动回流到 Lead，不需要人工在 Agent 之间复制
+> 粘贴。旧的 Python `researchd` control plane 已移除，不属于本产品。详见
+> [v0.1.0 发行说明](docs/releases/v0.1.0.md)、[变更日志](CHANGELOG.md) 与
+> [路线图](docs/v2/ROADMAP.md)。
+
 Rust v2 异构 coding-agent 团队：推理 Agent 与本地 worker 通过持久化 SQLite
 team board 协作，结果、消息和 artifact 自动回流，不需要人工复制粘贴。
 

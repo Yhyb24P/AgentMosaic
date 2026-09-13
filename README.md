@@ -2,15 +2,14 @@
 
 [简体中文](README.zh-CN.md)
 
-> **Status.** The active direction is a Rust v2 rewrite of the native Coding Agent and
-> the heterogeneous Agent team layer, on branch `v2/rust-agent-team`. The Python
-> `researchd` control-plane implementation was removed in R8 and is no longer the
-> product. The RC repair adds the product team entrypoint
-> `agent-code-cli run-team <db> <repo> "<objective>"` (plus `resume-team`) and storage
-> schema v11. A verified real Codex + Qwen Code team run through the public CLI is
-> recorded in `.acc-evidence/rc-repair-fbc80bf/`. See
-> [the roadmap](docs/v2/ROADMAP.md) and
-> [R5 status](docs/v2/R5_STATUS.md).
+> **Release v0.1.0.** First stable public release of the Rust heterogeneous-Agent
+> product line: one objective in, one durable team result out. Codex is the reference
+> high-intelligence Lead and Qwen Code is the reference Worker; results and artifacts
+> return to the Lead automatically through the durable board, with no manual
+> Agent-to-Agent copy/paste. The legacy Python `researchd` control plane was removed
+> and is not part of this product. See
+> [the v0.1.0 release notes](docs/releases/v0.1.0.md),
+> [the changelog](CHANGELOG.md), and [the roadmap](docs/v2/ROADMAP.md).
 
 Research Agent System is a **heterogeneous Agent coding/work team**.
 
