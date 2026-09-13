@@ -12,7 +12,7 @@ use agent_code_team::{AgentTask, DriverKind, TaskAttempt, TaskBoard, TaskKind, T
 use rusqlite::Connection;
 
 fn usage() -> &'static str {
-    "usage: agent-code-cli <register|registry|run-acp|submit|status|cancel|override|resume|artifact|final> <database> [fields]"
+    "usage: agent-code-cli <register|registry|run-acp|submit|status|cancel|override|resume|artifact|binding|final> <database> [fields]"
 }
 
 fn open(path: &str) -> Result<SqliteTaskBoard, String> {
@@ -406,6 +406,39 @@ fn run(args: &[String]) -> Result<String, String> {
                         .collect::<Vec<_>>()
                         .join("\n")
                 })
+        }
+        "binding" => {
+            let task = parse_task(args.get(2))?;
+            let attempt = args
+                .get(3)
+                .map(|value| {
+                    value
+                        .parse::<u32>()
+                        .map_err(|_| "invalid attempt".to_string())
+                })
+                .transpose()?
+                .unwrap_or_else(|| {
+                    board
+                        .attempts(task)
+                        .ok()
+                        .map(|items| items.len() as u32)
+                        .unwrap_or(0)
+                });
+            let binding = board
+                .external_binding(task, attempt)
+                .map_err(|e| format!("binding: {e}"))?
+                .ok_or_else(|| {
+                    "binding: no external runtime binding for task attempt".to_string()
+                })?;
+            Ok(format!(
+                "task={} attempt={} agent={} runtime_kind={} lifecycle_state={} external_reference_present={}",
+                binding.team_task_id,
+                binding.attempt,
+                binding.agent_id,
+                binding.runtime_kind,
+                binding.lifecycle_state,
+                binding.native_thread_id.is_some(),
+            ))
         }
         "final" => {
             let task = parse_task(args.get(2))?;
