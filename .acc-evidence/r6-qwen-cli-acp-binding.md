@@ -200,3 +200,14 @@ utility attempt, reopens the board, runs the public recovery operation, then
 explicitly resumes the same task id as attempt 2. The Qwen/Codex execution is
 real; the failure and interruption triggers are deterministic harness faults,
 not claims of a real Qwen process crash.
+
+## Fresh live Qwen interruption evidence
+
+The focused command `cargo test -p agent-code-runtime
+acp_m2_probe_cancel_active_session -- --ignored --nocapture` passed with exit
+`0`: 1 passed, 0 failed, 0 ignored, 24 filtered out; 1.16 seconds. Its
+sanitized log SHA-256 is
+`95a790ba89a96ded17d37c5c5ac01f9b6834c5a8aab0ea01fa971459045eaf7b`.
+The real ACP peer returned the terminal cancellation reason after the typed
+cancel notification. This proves live cancellation, not a process-crash
+reconcile workflow.

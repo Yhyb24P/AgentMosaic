@@ -1091,6 +1091,16 @@ M3_QWEN_WORKER_READY      = IN_PROGRESS
 M7_R7_NORMAL_PATH_READY   = NOT_PASSED
 ```
 
+## 50. Fresh live Qwen cancellation observation (2026-09-13)
+
+`cargo test -p agent-code-runtime acp_m2_probe_cancel_active_session --
+--ignored --nocapture` exited `0`: 1 passed, 0 failed, 0 ignored, 24 filtered;
+1.16 seconds. Sanitized log SHA-256:
+`95a790ba89a96ded17d37c5c5ac01f9b6834c5a8aab0ea01fa971459045eaf7b`.
+The real Qwen ACP peer confirmed cancellation with its terminal cancellation
+reason. This is live interruption evidence for the ACP driver, but not a live
+process-crash/reconcile drill, so it does not change M5's `NOT_RUN` status.
+
 ## 46. M5 scheduler-owned Codex Lead follow-up (2026-09-13)
 
 The ignored live test below was executed from the current working source after
