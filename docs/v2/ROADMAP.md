@@ -67,9 +67,10 @@ Evidence: `.acc-evidence/rc-repair-fbc80bf/`; `cargo test --workspace
 
 Readiness remains split: `LOCAL_PRODUCT_RC_READY`,
 `REMOTE_DETERMINISTIC_CI_READY`, and `PUBLIC_RELEASE_READY` are separate claims.
-The exact-candidate freeze commit and the independent re-audit
-(`product_self_reaudit.md`) are still pending; no tag or public release is
-authorized.
+The exact-candidate freeze commit is `295c96a075cdf3987d8e66fa75fce14d15611b3a`
+and the post-repair `product_self_reaudit.md` reports no remaining S0/S1 blocker,
+so `LOCAL_PRODUCT_RC_READY` is claimed; remote deterministic CI has not yet run
+on the candidate and no tag or public release is authorized.
 
 ## Crate graph
 

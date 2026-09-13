@@ -44,13 +44,15 @@ disproved by the independent `product_self_audit.md` (2026-09-13).
 | M8_R8_DEBLOATED | PARTIAL | retired Python removed; stale Python-era docs/workflows reconciled |
 | M9_PRODUCT_RC_READY | FAILED | local real E2E verified; candidate not frozen and independent re-audit pending |
 
-The definitive post-repair re-evaluation is the forthcoming
-`product_self_reaudit.md`; until it exists these states are not re-audited.
+The definitive post-repair re-evaluation is `product_self_reaudit.md`, conducted on
+the frozen candidate. It is a self re-audit by the repair executor, not an
+independent third-party audit; an external re-audit is still recommended before
+any public release decision.
 
 ### Readiness (separate claims)
 
 ```text
-LOCAL_PRODUCT_RC_READY        = not yet claimed (candidate not frozen; re-audit pending)
+LOCAL_PRODUCT_RC_READY        = true  (exact-candidate gates + real Codex/Qwen E2E + copied release binary)
 REMOTE_DETERMINISTIC_CI_READY = false (no deterministic CI run on a frozen candidate)
 PUBLIC_RELEASE_READY          = false (no tag or GitHub Release; not authorized)
 ```
@@ -58,7 +60,8 @@ PUBLIC_RELEASE_READY          = false (no tag or GitHub Release; not authorized)
 ### Current blockers
 
 - Exact-candidate freeze commit is set: `295c96a075cdf3987d8e66fa75fce14d15611b3a`.
-- The independent re-audit `product_self_reaudit.md` has not been produced.
+- `product_self_reaudit.md` exists; it is a self re-audit, not an independent
+  third-party one.
 - Deterministic remote CI has not run on the frozen candidate.
 - No tag or public release is authorized.
 
