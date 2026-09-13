@@ -1161,6 +1161,23 @@ The exact current full Rust gate also passed: `cargo fmt --all -- --check`,
 user override, and recovery still need live scheduler-topology evidence. No
 later milestone or readiness claim changes.
 
+## 48. Explicit interrupted-attempt recovery (2026-09-13)
+
+Commit `183686a5adf36c880b5e46b79e6b2c7be6c7740b` adds the public
+authoritative-board recovery operation and the `agent-code-cli recover` normal
+path. On SQLite reopen, it closes only an existing `Running` attempt as failed
+with `explicit resume required`, changes a matching `starting`/`running`
+external binding to `interrupted`, and leaves replay to the explicit existing
+`resume` operation. It does not infer completion or automatically call a
+foreign runtime.
+
+The reopen test proves preserved attempt history, terminal task state, and
+binding transition. The CLI normal-path test proves `recover` followed by an
+explicit `resume`. Full Rust CI at that commit passed: all required fmt,
+clippy, test, and diff checks exited `0`; 171 passed, 0 failed, 11 ignored.
+This closes the public recovery seam but is not yet a real-runtime interruption
+and reconciliation drill; `M5_R6_TEAM_READY` remains `NOT_RUN`.
+
 ## 46. Codex Lead follow-up from persisted board context (2026-09-13)
 
 The real Codex Lead harness no longer inserts a teammate result into the
