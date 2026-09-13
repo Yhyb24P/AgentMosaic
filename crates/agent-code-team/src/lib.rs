@@ -21,7 +21,8 @@ pub use board::{
     TaskRecord, TaskStatus,
 };
 pub use lead::{
-    reconstruct_team_result, Lead, LeadBrain, LeadContext, LeadDecision, LeadError, TeamResult,
+    reconstruct_team_result, Lead, LeadBrain, LeadBrainError, LeadContext, LeadDecision, LeadError,
+    TeamResult,
 };
 pub use registry::{
     AgentConfig, AgentDriver, AgentRegistry, AgentTask, AgentTaskResult, AgentTier, DriverKind,

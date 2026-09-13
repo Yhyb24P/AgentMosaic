@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use agent_code_runtime::{
     AcpCancellation, AcpSessionStartedObserver, AcpWorkerConfig, AcpWorkerDriver, AcpWorkerError,
+    TeamRunOptions, TeamRunOutcome, TeamRunner,
 };
 use agent_code_storage::{
     AgentRegistryRecord, ExternalRuntimeBinding, SqliteAgentRegistry, SqliteTaskBoard,
@@ -14,7 +15,9 @@ use agent_code_team::{AgentTask, DriverKind, TaskAttempt, TaskBoard, TaskKind, T
 use rusqlite::Connection;
 
 fn usage() -> &'static str {
-    "usage: agent-code-cli <register|registry|run-acp|continue-acp|submit|status|cancel|override|recover|recover-all|resume|artifact|binding|final> <database> [fields]"
+    "usage: agent-code-cli <register|registry|run-acp|continue-acp|run-team|resume-team|submit|status|cancel|override|recover|recover-all|resume|artifact|binding|final> <database> [fields]\n\
+     \x20      agent-code-cli run-team <database> <repo> \"<objective...>\" [--lead <agent-id>] [--max-rounds N] [--max-tasks N] [--max-retries N]\n\
+     \x20      agent-code-cli resume-team <database> <repo> <root-task-id> [--lead <agent-id>] [--max-rounds N] [--max-tasks N] [--max-retries N]"
 }
 
 fn open(path: &str) -> Result<SqliteTaskBoard, String> {
@@ -41,9 +44,9 @@ fn parse_kind(value: Option<&String>) -> Result<TaskKind, String> {
 }
 
 fn register_agent(database: &str, fields: &[String]) -> Result<String, String> {
-    if !(8..=9).contains(&fields.len()) {
+    if !(8..=10).contains(&fields.len()) {
         return Err(
-            "register requires 8 or 9 fields: agent-id name tier driver-kind executable driver-args max-concurrency tags [runtime-version-or--]"
+            "register requires 8 to 10 fields: agent-id name tier driver-kind executable driver-args max-concurrency tags [runtime-version-or--] [driver-config-json-or--]"
                 .to_string(),
         );
     }
@@ -71,6 +74,11 @@ fn register_agent(database: &str, fields: &[String]) -> Result<String, String> {
             .map(|value| parse_optional_field(value))
             .transpose()?
             .flatten(),
+        driver_config_json: fields
+            .get(9)
+            .map(|value| parse_driver_config(value))
+            .transpose()?
+            .flatten(),
     };
     let registry = SqliteAgentRegistry::open(database).map_err(|e| format!("register: {e}"))?;
     registry
@@ -84,8 +92,24 @@ fn parse_driver_kind(value: &str) -> Result<Option<String>, String> {
         "-" => Ok(None),
         kind => DriverKind::restore(kind)
             .map(|kind| Some(kind.as_str().to_string()))
-            .ok_or_else(|| "driver kind must be native, acp, cli, or -".to_string()),
+            .ok_or_else(|| {
+                "driver kind must be native, acp, cli, codex-app-server, or -".to_string()
+            }),
     }
+}
+
+/// A driver config is durable, shareable text: it must be one JSON object (or
+/// `-` for none), and the driver factory refuses secret-looking keys later.
+fn parse_driver_config(value: &str) -> Result<Option<String>, String> {
+    if value == "-" {
+        return Ok(None);
+    }
+    let parsed: serde_json::Value = serde_json::from_str(value)
+        .map_err(|_| "driver config must be one JSON object or -".to_string())?;
+    if !parsed.is_object() {
+        return Err("driver config must be one JSON object or -".to_string());
+    }
+    Ok(Some(value.to_string()))
 }
 
 fn parse_optional_field(value: &str) -> Result<Option<String>, String> {
@@ -141,7 +165,7 @@ fn registry_list(database: &str, limit: Option<&str>) -> Result<String, String> 
             .take(cap)
             .map(|agent| {
                 format!(
-                    "id={} name={} tier={} driver_kind={} executable={} version={} args={} concurrency={} tags={}",
+                    "id={} name={} tier={} driver_kind={} executable={} version={} args={} concurrency={} tags={} driver_config={}",
                 agent.id,
                 agent.name,
                 agent.tier,
@@ -151,11 +175,30 @@ fn registry_list(database: &str, limit: Option<&str>) -> Result<String, String> 
                 agent.driver_args_json.as_deref().unwrap_or("-"),
                 agent.max_concurrency.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
                 agent.tags_json.as_deref().unwrap_or("-"),
+                agent
+                    .driver_config_json
+                    .as_deref()
+                    .map(bounded_config_note)
+                    .unwrap_or_else(|| "-".into()),
             )
             })
             .collect::<Vec<_>>()
             .join("\n");
     Ok(lines)
+}
+
+/// A short rendering of a driver config for the list surface. A long body is
+/// never printed whole; only its bounded head and its size are shown.
+fn bounded_config_note(raw: &str) -> String {
+    const MAX: usize = 80;
+    if raw.len() <= MAX {
+        return raw.to_string();
+    }
+    let mut end = MAX;
+    while end > 0 && !raw.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}... ({} bytes)", &raw[..end], raw.len())
 }
 
 fn run_acp(database: &str, fields: &[String]) -> Result<String, String> {
@@ -592,6 +635,159 @@ fn continue_acp(database: &str, fields: &[String]) -> Result<String, String> {
     }
 }
 
+/// A parsed `run-team` / `resume-team` invocation: the positional arguments and
+/// the run bounds. Flags may appear anywhere among the trailing arguments.
+struct TeamInvocation {
+    positional: Vec<String>,
+    options: TeamRunOptions,
+}
+
+const TEAM_FLAGS: &str = "[--lead <agent-id>] [--max-rounds N] [--max-tasks N] [--max-retries N]";
+
+fn parse_team_invocation(fields: &[String]) -> Result<TeamInvocation, String> {
+    let mut positional = Vec::new();
+    let mut options = TeamRunOptions::default();
+    let mut lead = None;
+    let mut index = 0;
+    while index < fields.len() {
+        match fields[index].as_str() {
+            "--lead" => lead = Some(team_flag_value(fields, &mut index, "--lead")?.to_string()),
+            "--max-rounds" => {
+                options.max_rounds = parse_positive_u32(
+                    team_flag_value(fields, &mut index, "--max-rounds")?,
+                    "--max-rounds",
+                )?
+            }
+            "--max-tasks" => {
+                options.max_tasks = parse_positive_u32(
+                    team_flag_value(fields, &mut index, "--max-tasks")?,
+                    "--max-tasks",
+                )? as usize
+            }
+            "--max-retries" => {
+                options.max_retries = parse_positive_u32(
+                    team_flag_value(fields, &mut index, "--max-retries")?,
+                    "--max-retries",
+                )?
+            }
+            token if token.starts_with("--") => {
+                return Err(format!("unknown option {token}; expected {TEAM_FLAGS}"))
+            }
+            token => positional.push(token.to_string()),
+        }
+        index += 1;
+    }
+    options.lead_agent = lead;
+    Ok(TeamInvocation {
+        positional,
+        options,
+    })
+}
+
+fn team_flag_value<'a>(
+    fields: &'a [String],
+    index: &mut usize,
+    flag: &str,
+) -> Result<&'a str, String> {
+    *index += 1;
+    fields
+        .get(*index)
+        .map(String::as_str)
+        .ok_or_else(|| format!("{flag} requires a value"))
+}
+
+fn parse_positive_u32(value: &str, flag: &str) -> Result<u32, String> {
+    let parsed: u32 = value
+        .parse()
+        .map_err(|_| format!("{flag} must be a positive integer"))?;
+    if parsed == 0 {
+        return Err(format!("{flag} must be greater than zero"));
+    }
+    Ok(parsed)
+}
+
+fn team_runtime() -> Result<tokio::runtime::Runtime, String> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .map_err(|error| format!("team run runtime: {error}"))
+}
+
+/// The bounded, human-readable summary of one team run.
+fn render_team_outcome(outcome: &TeamRunOutcome) -> String {
+    let task_refs = if outcome.result.task_refs.is_empty() {
+        "-".to_string()
+    } else {
+        outcome
+            .result
+            .task_refs
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let mut lines = vec![
+        format!("root={} lead={}", outcome.root_task_id, outcome.lead_agent),
+        format!("answer: {}", outcome.result.answer),
+        format!("task_refs: {task_refs}"),
+    ];
+    if outcome.result.artifact_refs.is_empty() {
+        lines.push("artifact_refs: -".into());
+    } else {
+        for selected in &outcome.result.artifact_refs {
+            lines.push(format!(
+                "artifact_refs: task={} path={} sha256={}",
+                selected.task_id, selected.artifact.path, selected.artifact.sha256
+            ));
+        }
+    }
+    lines.join("\n")
+}
+
+/// The product entry point: one objective, one durable team result. This
+/// surface only parses argv; all orchestration lives in `TeamRunner`.
+fn run_team(database: &str, fields: &[String]) -> Result<String, String> {
+    let invocation = parse_team_invocation(fields)?;
+    let repo = invocation.positional.first().ok_or_else(|| {
+        format!("run-team requires <database> <repo> \"<objective>\" {TEAM_FLAGS}")
+    })?;
+    let objective = invocation.positional[1..].join(" ");
+    if objective.trim().is_empty() {
+        return Err(format!(
+            "run-team requires an objective: <database> <repo> \"<objective>\" {TEAM_FLAGS}"
+        ));
+    }
+    let runner = TeamRunner::new(database, repo, invocation.options);
+    let runtime = team_runtime()?;
+    let outcome = runtime
+        .block_on(runner.run(&objective))
+        .map_err(|error| format!("run-team: {error}"))?;
+    Ok(render_team_outcome(&outcome))
+}
+
+/// Resume a team run whose root task already exists. Never replays finished
+/// work: a succeeded root returns its persisted result.
+fn resume_team(database: &str, fields: &[String]) -> Result<String, String> {
+    let invocation = parse_team_invocation(fields)?;
+    let root = match invocation.positional.as_slice() {
+        [_, _] => invocation.positional[1]
+            .parse::<u64>()
+            .map_err(|_| "invalid root task id".to_string())?,
+        _ => {
+            return Err(format!(
+                "resume-team requires <database> <repo> <root-task-id> {TEAM_FLAGS}"
+            ))
+        }
+    };
+    let repo = invocation.positional[0].clone();
+    let runner = TeamRunner::new(database, repo, invocation.options);
+    let runtime = team_runtime()?;
+    let outcome = runtime
+        .block_on(runner.resume(root))
+        .map_err(|error| format!("resume-team: {error}"))?;
+    Ok(render_team_outcome(&outcome))
+}
+
 fn run(args: &[String]) -> Result<String, String> {
     let command = args
         .first()
@@ -624,11 +820,14 @@ fn run(args: &[String]) -> Result<String, String> {
                     .attempts(task.id)
                     .map_err(|e| format!("status: {e:?}"))?;
                 Ok(format!(
-                    "task={} status={} assignee={} attempts={} objective={}",
+                    "task={} status={} assignee={} attempts={} parent={} objective={}",
                     task.id,
                     task.status.as_str(),
-                    task.assignee.unwrap_or_else(|| "-".into()),
+                    task.assignee.as_deref().unwrap_or("-"),
                     attempts.len(),
+                    task.parent_task
+                        .map(|parent| parent.to_string())
+                        .unwrap_or_else(|| "-".into()),
                     task.objective
                 ))
             })
@@ -764,6 +963,8 @@ fn run(args: &[String]) -> Result<String, String> {
         "registry" => registry_list(database, args.get(2).map(String::as_str)),
         "run-acp" => run_acp(database, &args[2..]),
         "continue-acp" => continue_acp(database, &args[2..]),
+        "run-team" => run_team(database, &args[2..]),
+        "resume-team" => resume_team(database, &args[2..]),
         _ => Err(usage().into()),
     }
 }

@@ -459,18 +459,18 @@ CREATE TABLE IF NOT EXISTS observations (
     fn v8_database_migrates_preserves_team_rows_and_accepts_final_refs() {
         use agent_code_team::{ArtifactMeta, SelectedArtifactRef, TaskBoard, TaskKind};
 
-        use super::{SqliteTaskBoard, SCHEMA, SCHEMA_VERSION};
+        use super::{SqliteTaskBoard, SCHEMA_VERSION};
+
+        // The authentic historical v8 DDL. It is loaded verbatim from the
+        // immutable fixture; never regenerate it from the current `SCHEMA`.
+        const V8_SCHEMA: &str = include_str!("../tests/fixtures/schema_v8.sql");
 
         let path = temp_db("v8to9-final-refs");
         let _ = std::fs::remove_file(&path);
         {
             let conn = Connection::open(&path).expect("open v8 fixture");
-            conn.execute_batch(SCHEMA).expect("base schema");
-            conn.execute_batch(
-                "DROP TABLE team_final_artifact_refs;
-                 DROP TABLE team_final_task_refs;",
-            )
-            .expect("remove v9 tables for v8 fixture");
+            conn.execute_batch(V8_SCHEMA)
+                .expect("apply historical v8 schema");
             conn.pragma_update(None, "user_version", 8).expect("set v8");
             conn.execute(
                 "INSERT INTO team_tasks (objective, kind, status) VALUES ('preserved root', 'reasoning', 'pending')",
@@ -480,7 +480,7 @@ CREATE TABLE IF NOT EXISTS observations (
         }
 
         let mut board = SqliteTaskBoard::open(Connection::open(&path).expect("reopen"))
-            .expect("migrate v8 to v9");
+            .expect("migrate v8 to the current version");
         assert_eq!(
             board.schema_version().expect("schema version"),
             SCHEMA_VERSION

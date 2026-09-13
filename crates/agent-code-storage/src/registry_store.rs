@@ -23,6 +23,8 @@ pub struct AgentRegistryRecord {
     pub max_concurrency: Option<i64>,
     /// The agent tags as a JSON array string.
     pub tags_json: Option<String>,
+    /// Non-secret driver options as a JSON object string, or None.
+    pub driver_config_json: Option<String>,
 }
 
 /// A durable runtime agent registry backed by a single SQLite connection.
@@ -50,8 +52,8 @@ impl SqliteAgentRegistry {
         self.conn.execute(
             "INSERT INTO agent_registry (
                      id, name, tier, driver_kind, executable, runtime_version,
-                     driver_args_json, max_concurrency, tags_json
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                     driver_args_json, max_concurrency, tags_json, driver_config_json
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT(id) DO UPDATE SET
                      name = excluded.name,
                      tier = excluded.tier,
@@ -60,7 +62,8 @@ impl SqliteAgentRegistry {
                      runtime_version = excluded.runtime_version,
                      driver_args_json = excluded.driver_args_json,
                      max_concurrency = excluded.max_concurrency,
-                     tags_json = excluded.tags_json",
+                     tags_json = excluded.tags_json,
+                     driver_config_json = excluded.driver_config_json",
             params![
                 record.id,
                 record.name,
@@ -70,7 +73,8 @@ impl SqliteAgentRegistry {
                 record.runtime_version,
                 record.driver_args_json,
                 record.max_concurrency,
-                record.tags_json
+                record.tags_json,
+                record.driver_config_json
             ],
         )?;
         Ok(())
@@ -80,7 +84,7 @@ impl SqliteAgentRegistry {
     pub fn get_agent(&self, id: &str) -> Result<Option<AgentRegistryRecord>, rusqlite::Error> {
         let row = self.conn.query_row(
             "SELECT id, name, tier, driver_kind, executable, runtime_version, driver_args_json,
-                    max_concurrency, tags_json
+                    max_concurrency, tags_json, driver_config_json
              FROM agent_registry WHERE id = ?1",
             params![id],
             from_row,
@@ -96,7 +100,7 @@ impl SqliteAgentRegistry {
     pub fn list_agents(&self) -> Result<Vec<AgentRegistryRecord>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, tier, driver_kind, executable, runtime_version,
-                        driver_args_json, max_concurrency, tags_json
+                        driver_args_json, max_concurrency, tags_json, driver_config_json
                  FROM agent_registry ORDER BY id",
         )?;
         let rows = stmt.query_map(params![], from_row)?;
@@ -122,6 +126,7 @@ fn from_row(row: &Row) -> rusqlite::Result<AgentRegistryRecord> {
         driver_args_json: row.get(6)?,
         max_concurrency: row.get(7)?,
         tags_json: row.get(8)?,
+        driver_config_json: row.get(9)?,
     })
 }
 
@@ -149,6 +154,7 @@ mod tests {
             driver_args_json: Some(r#"["-w", "--acp"]"#.into()),
             max_concurrency: Some(2),
             tags_json: Some(r#"["qwen"]"#.into()),
+            driver_config_json: Some(r#"{"auth_method":"chatgpt"}"#.into()),
         }
     }
 
@@ -192,6 +198,81 @@ mod tests {
         assert_eq!(read.driver_args_json.as_deref(), Some(r#"["a", "b"]"#));
         assert_eq!(read.tags_json.as_deref(), None);
         assert_eq!(read.runtime_version.as_deref(), Some("0.154.0"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Non-secret driver options round-trip through upsert/get/list, and a
+    /// missing config stays None.
+    #[test]
+    fn driver_config_json_roundtrips_through_upsert_get_and_list() {
+        let path = temp_db("driver-config");
+        let _ = std::fs::remove_file(&path);
+        let registry = SqliteAgentRegistry::open(&path).expect("open registry");
+        let mut configured = record();
+        configured.driver_config_json = Some(r#"{"timeout_ms":30000,"artifact_paths":[]}"#.into());
+        registry
+            .upsert_agent(&configured)
+            .expect("upsert configured");
+        let mut bare = record();
+        bare.id = "bare-worker".into();
+        bare.driver_config_json = None;
+        registry.upsert_agent(&bare).expect("upsert bare");
+
+        let read = registry
+            .get_agent("acp-worker")
+            .expect("get")
+            .expect("exists");
+        assert_eq!(
+            read.driver_config_json.as_deref(),
+            Some(r#"{"timeout_ms":30000,"artifact_paths":[]}"#)
+        );
+        assert_eq!(
+            registry
+                .get_agent("bare-worker")
+                .expect("get bare")
+                .expect("exists")
+                .driver_config_json,
+            None
+        );
+        let listed = registry.list_agents().expect("list");
+        assert_eq!(listed.len(), 2);
+        assert_eq!(
+            listed[0].driver_config_json.as_deref(),
+            Some(r#"{"timeout_ms":30000,"artifact_paths":[]}"#)
+        );
+        assert_eq!(listed[1].driver_config_json, None);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Changing the config replaces it; clearing it writes NULL.
+    #[test]
+    fn driver_config_json_upsert_replaces_and_clears() {
+        let path = temp_db("driver-config-update");
+        let _ = std::fs::remove_file(&path);
+        let registry = SqliteAgentRegistry::open(&path).expect("open registry");
+        registry.upsert_agent(&record()).expect("upsert initial");
+        let mut updated = record();
+        updated.driver_config_json = Some(r#"{"max_events":500}"#.into());
+        registry.upsert_agent(&updated).expect("upsert update");
+        assert_eq!(
+            registry
+                .get_agent("acp-worker")
+                .expect("get")
+                .expect("exists")
+                .driver_config_json
+                .as_deref(),
+            Some(r#"{"max_events":500}"#)
+        );
+        updated.driver_config_json = None;
+        registry.upsert_agent(&updated).expect("upsert clear");
+        assert_eq!(
+            registry
+                .get_agent("acp-worker")
+                .expect("get")
+                .expect("exists")
+                .driver_config_json,
+            None
+        );
         let _ = std::fs::remove_file(&path);
     }
 

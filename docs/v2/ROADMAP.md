@@ -31,6 +31,45 @@ External full Coding Agents (Codex/Claude-style CLIs) connect through an
 - R5 has a local, unpushed implementation stack under review; it is not sealed.
   See [`R5_STATUS.md`](R5_STATUS.md) for the current commits and unresolved
   review blockers.
+- R6–R8 are implemented on the same branch: the Rust binaries are the normal
+  path and the retired Python surface is deleted. The historical milestone
+  evidence remains in `implementation_report.md` as history.
+
+### RC repair status (2026-09-13)
+
+An independent [`product_self_audit.md`](../../product_self_audit.md) (2026-09-13)
+falsified the previous `PRODUCT_RC_READY` claim and found four S1 defects. Their
+repair state:
+
+| Defect | Finding | Repair state |
+|---|---|---|
+| S1-1 | no automatic normal team entrypoint | `agent-code-cli run-team`/`resume-team` added as the product entrypoint |
+| S1-2 | the live test harness owned orchestration | orchestration moved into product `TeamRunner`; the harness only reads durable surfaces |
+| S1-3 | Codex final result was a fixed placeholder | the driver persists the actual bounded final visible Codex agent message via `thread/read` exact-turn extraction |
+| S1-4 | the "v8" fixture was generated from current DDL | replaced by authentic historical DDL `crates/agent-code-storage/tests/fixtures/schema_v8.sql` (commit `e7649230af388aa61fb851f1c4631e679b08e49b`, blob `21d10ff9c45e444f29b37f9082d1fd99b6333b56`) |
+
+The product entrypoint is
+`agent-code-cli run-team <database> <repo> "<objective>"`, with `resume-team` for
+recovery. Storage schema is now v11 (`agent_registry.driver_config_json`,
+non-secret options only). The Lead's decisions are strict JSON validated by the
+product against [`contracts/lead_decision.schema.json`](../../contracts/lead_decision.schema.json);
+a rejected decision fails closed after at most one bounded correction turn.
+
+A real production E2E was verified on 2026-09-13 with real `codex-cli 0.154.0`
+and real Qwen Code `0.23.3`, through the public CLI only: root task `1`
+(`reasoning`, `codex-lead`, succeeded), delegated worker task `2` (`bulk`,
+`qwen-worker`, parent `1`, succeeded), utility task `3` (parent `1`, succeeded),
+a final answer containing a random worker-produced token, and persisted final
+refs `[2]` plus artifact `task=2 path=worker.txt
+sha256=23f3ef2f0a550aff9886f9c6bcef54ddac5d2fdef5ca8fe849db49cb97f3c979`.
+Evidence: `.acc-evidence/rc-repair-fbc80bf/`; `cargo test --workspace
+--all-features` reported 257 passed / 0 failed / 17 ignored.
+
+Readiness remains split: `LOCAL_PRODUCT_RC_READY`,
+`REMOTE_DETERMINISTIC_CI_READY`, and `PUBLIC_RELEASE_READY` are separate claims.
+The exact-candidate freeze commit and the independent re-audit
+(`product_self_reaudit.md`) are still pending; no tag or public release is
+authorized.
 
 ## Crate graph
 

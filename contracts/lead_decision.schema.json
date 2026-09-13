@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LeadDecisionWire",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "tasks"
+      ],
+      "properties": {
+        "action": {
+          "const": "delegate"
+        },
+        "tasks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/task"
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "task"
+      ],
+      "properties": {
+        "action": {
+          "const": "follow_up"
+        },
+        "task": {
+          "$ref": "#/$defs/task"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "answer",
+        "selected_task_ids",
+        "selected_artifacts"
+      ],
+      "properties": {
+        "action": {
+          "const": "complete"
+        },
+        "answer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "selected_task_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "selected_artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifact_ref"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "target",
+        "objective"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "reasoning",
+            "review",
+            "bulk",
+            "tool",
+            "utility"
+          ]
+        },
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "objective": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "artifact_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,557 @@
+   Compiling agent-code-cli v0.1.0 (/home/yhshy/git_files/828/research-agent-system/crates/agent-code-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running unittests src/lib.rs (target/debug/deps/agent_code_cli-07d56e25e034b9b8)
+
+running 1 test
+test tests::inspection_reads_authoritative_task_graph_events_manifest_and_artifacts ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+     Running unittests src/main.rs (target/debug/deps/agent_code_cli-8960e8384a36685c)
+
+running 4 tests
+test tests::rejects_unknown_command ... ok
+test tests::registry_rejects_zero_concurrency_before_persisting_it ... ok
+test tests::continue_acp_rejects_source_without_a_completed_binding ... ok
+test tests::run_acp_persists_invalid_configuration_as_failed ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+     Running tests/lifecycle_rust_only.rs (target/debug/deps/lifecycle_rust_only-530bd430cb2bd046)
+
+running 1 test
+cancelled task=1
+resumed task=1
+overrode task=1 agent=acp-worker
+id=acp-worker name=acp-worker tier=worker driver_kind=acp executable=codex version=- args=["-w --acp","local"] concurrency=2 tags=["qwen","local-model"] driver_config=-
+test rust_only_normal_path_does_not_start_a_driver ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s
+
+     Running tests/normal_path.rs (target/debug/deps/normal_path-89c7d5465e82fad1)
+
+running 1 test
+resumed task=2
+cancelled task=1
+resumed task=1
+overrode task=1 agent=worker-override
+test normal_path_reads_and_controls_the_authoritative_board ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+
+     Running tests/team_cli_product.rs (target/debug/deps/team_cli_product-e006e17fb770403d)
+
+running 2 tests
+test run_team_usage_errors_exit_two ... ok
+test run_team_and_final_reproduce_one_durable_answer ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.84s
+
+     Running tests/team_live_product.rs (target/debug/deps/team_live_product-ddeb4b38964a428b)
+
+running 2 tests
+test live_run_team_produces_a_durable_worker_dependent_answer ... ignored, requires authenticated local codex-cli and qwen-code; performs one live team run
+test failed_lead_leaves_root_failed_and_final_reports_no_answer ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.44s
+
+     Running unittests src/lib.rs (target/debug/deps/agent_code_context-5b039e23423e020e)
+
+running 32 tests
+test budget::tests::free_tokens_subtracts_reserved_and_margin ... ok
+test budget::tests::byte_counter_is_conservative_and_cjk_safe ... ok
+test budget::tests::truncate_keeps_head_and_tail ... ok
+test budget::tests::truncate_short_string_is_unchanged ... ok
+test budget::tests::truncate_is_char_boundary_safe ... ok
+test build::tests::assembled_context_stays_within_budget ... ok
+test build::tests::a_very_long_observation_that_cannot_fit_is_dropped ... ok
+test build::tests::a_very_long_observation_is_stored_bounded ... ok
+test build::tests::compact_summary_has_lowest_priority ... ok
+test build::tests::budget_too_small_for_task_errors ... ok
+test build::tests::task_is_always_present ... ok
+test build::tests::task_truncates_to_fit_instead_of_erroring ... ok
+test build::tests::map_cannot_eat_the_whole_budget ... ok
+test build::tests::newest_observations_preferred_under_tight_budget ... ok
+test history::tests::compact_empty_is_empty ... ok
+test history::tests::compact_context_keeps_recent_and_compacts_older ... ok
+test build::tests::rules_and_map_reach_the_model_context ... ok
+test history::tests::compact_retains_required_fields_and_counts ... ok
+test history::tests::compact_context_fits_budget ... ok
+test repo_map::tests::map_missing_root_is_an_error ... ok
+test rules::tests::rules_absent_is_empty ... ok
+test repo_map::tests::map_skips_noise_directories ... ok
+test repo_map::tests::map_is_bounded_and_deterministic ... ok
+test repo_map::tests::map_does_not_follow_symlinks ... ok
+test rules::tests::rules_respect_the_char_cap ... ok
+test repo_map::tests::exact_cap_is_not_flagged_truncated ... ok
+test repo_map::tests::result_set_is_deterministic_regardless_of_creation_order ... ok
+test rules::tests::rules_combine_in_priority_order_with_headers ... ok
+test rules::tests::present_but_unreadable_rule_is_an_error ... ok
+test rules::tests::symlinked_rule_cannot_escape_the_repository ... ok
+test repo_map::tests::map_read_root_must_be_a_directory ... ok
+test repo_map::tests::traversal_stops_at_the_entry_cap ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/debug/deps/agent_code_core-ce86eab0c4c7b3c9)
+
+running 11 tests
+test tests::illegal_transition_is_rejected ... ok
+test tests::begin_tool_failure_does_not_diverge_state ... ok
+test tests::inactive_tool_call_is_rejected ... ok
+test tests::recover_keeps_interrupted_tool_not_failed ... ok
+test tests::happy_path_reaches_completed ... ok
+test tests::recover_marks_running_tools_interrupted ... ok
+test tests::running_tools_fault_propagates_instead_of_panicking ... ok
+test tests::session_recover_requires_existing_session ... ok
+test tests::session_recover_loads_persisted_state ... ok
+test tests::terminal_state_rejects_all_transitions ... ok
+test tests::recover_resumes_mid_tool_to_observing_and_continues ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/agent_code_model-9355c7ae3a05cd14)
+
+running 12 tests
+test tests::stub_returns_configured_decision ... ok
+test types::tests::all_variants_roundtrip ... ok
+test types::tests::hostile_fields_roundtrip_losslessly ... ok
+test types::tests::command_roundtrip ... ok
+test types::tests::decode_rejects_non_json ... ok
+test types::tests::killed_command_encodes_missing_exit ... ok
+test openai::tests::http_error_is_a_transport_error ... ok
+test openai::tests::malformed_json_is_an_error ... ok
+test openai::tests::parses_a_final_answer ... ok
+test openai::tests::errors_do_not_leak_the_api_key ... ok
+test openai::tests::parses_a_tool_call ... ok
+test openai::tests::unknown_tool_is_an_error ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src/lib.rs (target/debug/deps/agent_code_runtime-24774ac12422c245)
+
+running 57 tests
+test acp_worker::tests::acp_m2_probe_cancel_active_session ... ignored, requires local Qwen Code with an authenticated openai provider and a live local vLLM endpoint
+test acp_worker::tests::acp_m2_probe_follow_up_same_session ... ignored, requires local Qwen Code with an authenticated openai provider and a live local vLLM endpoint
+test acp_worker::tests::acp_m2_probe_inspect ... ignored, requires local Qwen Code with an authenticated openai provider and a live local vLLM endpoint
+test acp_worker::tests::acp_m2_probe_load_verify ... ignored, requires local Qwen Code with an authenticated openai provider and a live local vLLM endpoint
+test acp_worker::tests::acp_m2_probe_process_exit_retry ... ignored, requires local Qwen Code with an authenticated openai provider and a live local vLLM endpoint
+test acp_worker::tests::kimi_acp_completes_a_bounded_no_tool_turn ... ignored, requires locally configured Kimi Code ACP; sends one bounded no-tool prompt in an isolated directory
+test acp_worker::tests::qwen_acp_authenticated_session_completes_a_bounded_task ... ignored, requires local Qwen Code with an authenticated openai provider and a live local vLLM endpoint
+test acp_worker::tests::qwen_acp_completes_a_bounded_isolated_coding_task ... ignored, requires local Qwen Code with an authenticated openai provider and a live local vLLM endpoint
+test acp_worker::tests::qwen_acp_reports_auth_required_without_running_a_task ... ignored, requires local Qwen Code; asserts only the current no-credential path
+test acp_worker::tests::qwen_acp_resumes_a_persisted_session_for_a_follow_up ... ignored, requires local Qwen Code with an authenticated openai provider and a live local vLLM endpoint
+test acp_worker::tests::qwen_acp_reuses_one_authenticated_session_for_follow_up ... ignored, requires local Qwen Code with an authenticated openai provider and a live local vLLM endpoint
+test acp_worker::tests::follow_up_prompt_is_bounded_and_requires_structured_result ... ok
+test acp_worker::tests::prompt_is_bounded ... ok
+test acp_worker::tests::peer_result_is_strict_and_bounded ... ok
+test acp_worker::tests::resume_rejects_an_empty_external_session_id ... ok
+test agent::tests::bounded_context_fails_when_even_task_cannot_fit ... ok
+test acp_worker::tests::artifact_collection_is_relative_hashed_and_fail_closed ... ok
+test codex_app_server::tests::falls_back_to_last_non_empty_message_without_final_answer ... ok
+test codex_app_server::tests::ignores_reasoning_items ... ok
+test codex_app_server::tests::long_text_is_bounded_on_a_char_boundary ... ok
+test codex_app_server::tests::missing_turns_fails_closed ... ok
+test codex_app_server::tests::selects_exact_turn_and_ignores_earlier_turns ... ok
+test codex_app_server::tests::prefers_final_answer_over_later_commentary ... ok
+test codex_app_server::tests::non_completed_turn_fails_closed ... ok
+test codex_app_server::tests::turn_completed_reads_the_upstream_turn_object ... ok
+test codex_app_server::tests::skips_async_delivery_messages ... ok
+test codex_app_server::tests::turn_without_agent_message_fails_closed ... ok
+test codex_app_server::tests::unknown_turn_id_fails_closed ... ok
+test codex_lead::tests::answer_over_the_bound_is_rejected ... ok
+test agent::tests::bounded_context_trims_task_rules_map_escaping ... ok
+test codex_team_driver::tests::artifact_paths_fail_closed_before_runtime_launch ... ok
+test codex_lead::tests::complete_reply_maps_to_a_team_result ... ok
+test codex_lead::tests::config_fails_closed_before_any_process_starts ... ok
+test codex_lead::tests::every_contract_violation_is_rejected ... ok
+test codex_team_driver::tests::invalid_driver_config_rejects_before_runtime_launch ... ok
+test agent::tests::bounded_context_absorbs_json_escaping_growth ... ok
+test team_runner::tests::a_single_reasoner_is_the_lead ... ok
+test driver_factory::tests::a_missing_executable_is_reported ... ok
+test codex_lead::tests::too_many_tasks_is_rejected ... ok
+test codex_lead::tests::delegate_reply_maps_to_specs ... ok
+test codex_lead::tests::prompt_is_bounded_and_carries_only_board_facts ... ok
+test driver_factory::tests::codex_requires_an_mcp_command ... ok
+test driver_factory::tests::artifact_paths_must_stay_inside_the_repository ... ok
+test team_runner::tests::options_default_to_bounded_limits ... ok
+test team_runner::tests::registry_rows_map_to_routable_agents ... ok
+test driver_factory::tests::invalid_argv_is_reported ... ok
+test driver_factory::tests::secret_looking_keys_are_refused ... ok
+test driver_factory::tests::unsupported_and_missing_kinds_fail_closed ... ok
+test driver_factory::tests::every_agent_gets_exactly_one_driver ... ok
+test dispatch::tests::view_observation_carries_content_hash_and_lines ... ok
+test team_runner::tests::lead_ambiguity_and_absence_fail ... ok
+test codex_lead::tests::tiny_budget_still_bounds_the_prompt ... ok
+test codex_lead::tests::an_overflowing_context_is_truncated_within_the_bound ... ok
+test driver_factory::tests::defaults_and_known_options_parse ... ok
+test dispatch::tests::failed_command_records_output_and_error ... ok
+test agent::tests::loop_dispatches_tools_and_delivers ... ok
+test agent::tests::verification_failure_loops_back_until_the_check_passes ... ok
+
+test result: ok. 46 passed; 0 failed; 11 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/bin/acp_m2_mock.rs (target/debug/deps/acp_m2_mock-7fea91a307b63a74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/codex_bridge_mock.rs (target/debug/deps/codex_bridge_mock-04d89df8f7c21ef2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/ras_codex_mcp.rs (target/debug/deps/ras_codex_mcp-0a488b2de36677f2)
+
+running 1 test
+test tests::context_is_bounded_and_sourced_from_directed_board_messages ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/acp_m2_lifecycle.rs (target/debug/deps/acp_m2_lifecycle-b5e8226b5eec3eb8)
+
+running 13 tests
+kill: (1090807): No such process
+test invalid_configs_are_rejected_before_spawn ... ok
+test crash_is_mapped_to_protocol_error ... ok
+kill: (1090812): No such process
+test execute_task_collects_relative_artifacts ... ok
+kill: (1090809): No such process
+test follow_up_is_same_session_bounded_pull ... ok
+test session_binding_observer_runs_before_a_successful_prompt ... ok
+kill: (1090813): No such process
+test invalid_first_peer_result_gets_one_same_session_strict_repair ... ok
+test result_limit_is_enforced ... ok
+kill: (1090816): No such process
+kill: (1090818): No such process
+test run_task_via_agent_driver_trait ... ok
+test single_run_returns_session_id_and_raw ... ok
+kill: (1090808): No such process
+test caller_cancellation_sends_session_cancel_and_requires_peer_confirmation ... ok
+test persisted_scheduler_driver_binds_foreign_session_before_returning_result ... ok
+kill: (1090806): No such process
+test hang_is_mapped_to_timed_out ... ok
+kill: (1090819): No such process
+test slow_mode_completes_within_bounded_timeout ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.01s
+
+     Running tests/codex_bridge_driver.rs (target/debug/deps/codex_bridge_driver-bf5bf3ac2a9c4e4d)
+
+running 2 tests
+test driver_source_contains_no_completion_placeholder ... ok
+test scheduler_result_is_the_extracted_final_agent_message ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
+
+     Running tests/codex_bridge_queue.rs (target/debug/deps/codex_bridge_queue-833cc95b37740510)
+
+running 1 test
+test notification_racing_a_pending_request_is_queued_and_replayed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/codex_lead_brain.rs (target/debug/deps/codex_lead_brain-b46c6c3fcdc56674)
+
+running 19 tests
+test a_missing_codex_executable_is_unavailable ... ok
+test the_brain_is_send ... ok
+test complete_reply_maps_to_exact_refs ... ok
+test bad_kind_is_rejected ... ok
+test empty_objective_is_rejected ... ok
+test follow_up_reply_maps_to_a_single_follow_up_task ... ok
+test delegate_reply_maps_to_a_delegate_decision ... ok
+test the_mock_script_can_come_from_the_environment ... ok
+test the_event_pump_answers_an_elicitation ... ok
+test a_bad_reply_earns_exactly_one_correction_turn ... ok
+test the_event_pump_refuses_a_tool_call ... ok
+test task_count_over_the_bound_is_rejected ... ok
+test two_bad_replies_return_invalid_decision_after_exactly_two_turns ... ok
+test unknown_field_is_rejected ... ok
+test the_thread_is_resident_across_rounds ... ok
+test unknown_target_is_rejected ... ok
+test missing_field_is_rejected ... ok
+test prose_around_the_json_is_rejected ... ok
+test malformed_sha256_is_rejected ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/codex_live.rs (target/debug/deps/codex_live-018b7d8317f539ee)
+
+running 5 tests
+test real_codex_interrupt_reports_when_a_turn_has_already_completed ... ignored, requires logged-in local Codex app-server
+test real_codex_lead_plans_and_follows_up_on_durable_team_result ... ignored, requires logged-in local Codex app-server
+test real_codex_thread_turn_uses_bounded_qwen_peer_result ... ignored, requires logged-in local Codex app-server and authenticated local Qwen Code
+test real_qwen_acp_process_crash_recovers_without_replay ... ignored, requires authenticated local Qwen Code; kills only an isolated qwen --acp child
+test real_scheduler_runs_qwen_worker_and_utility_on_one_board ... ignored, requires authenticated local Qwen Code; runs one bounded scheduler-managed ACP task
+
+test result: ok. 0 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/e2e.rs (target/debug/deps/e2e-00dc70538c0d4d73)
+
+running 1 test
+test self_correction_survives_a_lost_model_request ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.05s
+
+     Running tests/team_runner_product.rs (target/debug/deps/team_runner_product-29850ae16229272c)
+
+running 9 tests
+test a_configuration_error_never_leaves_a_root_behind ... ok
+test resume_rejects_an_unknown_or_non_reasoning_root ... ok
+test an_invalid_lead_decision_leaves_the_root_not_succeeded ... ok
+test one_objective_becomes_a_durable_team_result ... ok
+test resume_on_a_succeeded_root_is_idempotent_and_replays_nothing ... ok
+test an_ambiguous_lead_fails_and_an_explicit_lead_resolves_it ... ok
+test an_unsupported_driver_kind_fails_the_run ... ok
+test resume_re_drives_a_failed_root ... ok
+test resume_recovers_interrupted_descendants_without_replaying_them ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.75s
+
+     Running unittests src/lib.rs (target/debug/deps/agent_code_storage-97a0789de4576418)
+
+running 17 tests
+test board::tests::final_refs_preserve_explicit_selection_not_all_successful_tasks ... ok
+test board::tests::rejected_artifact_rolls_back_the_entire_successful_result_flow ... ok
+test registry_store::tests::json_columns_roundtrip_verbatim ... ok
+test registry_store::tests::upsert_is_idempotent_across_reopen ... ok
+test registry_store::tests::list_orders_and_get_reads_full_fields ... ok
+test observations::tests::observations_are_session_scoped ... ok
+test registry_store::tests::driver_config_json_roundtrips_through_upsert_get_and_list ... ok
+test observations::tests::observations_survive_reopen ... ok
+test tests::reopen_recovers_current_state ... ok
+test registry_store::tests::v7_database_migrates_when_registry_is_missing ... ok
+test registry_store::tests::driver_config_json_upsert_replaces_and_clears ... ok
+test tests::two_sessions_are_isolated ... ok
+test tests::reopen_marks_running_tool_interrupted ... ok
+test registry_store::tests::v9_registry_migrates_preserving_existing_agent ... ok
+test tests::v8_database_migrates_preserves_team_rows_and_accepts_final_refs ... ok
+test tests::r3_database_migrates_preserving_data ... ok
+test tests::v2_database_migrates_to_v3 ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.94s
+
+     Running unittests src/bin/make_v8_fixture.rs (target/debug/deps/make_v8_fixture-2d9ed71f48986ddf)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/acc_e2e.rs (target/debug/deps/acc_e2e-e868556ad2ba3bad)
+
+running 1 test
+test deterministic_acc_loop_survives_restart_and_enforces_boundaries ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+     Running tests/acc_migration.rs (target/debug/deps/acc_migration-e2ae62a04c4817ef)
+
+running 1 test
+test pre_acc_journal_migrates_preserves_existing_rows_and_recovers_acc_state ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+
+     Running tests/n12.rs (target/debug/deps/n12-54dfa8b0ea42db41)
+
+running 1 test
+test compact_context_preserves_durable_history ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.13s
+
+     Running tests/phase21_durability.rs (target/debug/deps/phase21_durability-cad44ee5b7bc9e60)
+
+running 1 test
+test external_binding_and_idempotent_collaboration_survive_reopen ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+     Running tests/schema_v8_migration.rs (target/debug/deps/schema_v8_migration-d9c00c30a0a7fb6e)
+
+running 2 tests
+test v10_database_migrates_to_v11_adding_driver_config ... ok
+test authentic_v8_database_migrates_to_current_and_preserves_rows ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.77s
+
+     Running tests/team_e2e.rs (target/debug/deps/team_e2e-635557a8fd631837)
+
+running 3 tests
+test running_attempt_is_durable_mid_execution ... ok
+test interrupted_task_can_be_recovered ... ok
+test heterogeneous_team_end_to_end ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.15s
+
+     Running unittests src/lib.rs (target/debug/deps/agent_code_team-128ad92c88cb4f6d)
+
+running 37 tests
+test acc::tests::artifact_hash_or_version_mismatch_fails_closed_and_is_auditable ... ok
+test acc::tests::assignment_uses_capabilities_not_grants_and_broker_enforces_acceptance_boundary ... ok
+test acc::tests::manifest_is_deterministic_and_private_content_is_excluded ... ok
+test acc::tests::graph_rejects_cycle_and_returns_ready_tasks ... ok
+test acc::tests::broker_rejects_impersonation_and_dedupes_replay ... ok
+test acc::tests::runtime_feature_negotiation_blocks_unsupported_operations_without_invocation ... ok
+test acc::tests::strict_contract_rejects_unknown_control_field ... ok
+test lead::tests::brain_error_propagates_and_root_is_not_succeeded ... ok
+test lead::tests::completion_selecting_root_is_rejected ... ok
+test lead::tests::completion_selecting_non_descendant_is_rejected ... ok
+test lead::tests::context_failures_are_populated_for_failed_child ... ok
+test lead::tests::context_candidates_are_the_registered_agent_ids ... ok
+test lead::tests::delegate_hostile_parent_is_contained_by_root ... ok
+test lead::tests::first_round_requires_two_subtasks ... ok
+test lead::tests::final_result_is_reconstructable_from_board ... ok
+test lead::tests::lead_delegates_follows_up_and_synthesizes ... ok
+test lead::tests::followup_hostile_parent_is_contained_by_root ... ok
+test lead::tests::max_rounds_is_enforced ... ok
+test registry::tests::bulk_tool_route_to_worker_and_utility ... ok
+test lead::tests::run_on_root_counts_seeded_descendants_against_the_task_budget ... ok
+test lead::tests::ungrounded_completion_is_rejected ... ok
+test lead::tests::run_on_root_seeds_existing_descendants ... ok
+test registry::tests::registry_rejects_duplicate_ids ... ok
+test registry::tests::registry_rejects_zero_concurrency ... ok
+test lead::tests::run_on_root_settles_precreated_root ... ok
+test registry::tests::registry_validates_a_full_tier_set ... ok
+test scheduler::tests::explicit_resume_reuses_task_and_appends_a_new_attempt ... ok
+test scheduler::tests::capacity_queued_task_stays_assigned_until_driver_can_start ... ok
+test scheduler::tests::failed_task_retries_then_reassigns ... ok
+test scheduler::tests::user_override_targets_a_specific_agent ... ok
+test scheduler::tests::independent_tasks_run_concurrently ... ok
+test scheduler::tests::same_agent_respects_max_concurrency ... ok
+test registry::tests::reasoning_routes_to_reasoner ... ok
+test registry::tests::explicit_target_overrides_tier_routing ... ok
+test registry::tests::routing_is_stable_by_id ... ok
+test registry::tests::driver_kinds_round_trip_and_old_values_stay_readable ... ok
+test acc::tests::generated_wire_schema_matches_checked_in_drift_sentinel ... ok
+
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/agent_code_tools-42253593346d7093)
+
+running 1 test
+test tests::contracts_carry_the_required_fields ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/agent_code_tui-de28423e9ee082dc)
+
+running 3 tests
+test tests::dashboard_reads_authoritative_board ... ok
+test tests::dashboard_projects_persisted_final_selection ... ok
+test tests::dashboard_projects_authoritative_agent_occupancy_and_runtime_state ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/agent_code_tui-464b9118c4c6eff4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/agent_code_workspace-19e60834c6db4945)
+
+running 24 tests
+test tests::rejects_absolute_paths ... ok
+test tests::rejects_dotdot_escape ... ok
+test exec::tests::runs_and_captures_stdout ... ok
+test tests::rejects_symlink_escape ... ok
+test tests::atomic_write_creates_file ... ok
+test exec::tests::reports_nonzero_exit ... ok
+test write::tests::write_enforces_max_bytes ... ok
+test write::tests::edit_post_write_guard_restores_original_bytes ... ok
+test tests::resolves_and_hashes_contained_file ... ok
+test write::tests::edit_applies_unique_match_and_reports_range ... ok
+test write::tests::edit_duplicate_old_str_is_rejected ... ok
+test exec::tests::truncates_long_output_to_head_and_tail ... ok
+test write::tests::edit_candidate_guard_failure_leaves_file_intact ... ok
+test tools::tests::view_respects_requested_range ... ok
+test tools::tests::view_numbers_lines_and_caps_at_300 ... ok
+test write::tests::write_create_only_rejects_existing ... ok
+test tools::tests::search_glob_filters_files ... ok
+test tools::tests::search_finds_matching_lines_bounded ... ok
+test write::tests::edit_normalizes_only_on_zero_exact_matches ... ok
+test write::tests::write_detects_stale_hash ... ok
+test write::tests::write_enforces_default_cap_when_unspecified ... ok
+test git::tests::original_worktree_is_untouched ... ok
+test git::tests::checkpoint_diff_rollback ... ok
+test exec::tests::timeout_kills_grandchildren ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+
+     Running tests/integration.rs (target/debug/deps/integration-098cfcbab811ecdd)
+
+running 9 tests
+test n03_view_bounded ... ok
+test n06_write_guards ... ok
+test n04_edit_exact_unique ... ok
+test n05_syntax_rollback ... ok
+test n08_structured_command_argv ... ok
+test n10_output_truncation ... ok
+test n07_search_bounded ... ok
+test n02_worktree_isolation ... ok
+test n09_process_group_timeout ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+
+   Doc-tests agent_code_cli
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests agent_code_context
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests agent_code_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests agent_code_model
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests agent_code_runtime
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests agent_code_storage
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests agent_code_team
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests agent_code_tools
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests agent_code_tui
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests agent_code_workspace
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

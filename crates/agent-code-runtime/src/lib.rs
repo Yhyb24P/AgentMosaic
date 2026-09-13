@@ -10,14 +10,30 @@
 mod acp_worker;
 mod agent;
 mod codex_app_server;
+mod codex_lead;
 mod codex_team_driver;
 mod dispatch;
+mod driver_factory;
+mod team_runner;
 
 pub use acp_worker::{
     AcpCancellation, AcpCancellationListener, AcpSessionStartedObserver, AcpWorkerConfig,
     AcpWorkerDriver, AcpWorkerError, PersistedAcpWorkerDriver,
 };
 pub use agent::{AgentConfig, AgentError, AgentLoop, Delivery};
-pub use codex_app_server::{CodexAppServer, CodexBridgeError, CodexBridgeEvent};
+pub use codex_app_server::{
+    select_final_agent_message, CodexAppServer, CodexBridgeError, CodexBridgeEvent,
+    DEFAULT_FINAL_MESSAGE_MAX_BYTES,
+};
+pub use codex_lead::{CodexLeadBrain, CodexLeadConfig};
 pub use codex_team_driver::{CodexTeamDriverConfig, PersistedCodexTeamDriver};
 pub use dispatch::{dispatch, ToolOutcome};
+pub use driver_factory::{
+    DriverFactory, DriverFactoryError, DEFAULT_ACP_MAX_PROMPT_BYTES, DEFAULT_ACP_MAX_RESULT_BYTES,
+    DEFAULT_ACP_TIMEOUT_SECONDS, DEFAULT_CODEX_MAX_EVENTS,
+};
+pub use team_runner::{
+    TeamRunOptions, TeamRunOutcome, TeamRunner, TeamRunnerError, DEFAULT_LEAD_MAX_ANSWER_BYTES,
+    DEFAULT_LEAD_MAX_EVENTS, DEFAULT_LEAD_MAX_PROMPT_BYTES, DEFAULT_MAX_RETRIES,
+    DEFAULT_MAX_ROUNDS, DEFAULT_MAX_TASKS,
+};

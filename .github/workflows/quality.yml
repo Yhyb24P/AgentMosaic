@@ -1,4 +1,7 @@
-name: merge-compatibility
+name: rust-quality
+
+# Merge-tree quality gate. Credential-free and Rust-only.
+# A green run here is deterministic CI hygiene, not a release qualification.
 
 on:
   push:
@@ -9,55 +12,25 @@ permissions:
   contents: read
 
 jobs:
-  merge_compatibility:
-    # Bubblewrap security tests require the user/network namespace behavior
-    # available on this runner image; do not silently skip those tests.
+  rust_quality:
     runs-on: ubuntu-22.04
-    env:
-      # The sandbox mounts the project venv at /runtime. Copy the interpreter
-      # instead of leaving a host-absolute symlink that cannot resolve there.
-      UV_LINK_MODE: copy
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          python-version: "3.12"
-      - uses: astral-sh/setup-uv@v5
-      - name: Install and verify Bubblewrap sandbox
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap libcap2-bin
-          test -x /usr/bin/bwrap
-          bwrap --version
-          test "$(stat -c '%A' /usr/bin/bwrap | cut -c4)" != "s"
-          test -z "$(getcap /usr/bin/bwrap)"
-      - name: Install from committed lock
-        run: uv sync --frozen --extra a2a --extra langgraph-agent --extra qualification --extra tui
-      - name: Verify optional Agent runtimes
-        run: uv run python -c 'import a2a, langgraph; print("optional Agent runtimes available")'
-      - name: Generate lock-derived SBOM
-        run: |
-          uv run python scripts/lock_sbom.py --output /tmp/dq00-python-sbom.json
-          uv run python -c 'import json; p=json.load(open("/tmp/dq00-python-sbom.json")); assert p["bomFormat"] == "CycloneDX" and p["components"]'
-      - name: Validate qualification contract examples
-        run: |
-          uv run python scripts/qualification_validate.py \
-            --plan examples/qualification_plan.example.json \
-            --evidence examples/qualification_evidence.example.json \
-            --acceptance examples/qualification_acceptance.example.json
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Test
-        run: uv run pytest -q
-      - name: Type check
-        run: uv run mypy src tests
-      - name: Migration head
-        run: uv run alembic upgrade head
-      - name: Version policy
-        run: uv run python scripts/version_policy_check.py
+        run: cargo test --workspace --all-features
       - name: Diff hygiene
         run: git diff --check
       - name: Release hygiene
         run: |
           if git ls-files | grep -Eq '(^|/)([^/]+\.db(-wal|-shm)?|[^/]+-evidence(-check)?\.json)$'; then
-            echo "runtime database or external qualification evidence is tracked"
+            echo "runtime database or external evidence is tracked"
             exit 1
           fi

@@ -4,9 +4,12 @@
 
 > **Status.** The active direction is a Rust v2 rewrite of the native Coding Agent and
 > the heterogeneous Agent team layer, on branch `v2/rust-agent-team`. The Python
-> `researchd` control-plane implementation is a frozen reference and is no longer the
-> product. R4 is sealed; R5 is local work under review and is not yet accepted.
-> See [the roadmap](docs/v2/ROADMAP.md) and
+> `researchd` control-plane implementation was removed in R8 and is no longer the
+> product. The RC repair adds the product team entrypoint
+> `agent-code-cli run-team <db> <repo> "<objective>"` (plus `resume-team`) and storage
+> schema v11. A verified real Codex + Qwen Code team run through the public CLI is
+> recorded in `.acc-evidence/rc-repair-fbc80bf/`. See
+> [the roadmap](docs/v2/ROADMAP.md) and
 > [R5 status](docs/v2/R5_STATUS.md).
 
 Research Agent System is a **heterogeneous Agent coding/work team**.
@@ -87,10 +90,12 @@ Current driver boundaries:
   hashes, rather than wrapping the runtime in a second tool loop.
 - `UtilityDriver` — deterministic worker for tests/build/search/batch.
 
-M7 slice 1 (report section 38) extends the same journal with a durable runtime
-registry (`agent_registry`, schema v8): the CLI `register`/`registry` verbs record and
-list registrations (tier, driver kind, executable, driver args, concurrency, tags)
-without launching any driver or legacy Python.
+The durable runtime registry (`agent_registry`) records each Agent's tier, driver
+kind (`native`, `acp`, `cli`, or `codex-app-server`), executable, driver args,
+concurrency, tags, runtime version, and an optional non-secret driver-config JSON
+object. The CLI `register`/`registry` verbs record and list registrations without
+launching any driver or legacy Python; `run-team` reconstructs the real drivers
+from these rows.
 
 ## Roadmap
 
@@ -114,42 +119,119 @@ artifacts flow back, and the Lead uses them to produce the final answer.
 ## Rust development
 
 ```bash
-cargo fmt --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
 ```
 
-## Rust normal path (R7 in progress)
+## Quickstart — one heterogeneous team objective
 
-The Rust binaries operate on the authoritative SQLite team board; they do not
-launch legacy Python:
+Codex is the reference high-intelligence Lead; Qwen Code is the reference Worker.
+One objective in, one durable team result out:
+
+```text
+configure/register the Codex Lead
+configure/register the Qwen Worker (and a utility agent)
+run-team one objective
+status            (read-only durable team dashboard)
+final / artifact  (the durable answer and its exact refs)
+recover / resume  (after an interruption)
+```
+
+`submit` alone only creates a pending board task; it is not a team run. The
+`run-team` command is the team entrypoint. Everything operates directly on the
+authoritative SQLite board and never launches legacy Python.
+
+`register` grammar (8 to 10 trailing fields):
+
+```text
+agent-code-cli register <database> <agent-id> <name> <tier> <driver-kind> <executable> <driver-args> <max-concurrency> <tags> [<runtime-version-or->] [<driver-config-json-or->]
+```
+
+- `tier` is `reasoner`, `worker`, or `utility`.
+- `driver-kind` is `native`, `acp`, `cli`, `codex-app-server`, or `-`.
+- `driver-args` and `tags` are comma-separated; use `-` for none.
+- `runtime-version` is the optional 9th field; use `-` for none.
+- the optional 10th field is one non-secret JSON object of driver options, or `-`.
+  A key that looks like a credential (`token`, `key`, `secret`, `password`,
+  `endpoint`) is refused, so provider credentials can never be stored here.
+  - `acp`: `auth_method`, `timeout_seconds`, `max_prompt_bytes`,
+    `max_result_bytes`, `artifact_paths`.
+  - `codex-app-server`: `mcp_command` (required: an existing file, the built
+    `ras_codex_mcp` binary), `artifact_paths`, `max_events`, `overrides`. When
+    this agent is the run's Lead it also reads `model`, `max_prompt_bytes`, and
+    `max_answer_bytes`.
+  Keep site-local launcher aliases out of this database.
+
+Build the workspace so `ras_codex_mcp` and `agent-code-cli` exist, then point
+`mcp_command` at the absolute path of the built bridge:
 
 ```bash
-# submit/status/control/recover/read selected outputs
-cargo run -p agent-code-cli -- submit ./team.db bulk "inspect and fix the task"
-cargo run -p agent-code-cli -- status ./team.db
-cargo run -p agent-code-cli -- cancel ./team.db 1
-cargo run -p agent-code-cli -- recover ./team.db 1
-cargo run -p agent-code-cli -- recover-all ./team.db
-cargo run -p agent-code-cli -- resume ./team.db 1
-cargo run -p agent-code-cli -- override ./team.db 1 worker-a
-cargo run -p agent-code-cli -- artifact ./team.db 1
-cargo run -p agent-code-cli -- final ./team.db 1
-
-# record and list agent registrations in the durable runtime registry
-# The ACP driver speaks directly to Qwen Code's documented stdio mode.  Keep
-# provider credentials and site-local launcher aliases out of this database.
-cargo run -p agent-code-cli -- register ./team.db qwen-worker qwen-worker worker acp qwen "--acp" 2 "qwen,local-model" 0.23.3
-cargo run -p agent-code-cli -- registry ./team.db
-
-# read-only interactive board view; q exits
-cargo run -p agent-code-tui -- ./team.db
+cargo build --release --workspace
 ```
 
-The CLI/TUI surface is the documented Rust normal path for local board
-inspection and control.  It operates directly on the authoritative SQLite
-board and does not launch legacy Python.  Live Qwen ACP submit/run/continue
-and cancel/recovery evidence is recorded in `implementation_report.md`.
+```bash
+# 1. register the Codex Lead (reference Reasoner, codex-app-server driver)
+cargo run -p agent-code-cli -- register ./team.db codex-lead codex-lead reasoner \
+  codex-app-server codex - 1 codex,lead - \
+  '{"mcp_command":"/abs/path/to/target/release/ras_codex_mcp","model":"gpt-5.5","max_events":200,"overrides":["model=\"gpt-5.5\"","model_reasoning_effort=\"low\""]}'
+
+# 2. register the Qwen Code Worker and a utility agent (ACP driver)
+cargo run -p agent-code-cli -- register ./team.db qwen-worker qwen-worker worker \
+  acp qwen --acp 1 - - \
+  '{"auth_method":"openai","timeout_seconds":600,"artifact_paths":["worker.txt"]}'
+cargo run -p agent-code-cli -- register ./team.db qwen-utility qwen-utility utility \
+  acp qwen --acp 1 - - '{"auth_method":"openai","timeout_seconds":600}'
+
+# 3. run one objective through the whole team
+cargo run -p agent-code-cli -- run-team ./team.db /path/to/repo "produce worker.txt and summarize it"
+
+# 4. read-only durable board views (no runtime is launched)
+cargo run -p agent-code-cli -- status ./team.db
+cargo run -p agent-code-cli -- registry ./team.db
+cargo run -p agent-code-tui -- ./team.db          # read-only dashboard; q exits
+
+# 5. the durable answer and its exact refs
+cargo run -p agent-code-cli -- final ./team.db 1
+cargo run -p agent-code-cli -- artifact ./team.db 2
+cargo run -p agent-code-cli -- binding ./team.db 2
+
+# 6. after an interruption: close interrupted attempts, then resume
+cargo run -p agent-code-cli -- recover-all ./team.db
+cargo run -p agent-code-cli -- resume-team ./team.db /path/to/repo 1
+```
+
+Flags accepted by both `run-team` and `resume-team`:
+
+```text
+--lead <agent-id>   select the Lead when more than one reasoner is registered
+--max-rounds N      bound the Lead's reasoning rounds
+--max-tasks N       bound the delegated task budget
+--max-retries N     bound per-agent retries before the scheduler reassigns
+```
+
+Without `--lead`, exactly one registered `reasoner` must exist; zero or several
+fails rather than guessing.
+
+`run-team` opens/migrates the board, loads the persisted agent registry, builds
+the validated registry, resolves the Lead, constructs the real drivers, creates
+one durable root `reasoning` task plus its Lead attempt, and runs a resident Codex
+`CodexLeadBrain` through `Lead` + `Scheduler`. Delegated tasks execute on real
+Qwen workers over ACP, and the final visible Codex answer plus the exact selected
+task/artifact refs are persisted on the root. `resume-team` rebuilds the
+drivers/brain from durable state, closes interrupted descendants without replaying
+them, and is idempotent on an already-succeeded root.
+
+The Lead's decisions are strict JSON validated by the product; a decision that
+does not match the contract fails closed after at most one bounded correction
+turn. The decision wire is checked in at
+[`contracts/lead_decision.schema.json`](contracts/lead_decision.schema.json).
+
+The read-only commands `status`, `registry`, `artifact`, `binding`, and `final`,
+plus the TUI dashboard, never start a driver or mutate the board's runtime state.
+`status` prints each task with its `parent=<id|->` link. Live Qwen ACP and real
+Codex Lead evidence is recorded in `implementation_report.md` and
+`.acc-evidence/`.
 
 ## R8 legacy removal
 

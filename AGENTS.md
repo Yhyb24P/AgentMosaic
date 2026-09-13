@@ -25,6 +25,14 @@ retired. Do not extend it. The active work is the Rust v2 strangler rewrite on b
 - The former Python `researchd` control plane and qualification framework were
   removed in R8. They are historical Git content, not a product path.
 - The active roadmap is `R0 -> R8`, documented in `docs/v2/ROADMAP.md`.
+- The product normal path now exists as
+  `agent-code-cli run-team <db> <repo> "<objective>"` (with `resume-team` for
+  recovery). One objective produces one durable root `reasoning` task whose
+  result is the final visible Codex answer plus the exact selected task/artifact
+  refs. Codex is the reference high-intelligence Lead; Qwen Code is the
+  reference Worker.
+- Storage schema is v11; the Lead's strict decision wire is checked in at
+  `contracts/lead_decision.schema.json`.
 
 ## Do not recreate as core
 
@@ -59,6 +67,7 @@ crates/
   agent-code-workspace/  # project rules, Git worktree/checkpoint, path handling, diff/rollback
   agent-code-context/    # context budget, truncation, compaction, repository map
   agent-code-storage/    # small SQLite journal
+  agent-code-runtime/    # native Agent loop, external drivers (Codex app-server/ACP), product TeamRunner
   agent-code-team/       # Agent registry, lead, task board, scheduling, result flow
   agent-code-tui/        # ratatui/crossterm
   agent-code-cli/        # clap
@@ -72,9 +81,9 @@ limited line-ending/trailing-whitespace normalization.
 Required Rust CI:
 
 ```bash
-cargo fmt --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
 ```
 
 ## Structure

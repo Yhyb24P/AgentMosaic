@@ -189,10 +189,13 @@ impl PersistedCodexTeamDriver {
             self.upsert_binding(task.id, attempt, Some(thread), Some(turn), "running")?;
             for _ in 0..self.config.max_events {
                 match client.next_event().map_err(|e| e.to_string())? {
-                    CodexBridgeEvent::TurnCompleted { .. } => {
+                    CodexBridgeEvent::TurnCompleted { thread_id, turn_id } => {
+                        let summary = client
+                            .final_agent_message(&thread_id, &turn_id)
+                            .map_err(|e| e.to_string())?;
                         return Ok(AgentTaskResult {
                             task_id: task.id,
-                            summary: "Codex scheduler task completed".into(),
+                            summary,
                             artifacts: self.collect_artifacts()?,
                             message: None,
                         });

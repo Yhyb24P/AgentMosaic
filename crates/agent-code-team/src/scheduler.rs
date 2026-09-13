@@ -99,6 +99,11 @@ impl<B: TaskBoard + Send + 'static> Scheduler<B> {
         &self.board
     }
 
+    /// The registry this scheduler routes through, in stable agent-id order.
+    pub fn registry(&self) -> &AgentRegistry {
+        &self.registry
+    }
+
     /// Create and run `specs` concurrently. Each task is bounded by its agent's
     /// shared concurrency quota; on failure it retries the same agent up to
     /// `max_retries`, then reassigns to the next candidate. Each attempt is

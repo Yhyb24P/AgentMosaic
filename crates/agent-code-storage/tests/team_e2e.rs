@@ -16,8 +16,8 @@ use std::sync::Mutex;
 use agent_code_storage::{ExternalRuntimeBinding, SqliteTaskBoard};
 use agent_code_team::{
     reconstruct_team_result, AgentConfig, AgentDriver, AgentMessage, AgentRegistry, AgentTask,
-    AgentTaskResult, AgentTier, ArtifactMeta, Lead, LeadBrain, LeadContext, LeadDecision,
-    Scheduler, TaskAttempt, TaskBoard, TaskKind, TaskSpec, TaskStatus, TeamResult,
+    AgentTaskResult, AgentTier, ArtifactMeta, Lead, LeadBrain, LeadBrainError, LeadContext,
+    LeadDecision, Scheduler, TaskAttempt, TaskBoard, TaskKind, TaskSpec, TaskStatus, TeamResult,
 };
 use async_trait::async_trait;
 use rusqlite::Connection;
@@ -111,9 +111,10 @@ impl AgentDriver for E2eDriver {
 /// with an answer grounded in the actual results.
 struct E2eBrain;
 
+#[async_trait]
 impl LeadBrain for E2eBrain {
-    fn decide(&self, ctx: &LeadContext) -> LeadDecision {
-        match ctx.round {
+    async fn decide(&mut self, ctx: &LeadContext) -> Result<LeadDecision, LeadBrainError> {
+        Ok(match ctx.round {
             0 => LeadDecision::Delegate(vec![
                 TaskSpec {
                     objective: "summarize data".into(),
@@ -138,14 +139,17 @@ impl LeadBrain for E2eBrain {
                 },
             ]),
             1 => {
-                // A follow-up grounded in a worker result (T10).
-                let parent = ctx.results.first().map(|(id, _)| *id);
+                // A follow-up grounded in a worker result (T10). The results
+                // reach the Lead in its context; the Lead passes them on as
+                // context for the follow-up task.
+                let prior: Vec<String> =
+                    ctx.results.iter().map(|(_, r)| r.summary.clone()).collect();
                 LeadDecision::FollowUp(vec![TaskSpec {
                     objective: "refine".into(),
                     kind: TaskKind::Reasoning,
                     target: Some("reasoner-a".into()),
-                    parent,
-                    context: Vec::new(),
+                    parent: None,
+                    context: prior,
                 }])
             }
             _ => {
@@ -163,7 +167,7 @@ impl LeadBrain for E2eBrain {
                     artifact_refs: Vec::new(),
                 })
             }
-        }
+        })
     }
 }
 
@@ -290,9 +294,10 @@ async fn heterogeneous_team_end_to_end() {
             TaskStatus::Succeeded
         );
     }
-    // The follow-up (task 4) is a child of the first worker task.
+    // Containment: the follow-up hangs off the root task, not a model-chosen
+    // parent.
     let follow_up = board.task(task_ids[3]).expect("task").expect("exists");
-    assert_eq!(follow_up.parent_task, Some(task_ids[0]));
+    assert_eq!(follow_up.parent_task, Some(root_id));
 
     // Attempt history: the retried task kept its failure; the reassigned task
     // shows two agents.
@@ -305,8 +310,8 @@ async fn heterogeneous_team_end_to_end() {
     assert_eq!(reassigned[0].agent_id, "worker-a");
     assert_eq!(reassigned[2].agent_id, "worker-b");
 
-    // The follow-up task's context carried its parent's result (T07/T10): the
-    // reasoner's recorded result echoes the parent's "data summary".
+    // The worker result reached the Lead's context and the Lead passed it on to
+    // the follow-up (T07/T10): the reasoner's result echoes "data summary".
     let follow_up_attempts = board.attempts(task_ids[3]).expect("attempts");
     let follow_up_result = follow_up_attempts
         .iter()

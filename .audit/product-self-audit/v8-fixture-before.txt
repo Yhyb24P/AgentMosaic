@@ -1,0 +1,13 @@
+before_migrate_user_version 8
+before_migrate_agent_registry
+0|id|TEXT|0|None|1
+1|name|TEXT|1|None|0
+2|tier|TEXT|1|None|0
+3|driver_kind|TEXT|0|None|0
+4|executable|TEXT|0|None|0
+5|runtime_version|TEXT|0|None|0
+6|driver_args_json|TEXT|0|None|0
+7|max_concurrency|INTEGER|1|None|0
+8|tags_json|TEXT|0|None|0
+preserved_rows
+1|preserved v8 release task|bulk|pending

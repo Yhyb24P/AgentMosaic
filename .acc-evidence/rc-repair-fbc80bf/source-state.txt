@@ -1,0 +1,16 @@
+# Source state at RC repair start
+date: 2026-09-13T19:59:13+08:00
+branch: v2/rust-agent-team
+head: fbc80bfe80837747cdfeb8d65e31ec641e9f552b
+--- git status --porcelain ---
+?? .acc-evidence/rc-repair-fbc80bf/
+?? .audit/
+--- tool versions ---
+cargo: cargo 1.94.1 (29ea6fb6a 2026-03-24)
+rustc: rustc 1.94.1 (e408947bf 2026-03-25)
+codex: codex-cli 0.154.0
+qwen: 0.23.3
+--- remote ---
+origin	git@github.com:Yhyb24P/research-agent-system.git (fetch)
+origin	git@github.com:Yhyb24P/research-agent-system.git (push)
+fbc80bfe80837747cdfeb8d65e31ec641e9f552b

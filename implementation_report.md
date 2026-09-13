@@ -1,6 +1,83 @@
 # ACC/0.1 Rust-v2 Implementation Report
 
+## Current state (RC repair, 2026-09-13)
+
+This is the authoritative current-state block. Everything below it is retained
+as historical evidence; sections marked `SUPERSEDED_BY_PRODUCT_SELF_AUDIT` were
+disproved by the independent `product_self_audit.md` (2026-09-13).
+
+- Source candidate: branch `v2/rust-agent-team`, commit
+  `<filled at candidate freeze>`. The maintainer fills this hash when the exact
+  candidate is frozen; no commit hash is asserted here.
+- Storage schema: `SCHEMA_VERSION = 11` (`agent_registry.driver_config_json`,
+  non-secret driver options only).
+- Product entrypoint: `agent-code-cli run-team <database> <repo> "<objective>"`
+  and `agent-code-cli resume-team <database> <repo> <root-task-id>`, with
+  `--lead`, `--max-rounds`, `--max-tasks`, `--max-retries`. One objective creates
+  one durable root `reasoning` task whose result is the final visible Codex
+  answer plus the exact selected task/artifact refs.
+- Reference runtimes: real `codex-cli 0.154.0` Lead and real Qwen Code `0.23.3`
+  Worker.
+
+### S1 repair states
+
+| Defect | State | Basis |
+|---|---|---|
+| S1-1 automatic normal team entrypoint | REPAIRED | `run-team`/`resume-team` in `crates/agent-code-cli/src/main.rs`; orchestration in product `TeamRunner` |
+| S1-2 orchestration is product code, not harness | REPAIRED | `crates/agent-code-runtime/src/team_runner.rs` owns registry→drivers→Lead→Scheduler; the live test only reads durable surfaces |
+| S1-3 actual Codex final result fidelity | REPAIRED | `thread/read` exact-turn final visible Agent-message extraction; the fixed placeholder is gone |
+| S1-4 authentic historical migration | REPAIRED | `crates/agent-code-storage/tests/fixtures/schema_v8.sql`, verbatim from commit `e7649230af388aa61fb851f1c4631e679b08e49b` (blob `21d10ff9c45e444f29b37f9082d1fd99b6333b56`); never regenerated from the current `SCHEMA` |
+
+### M1–M9 current state
+
+| Milestone | Pre-repair (audit) | Current state |
+|---|---|---|
+| M1_CODEX_TEAM_READY | PARTIAL | S1-3 repaired; a real Codex Lead was exercised end to end |
+| M2_ACP_DRIVER_READY | PARTIAL | ACP driver handled a real Qwen worker in the verified E2E |
+| M3_QWEN_WORKER_READY | NOT_PROVEN | real Qwen bulk worker succeeded (task `2`, artifact persisted) in the verified E2E |
+| M4_KIMI_PROFILE_CLASSIFIED | PARTIAL | unchanged; no new live Kimi evidence |
+| M5_R6_TEAM_READY | FAILED | S1-1/S1-2 repaired; one `run-team` produced root + worker + utility tasks with result flow |
+| M6_R6_SEALED | FAILED | not sealed; no frozen candidate yet |
+| M7_R7_NORMAL_PATH_READY | FAILED | `run-team` is the normal team path; docs and Rust CI reconciled |
+| M8_R8_DEBLOATED | PARTIAL | retired Python removed; stale Python-era docs/workflows reconciled |
+| M9_PRODUCT_RC_READY | FAILED | local real E2E verified; candidate not frozen and independent re-audit pending |
+
+The definitive post-repair re-evaluation is the forthcoming
+`product_self_reaudit.md`; until it exists these states are not re-audited.
+
+### Readiness (separate claims)
+
+```text
+LOCAL_PRODUCT_RC_READY        = not yet claimed (candidate not frozen; re-audit pending)
+REMOTE_DETERMINISTIC_CI_READY = false (no deterministic CI run on a frozen candidate)
+PUBLIC_RELEASE_READY          = false (no tag or GitHub Release; not authorized)
+```
+
+### Current blockers
+
+- Exact-candidate freeze commit is not set; the hash is `<filled at candidate freeze>`.
+- The independent re-audit `product_self_reaudit.md` has not been produced.
+- Deterministic remote CI has not run on the frozen candidate.
+- No tag or public release is authorized.
+
+### Verified real production E2E (2026-09-13)
+
+Through the public CLI only, with real `codex-cli 0.154.0` and real Qwen Code
+`0.23.3`: root task `1` (`reasoning`, assignee `codex-lead`, succeeded),
+delegated worker task `2` (`bulk`, assignee `qwen-worker`, parent `1`,
+succeeded), utility task `3` (parent `1`, succeeded), a final answer containing a
+random worker-produced token, and persisted final refs `[2]` plus artifact
+`task=2 path=worker.txt
+sha256=23f3ef2f0a550aff9886f9c6bcef54ddac5d2fdef5ca8fe849db49cb97f3c979`. A
+separate process reproduced the answer and refs from SQLite. Evidence:
+`.acc-evidence/rc-repair-fbc80bf/`. The workspace suite reported 257 passed / 0
+failed / 17 ignored (`cargo test --workspace --all-features`).
+
 ## 1. Machine-readable summary
+
+SUPERSEDED_BY_PRODUCT_SELF_AUDIT — the summary below is stale historical state
+(commit `e23ae817`, `SCHEMA_VERSION=7`, `status=PARTIAL`). See "Current state"
+above.
 ```json
 {"report_version":"4","status":"PARTIAL","active_product":"rust-v2","acc_implementation_language":"rust","governance_resolution":"RESOLVED_BY_RUST_V2_SUPERSESSION","legacy_python_status":"PRE_EXISTING_LEGACY_FAILURE","core_tested_commit":"e23ae81759fc278fa02a5899ad7c6d03318d2848","phase23_base_commit":"e23ae81759fc278fa02a5899ad7c6d03318d2848","phase23_source_state":"DIRTY_R5_R6_PHASE23_WORKTREE","branch":"v2/rust-agent-team","core_claim":"CORE_ACC_READY","phase23_claim":"NOT_READY_FOR_GATE_K","adapter_claims":{"a2a":"NOT_READY","codex":"NOT_READY","claude_code":"NOT_READY","openclaw":"NOT_READY","qwen":"NOT_READY"},"generated_at":"2026-09-11T14:12:54+08:00"}
 ```
@@ -481,6 +558,11 @@ budget/contention on the shared local vLLM node, not a hung runtime; see
 ```json
 {"active_roadmap":"R6-R8","active_product":"heterogeneous-agent-coding-team","milestones":{"M1_CODEX_TEAM_READY":"PASSED","M2_ACP_DRIVER_READY":"PASSED","M3_QWEN_WORKER_READY":"PASSED","M4_KIMI_PROFILE_CLASSIFIED":"KIMI_READY","M5_R6_TEAM_READY":"PASSED","M6_R6_SEALED":"PASSED","M7_R7_NORMAL_PATH_READY":"PASSED","M8_R8_DEBLOATED":"PASSED","M9_PRODUCT_RC_READY":"PASSED"}}
 ```
+
+SUPERSEDED_BY_PRODUCT_SELF_AUDIT — the milestone JSON above is disproved by
+`product_self_audit.md`, which re-evaluated M5/M6/M7/M9 as FAILED and M1/M2/M4
+as PARTIAL. Retained as history; see "Current state" at the top for the
+post-repair status.
 
 Historical A–N/J/K/L/M/Q are `HISTORICAL_COMPATIBILITY_ONLY` for this R6–R8
 roadmap. They remain unchanged unless their original criterion is separately
@@ -1710,6 +1792,11 @@ build, clean-install smoke, upgrade-migration smoke, candidate-bound release
 artifacts, and final product RC evidence are complete.
 
 ## 57. M9 local product RC candidate (2026-09-13)
+
+SUPERSEDED_BY_PRODUCT_SELF_AUDIT — `product_self_audit.md` falsified this
+section's `PRODUCT_RC_READY = PASSED` claim and the fixture/production-path
+assumptions behind it (S1-1..S1-4). Retained as history; see "Current state" at
+the top.
 
 Candidate executable source is `687093630af9ac811574b3de58e6e983f0e23d6f`.
 All Rust CI and release build commands passed; the workspace test result was

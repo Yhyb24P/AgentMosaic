@@ -63,6 +63,9 @@ pub enum DriverKind {
     Native,
     Acp,
     Cli,
+    /// A Codex CLI driven through its `app-server --stdio` protocol. It is an
+    /// explicit kind, never inferred from an executable name.
+    CodexAppServer,
 }
 
 impl DriverKind {
@@ -72,15 +75,18 @@ impl DriverKind {
             DriverKind::Native => "native",
             DriverKind::Acp => "acp",
             DriverKind::Cli => "cli",
+            DriverKind::CodexAppServer => "codex-app-server",
         }
     }
 
-    /// Restore a kind from its string form.
+    /// Restore a kind from its string form. Every kind ever persisted stays
+    /// readable, so an older registration never becomes unreadable.
     pub fn restore(s: &str) -> Option<Self> {
         Some(match s {
             "native" => DriverKind::Native,
             "acp" => DriverKind::Acp,
             "cli" => DriverKind::Cli,
+            "codex-app-server" => DriverKind::CodexAppServer,
             _ => return None,
         })
     }
@@ -328,6 +334,26 @@ mod tests {
             reg.route(TaskKind::Reasoning, Some("ghost")),
             Some("reasoner-a")
         );
+    }
+
+    // Every driver kind round-trips through its durable string form, including
+    // the values stored by earlier releases.
+    #[test]
+    fn driver_kinds_round_trip_and_old_values_stay_readable() {
+        for kind in [
+            DriverKind::Native,
+            DriverKind::Acp,
+            DriverKind::Cli,
+            DriverKind::CodexAppServer,
+        ] {
+            assert_eq!(DriverKind::restore(kind.as_str()), Some(kind));
+        }
+        assert_eq!(DriverKind::CodexAppServer.as_str(), "codex-app-server");
+        assert_eq!(
+            DriverKind::restore("codex-app-server"),
+            Some(DriverKind::CodexAppServer)
+        );
+        assert_eq!(DriverKind::restore("gpt-5"), None);
     }
 
     // Rule 4: with two agents of the same tier, the lowest id wins,

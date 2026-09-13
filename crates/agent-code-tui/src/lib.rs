@@ -209,6 +209,7 @@ mod tests {
             driver_args_json: Some(r#"["-qw","--acp"]"#.into()),
             max_concurrency: Some(2),
             tags_json: Some(r#"["qwen"]"#.into()),
+            driver_config_json: None,
         }];
 
         let text = dashboard_text_with_agents(&board, &agents).unwrap();
