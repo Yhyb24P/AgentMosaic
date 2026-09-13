@@ -253,8 +253,10 @@ async fn run_one<B: TaskBoard + Send + 'static>(
         let mut succeeded = false;
         for _ in 0..max_retries {
             attempt_seq += 1;
-            // Persist the Running attempt BEFORE the driver side-effect, so a
-            // crash leaves a recoverable Running state rather than Pending.
+            // A capacity-queued task has not started its driver yet and must
+            // remain Assigned. Acquire the shared permit first, then persist
+            // Running immediately before the external driver side effect.
+            let permit = sem.acquire().await;
             {
                 let mut b = board.lock().unwrap();
                 b.record_attempt(&TaskAttempt {
@@ -278,8 +280,8 @@ async fn run_one<B: TaskBoard + Send + 'static>(
                         .push(format!("[{}] {}", m.from_agent, m.body));
                 }
             }
-            // Run the driver under the shared concurrency quota.
-            let permit = sem.acquire().await;
+            // Run the driver under the shared concurrency quota. The durable
+            // Running attempt now exactly brackets possible side effects.
             let outcome = driver.run_task(ctx_task).await;
             drop(permit);
             // Persist the terminal attempt and settle the task status.
@@ -352,6 +354,7 @@ mod tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
+    use tokio::sync::Notify;
 
     use super::*;
     use crate::registry::{AgentConfig, AgentTier};
@@ -389,6 +392,25 @@ mod tests {
         in_flight: Arc<AtomicUsize>,
         peak: Arc<AtomicUsize>,
         summary: String,
+    }
+
+    struct BlockingDriver {
+        entered: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+
+    #[async_trait]
+    impl AgentDriver for BlockingDriver {
+        async fn run_task(&self, task: AgentTask) -> Result<AgentTaskResult, String> {
+            self.entered.notify_one();
+            self.release.notified().await;
+            Ok(AgentTaskResult {
+                task_id: task.id,
+                summary: "released".into(),
+                artifacts: Vec::new(),
+                message: None,
+            })
+        }
     }
 
     #[async_trait]
@@ -525,6 +547,86 @@ mod tests {
         assert!(results[1].result.is_ok());
         // Both target worker-a (max_concurrency=1): they never overlap.
         assert_eq!(peak.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn capacity_queued_task_stays_assigned_until_driver_can_start() {
+        let registry = AgentRegistry::new(vec![
+            AgentConfig {
+                id: "reasoner-a".into(),
+                name: "reasoner-a".into(),
+                tier: AgentTier::Reasoner,
+                tags: Vec::new(),
+                max_concurrency: 1,
+                driver_kind: None,
+                executable: None,
+                driver_args: Vec::new(),
+            },
+            AgentConfig {
+                id: "worker-a".into(),
+                name: "worker-a".into(),
+                tier: AgentTier::Worker,
+                tags: Vec::new(),
+                max_concurrency: 1,
+                driver_kind: None,
+                executable: None,
+                driver_args: Vec::new(),
+            },
+            AgentConfig {
+                id: "utility-a".into(),
+                name: "utility-a".into(),
+                tier: AgentTier::Utility,
+                tags: Vec::new(),
+                max_concurrency: 1,
+                driver_kind: None,
+                executable: None,
+                driver_args: Vec::new(),
+            },
+        ])
+        .expect("full registry");
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let drivers = BTreeMap::from([(
+            "worker-a".to_string(),
+            Arc::new(BlockingDriver {
+                entered: entered.clone(),
+                release: release.clone(),
+            }) as Arc<dyn AgentDriver>,
+        )]);
+        let mut scheduler = Scheduler::new(registry, drivers, MemBoard::default(), 1);
+        let board = scheduler.board.clone();
+        let task = tokio::spawn(async move {
+            scheduler
+                .schedule(&[
+                    TaskSpec {
+                        objective: "first".into(),
+                        kind: TaskKind::Bulk,
+                        target: Some("worker-a".into()),
+                        parent: None,
+                        context: Vec::new(),
+                    },
+                    TaskSpec {
+                        objective: "second".into(),
+                        kind: TaskKind::Bulk,
+                        target: Some("worker-a".into()),
+                        parent: None,
+                        context: Vec::new(),
+                    },
+                ])
+                .await
+        });
+        entered.notified().await;
+        {
+            let board = board.lock().unwrap();
+            assert_eq!(board.task(1).unwrap().unwrap().status, TaskStatus::Running);
+            assert_eq!(board.task(2).unwrap().unwrap().status, TaskStatus::Assigned);
+        }
+        release.notify_waiters();
+        // The second driver reaches the same barrier only after the first is released.
+        entered.notified().await;
+        release.notify_waiters();
+        let results = task.await.expect("join").expect("schedule");
+        assert!(results.iter().all(|result| result.result.is_ok()));
     }
 
     // T11/T12: a task that fails on worker-a retries, then reassigns to
