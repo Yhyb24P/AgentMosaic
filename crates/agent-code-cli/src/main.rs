@@ -216,7 +216,7 @@ fn run_acp(database: &str, fields: &[String]) -> Result<String, String> {
     board
         .set_status(task_id, TaskStatus::Running)
         .map_err(|e| format!("run-acp: {e:?}"))?;
-    let driver = AcpWorkerDriver::new(AcpWorkerConfig {
+    let driver_config = AcpWorkerConfig {
         runtime_kind: format!("registered-acp:{agent_id}"),
         command: PathBuf::from(executable),
         args: driver_args,
@@ -226,8 +226,25 @@ fn run_acp(database: &str, fields: &[String]) -> Result<String, String> {
         max_prompt_bytes: 4096,
         max_result_bytes: 4096,
         artifact_paths,
-    })
-    .map_err(|e| format!("run-acp: {e}"))?;
+    };
+    let driver = match AcpWorkerDriver::new(driver_config) {
+        Ok(driver) => driver,
+        Err(error) => {
+            let text = error.to_string();
+            board
+                .complete_attempt(&TaskAttempt {
+                    task_id,
+                    attempt,
+                    agent_id: agent_id.clone(),
+                    status: TaskStatus::Failed,
+                    result: None,
+                    error: Some(text.clone()),
+                })
+                .and_then(|_| board.set_status(task_id, TaskStatus::Failed))
+                .map_err(|e| format!("run-acp: {e:?}"))?;
+            return Err(format!("run-acp: {text}"));
+        }
+    };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
@@ -423,5 +440,48 @@ mod tests {
         ]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("greater than zero"));
+    }
+
+    #[test]
+    fn run_acp_persists_invalid_configuration_as_failed() {
+        let database = std::env::temp_dir().join(format!(
+            "agent_code_cli_invalid_acp_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let db = database.to_string_lossy().into_owned();
+        run(&[
+            "register".into(),
+            db.clone(),
+            "worker".into(),
+            "worker".into(),
+            "worker".into(),
+            "acp".into(),
+            "qwen".into(),
+            "--acp".into(),
+            "1".into(),
+            "-".into(),
+        ])
+        .unwrap();
+        let submitted =
+            run(&["submit".into(), db.clone(), "bulk".into(), "bounded".into()]).unwrap();
+        let task = submitted.strip_prefix("submitted task=").unwrap();
+        let result = run(&[
+            "run-acp".into(),
+            db.clone(),
+            task.into(),
+            "worker".into(),
+            std::env::temp_dir().to_string_lossy().into_owned(),
+            "-".into(),
+            "30".into(),
+            "../outside".into(),
+        ]);
+        assert!(result.is_err());
+        let status = run(&["status".into(), db]).unwrap();
+        assert!(status.contains("status=failed"));
+        let _ = std::fs::remove_file(database);
     }
 }
