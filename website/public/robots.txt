@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://am.yhshyp.xyz/sitemap.xml

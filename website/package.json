@@ -1,1 +1,12 @@
-{"name":"agentmosaic-site","private":true,"devDependencies":{"wrangler":"4.38.0"},"scripts":{"check":"wrangler deploy --dry-run"}}
+{
+  "name": "agentmosaic-site",
+  "private": true,
+  "devDependencies": {
+    "wrangler": "4.38.0"
+  },
+  "scripts": {
+    "verify": "node scripts/verify-site.mjs",
+    "check": "npm run verify && wrangler deploy --dry-run",
+    "smoke": "node scripts/smoke-site.mjs"
+  }
+}

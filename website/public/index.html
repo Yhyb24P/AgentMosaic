@@ -1,6 +1,273 @@
-<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentMosaic</title><link rel="stylesheet" href="/styles.css"><main><h1>AgentMosaic</h1><p>Run heterogeneous coding agents as one durable team.</p><h2>Install</h2><pre>curl --proto '=https' --tlsv1.2 -LsSf \
-  https://am.yhshyp.xyz/install.sh | sh</pre><p>Prebuilt releases currently target Linux x86_64.</p><p><a href="https://github.com/Yhyb24P/AgentMosaic">GitHub</a> · <a href="/release">Latest release</a></p><h2>Protocol + LaunchSpec</h2><p>AgentMosaic coordinates Agents through machine protocols. Each Agent retains control of its own model, provider, credentials and launcher.</p><h2>Quick start</h2><pre>am init
-am agent add lead --role reasoner --adapter codex-app-server -- codex
-am agent add worker --role worker --adapter acp -- qwen --acp
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentMosaic — Heterogeneous coding agents, one durable team</title>
+<meta name="description" content="AgentMosaic connects a high-reasoning Lead with coding agents and local workers around one project. The Lead plans and delegates, workers execute, and results flow back automatically.">
+<link rel="canonical" href="https://am.yhshyp.xyz/">
+<link rel="alternate" hreflang="en" href="https://am.yhshyp.xyz/">
+<link rel="alternate" hreflang="zh-CN" href="https://am.yhshyp.xyz/zh/">
+<link rel="alternate" hreflang="x-default" href="https://am.yhshyp.xyz/">
+<meta name="theme-color" content="#0b0f14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="AgentMosaic">
+<meta property="og:locale" content="en">
+<meta property="og:url" content="https://am.yhshyp.xyz/">
+<meta property="og:title" content="AgentMosaic — Heterogeneous coding agents, one durable team">
+<meta property="og:description" content="Give one objective to a team of heterogeneous coding agents. The Lead plans and reviews, workers execute, and results and artifacts flow back automatically.">
+<script src="/site.js" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap site-header-inner">
+    <a class="brand" href="/">
+      <img class="brand-mark" src="/favicon.svg" alt="" width="28" height="28">
+      <span>AgentMosaic</span>
+    </a>
+    <nav class="site-nav" aria-label="Main">
+      <ul>
+        <li><a href="#how-it-works">How it works</a></li>
+        <li><a href="#quickstart">Quickstart</a></li>
+        <li><a href="https://github.com/Yhyb24P/AgentMosaic/tree/main/docs">Docs</a></li>
+        <li><a href="https://github.com/Yhyb24P/AgentMosaic">GitHub</a></li>
+        <li><a href="/release">Release</a></li>
+        <li><a href="/zh/" lang="zh-CN" hreflang="zh-CN">中文</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <div class="wrap">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="hero-eyebrow">AgentMosaic</p>
+        <h1 id="hero-title">Run heterogeneous coding agents as one durable team.</h1>
+        <p class="hero-tagline">
+          <span>A high-reasoning Lead plans and reviews.</span>
+          <span>Coding agents and local workers execute.</span>
+          <span>Results and artifacts flow back automatically.</span>
+        </p>
+        <p class="hero-note">No manual copy/paste between Agents.</p>
+
+        <div class="cta-row">
+          <a class="btn btn-primary" href="#install">Install</a>
+          <a class="btn" href="https://github.com/Yhyb24P/AgentMosaic">GitHub</a>
+          <a class="btn" href="https://github.com/Yhyb24P/AgentMosaic/tree/main/docs">Documentation</a>
+        </div>
+
+        <div class="code-panel" id="install">
+          <div class="code-panel-bar">
+            <span class="code-panel-label">Shell</span>
+            <span class="copy-wrap">
+              <span class="copy-status" role="status" aria-live="polite"></span>
+              <button type="button" class="copy-btn" data-copy="cmd-install" data-copied="Copied" data-failed="Copy failed" hidden>Copy</button>
+            </span>
+          </div>
+          <pre id="cmd-install"><code>curl --proto '=https' --tlsv1.2 -LsSf \
+  https://am.yhshyp.xyz/install.sh | sh</code></pre>
+        </div>
+
+        <p class="hero-meta">v0.2.0 · Linux x86_64 · Apache-2.0</p>
+      </div>
+
+      <figure class="hero-visual">
+        <ol class="workflow" role="list" aria-label="One objective moving through the team">
+          <li class="wf-step"><span class="wf-node">objective</span></li>
+          <li class="wf-step"><span class="wf-node wf-node-lead">Lead / Reasoner</span></li>
+          <li class="wf-step wf-step-fan">
+            <span class="wf-node wf-node-small">Agent</span>
+            <span class="wf-node wf-node-small">Agent</span>
+            <span class="wf-node wf-node-small">Worker</span>
+          </li>
+          <li class="wf-step"><span class="wf-node">results / artifacts</span></li>
+          <li class="wf-step"><span class="wf-node wf-node-lead">Lead review</span></li>
+          <li class="wf-step"><span class="wf-node wf-node-final">durable result</span></li>
+        </ol>
+        <figcaption>One objective in. The Lead delegates, the workers return results and artifacts, and the answer that survives the run is the one written down.</figcaption>
+      </figure>
+    </section>
+  </div>
+
+  <section class="section" id="why" aria-labelledby="why-title">
+    <div class="wrap">
+      <h2 class="section-title" id="why-title">Stop being the transport between Agents</h2>
+      <p class="section-lede">Reasoning is the scarce part. Moving text between two Agents by hand is not, so AgentMosaic makes that part automatic.</p>
+      <div class="compare">
+        <div class="compare-col">
+          <h3>Manual workflow</h3>
+          <ul class="flow-list">
+            <li>Reasoning Agent plans</li>
+            <li>You copy instructions</li>
+            <li>Coding Agent executes</li>
+            <li>You copy results back</li>
+            <li>Reasoning Agent reviews</li>
+            <li>repeat</li>
+          </ul>
+        </div>
+        <div class="compare-col compare-col-accent">
+          <h3>AgentMosaic</h3>
+          <ul class="flow-list">
+            <li>One objective</li>
+            <li>Lead delegates</li>
+            <li>Workers execute</li>
+            <li>Results/artifacts return</li>
+            <li>Lead follows up or synthesizes</li>
+            <li>Durable result</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="how-it-works" aria-labelledby="how-title">
+    <div class="wrap">
+      <h2 class="section-title" id="how-title">How the team works</h2>
+      <p class="prose lede">One objective goes in. The Lead reads it, plans the work, and decides what can be delegated. Each delegated task is scheduled to an Agent whose runtime fits the job — a coding Agent over ACP, or a deterministic worker. When a task finishes, its result and any artifacts it produced are written to the durable board and handed back to the Lead. The Lead then reviews what came back and either delegates a follow-up, asks for a correction, or synthesizes everything into one final answer. That answer, together with the exact task and artifact references it depends on, is persisted. Nothing depends on a chat window staying open, and no step requires you to move text between Agents by hand.</p>
+      <p class="prose">Deeper implementation detail lives in the <a href="https://github.com/Yhyb24P/AgentMosaic/tree/main/docs">documentation</a>.</p>
+    </div>
+  </section>
+
+  <section class="section" id="durable" aria-labelledby="durable-title">
+    <div class="wrap">
+      <h2 class="section-title" id="durable-title">Durable by design</h2>
+      <p class="section-lede">Four properties decide whether a multi-Agent run is worth trusting.</p>
+      <div class="cards">
+        <div class="card">
+          <h3>Heterogeneous team</h3>
+          <p>Each Agent keeps its own runtime, model and provider boundary. AgentMosaic never pins you to one vendor.</p>
+        </div>
+        <div class="card">
+          <h3>Automatic result flow</h3>
+          <p>A delegated result and its artifacts return to the Lead without anyone re-typing them.</p>
+        </div>
+        <div class="card">
+          <h3>Durable state</h3>
+          <p>Task, result and artifact state is kept in project-local durable state, not in transient chat history.</p>
+        </div>
+        <div class="card">
+          <h3>Resume instead of restart</h3>
+          <p>After an interruption the run picks up from persisted state instead of blindly redoing finished work.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="agents" aria-labelledby="agents-title">
+    <div class="wrap">
+      <h2 class="section-title" id="agents-title">Bring your Agents</h2>
+      <p class="section-lede">Register the runtimes you already use, then let the team schedule work across them.</p>
+      <div class="runtime-grid">
+        <div class="runtime-card">
+          <h3>Lead</h3>
+          <dl>
+            <dt>Codex</dt>
+            <dd>via <code>codex-app-server</code> — the current reference high-reasoning Lead.</dd>
+          </dl>
+        </div>
+        <div class="runtime-card">
+          <h3>Workers</h3>
+          <dl>
+            <dt>ACP-compatible coding runtimes</dt>
+            <dd>The worker boundary. Local models are reached here too, through their own ACP runtime.</dd>
+          </dl>
+        </div>
+      </div>
+      <div class="owns">
+        <div class="owns-col">
+          <h3>AgentMosaic owns</h3>
+          <ul>
+            <li>roles</li>
+            <li>delegation</li>
+            <li>task state</li>
+            <li>result/artifact flow</li>
+            <li>recovery</li>
+          </ul>
+        </div>
+        <div class="owns-col">
+          <h3>External runtime owns</h3>
+          <ul>
+            <li>login</li>
+            <li>credentials</li>
+            <li>provider</li>
+            <li>model</li>
+            <li>launcher profile</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="quickstart" aria-labelledby="quickstart-title">
+    <div class="wrap">
+      <h2 class="section-title" id="quickstart-title">Quickstart</h2>
+      <ol class="steps prose">
+        <li><a href="#install">Install</a> the <code>am</code> command.</li>
+        <li>Initialize project state in your repository.</li>
+        <li>Register exactly one <code>reasoner</code> as the Lead and one <code>worker</code>.</li>
+        <li>Check readiness, then run one objective.</li>
+      </ol>
+      <div class="code-panel">
+        <div class="code-panel-bar">
+          <span class="code-panel-label">Shell</span>
+          <span class="copy-wrap">
+            <span class="copy-status" role="status" aria-live="polite"></span>
+            <button type="button" class="copy-btn" data-copy="cmd-quickstart" data-copied="Copied" data-failed="Copy failed" hidden>Copy</button>
+          </span>
+        </div>
+        <pre id="cmd-quickstart"><code>am init
+
+am agent add lead \
+  --role reasoner \
+  --adapter codex-app-server -- codex
+
+am agent add worker \
+  --role worker \
+  --adapter acp -- qwen --acp
+
 am doctor
-am run "complete the objective"</pre><p>Supported adapters: ACP and Codex app-server.</p></main></html>
+
+am run "implement the task, verify it, and summarize the result"</code></pre>
+      </div>
+      <p class="prose"><code>am init</code> writes project-local durable state to <code>.agentmosaic/state.db</code>. Anything after <code>--</code> is launch argv that AgentMosaic stores and executes unchanged, so credentials never go there.</p>
+    </div>
+  </section>
+
+  <section class="section" id="release" aria-labelledby="release-title">
+    <div class="wrap">
+      <h2 class="section-title" id="release-title">Current release</h2>
+      <div class="release-card">
+        <p class="release-version">v0.2.0</p>
+        <ul class="release-facts">
+          <li>Linux x86_64</li>
+          <li>Shell installer</li>
+          <li>Apache-2.0</li>
+        </ul>
+        <p><a class="btn" href="/release">Latest release</a></p>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap site-footer-inner">
+    <p>AgentMosaic</p>
+    <ul class="footer-links">
+      <li><a href="https://github.com/Yhyb24P/AgentMosaic">GitHub</a></li>
+      <li><a href="https://github.com/Yhyb24P/AgentMosaic/tree/main/docs">Documentation</a></li>
+      <li><a href="/release">Latest release</a></li>
+      <li>Apache-2.0</li>
+      <li><a href="/" aria-current="page">English</a> / <a href="/zh/" lang="zh-CN" hreflang="zh-CN">简体中文</a></li>
+    </ul>
+  </div>
+</footer>
+
+</body>
+</html>

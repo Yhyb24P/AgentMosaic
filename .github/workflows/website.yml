@@ -1,0 +1,42 @@
+name: website
+
+# Credential-free quality gate for the static site. This is not a deploy workflow:
+# deployment stays manual and no Cloudflare token belongs in the repository.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - ".github/workflows/website.yml"
+  pull_request:
+    paths:
+      - "website/**"
+      - ".github/workflows/website.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  website:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Verify static contract
+        run: npm run verify
+      - name: Wrangler dry-run
+        run: npm run check
+      - name: Local HTTP smoke
+        run: npm run smoke
+      - name: Diff hygiene
+        run: git diff --check

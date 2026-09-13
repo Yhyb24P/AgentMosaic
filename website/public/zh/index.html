@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentMosaic — 异构 coding Agent，一个持久化团队</title>
+<meta name="description" content="AgentMosaic 把高推理能力的 Lead 与 coding Agent、本地 worker 接到同一个项目上。Lead 负责规划与委派，worker 负责执行，结果与 artifact 自动回流。">
+<link rel="canonical" href="https://am.yhshyp.xyz/zh/">
+<link rel="alternate" hreflang="en" href="https://am.yhshyp.xyz/">
+<link rel="alternate" hreflang="zh-CN" href="https://am.yhshyp.xyz/zh/">
+<link rel="alternate" hreflang="x-default" href="https://am.yhshyp.xyz/">
+<meta name="theme-color" content="#0b0f14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="AgentMosaic">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:url" content="https://am.yhshyp.xyz/zh/">
+<meta property="og:title" content="AgentMosaic — 异构 coding Agent，一个持久化团队">
+<meta property="og:description" content="给一组异构 coding Agent 一个目标。Lead 规划与评审，worker 执行，结果与 artifact 自动回流。">
+<script src="/site.js" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主要内容</a>
+
+<header class="site-header">
+  <div class="wrap site-header-inner">
+    <a class="brand" href="/zh/">
+      <img class="brand-mark" src="/favicon.svg" alt="" width="28" height="28">
+      <span>AgentMosaic</span>
+    </a>
+    <nav class="site-nav" aria-label="主导航">
+      <ul>
+        <li><a href="#how-it-works">工作原理</a></li>
+        <li><a href="#quickstart">快速开始</a></li>
+        <li><a href="https://github.com/Yhyb24P/AgentMosaic/tree/main/docs">文档</a></li>
+        <li><a href="https://github.com/Yhyb24P/AgentMosaic">GitHub</a></li>
+        <li><a href="/release">发行版</a></li>
+        <li><a href="/" lang="en" hreflang="en">EN</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <div class="wrap">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="hero-eyebrow">AgentMosaic</p>
+        <h1 id="hero-title">把异构 coding Agent 作为一个持久化团队来运行。</h1>
+        <p class="hero-tagline">
+          <span>高推理能力的 Lead 负责规划与评审。</span>
+          <span>coding Agent 与本地 worker 负责执行。</span>
+          <span>结果与 artifact 自动回流。</span>
+        </p>
+        <p class="hero-note">无需在 Agent 之间人工复制粘贴。</p>
+
+        <div class="cta-row">
+          <a class="btn btn-primary" href="#install">安装</a>
+          <a class="btn" href="https://github.com/Yhyb24P/AgentMosaic">GitHub</a>
+          <a class="btn" href="https://github.com/Yhyb24P/AgentMosaic/tree/main/docs">文档</a>
+        </div>
+
+        <div class="code-panel" id="install">
+          <div class="code-panel-bar">
+            <span class="code-panel-label">Shell</span>
+            <span class="copy-wrap">
+              <span class="copy-status" role="status" aria-live="polite"></span>
+              <button type="button" class="copy-btn" data-copy="cmd-install" data-copied="已复制" data-failed="复制失败" hidden>复制</button>
+            </span>
+          </div>
+          <pre id="cmd-install"><code>curl --proto '=https' --tlsv1.2 -LsSf \
+  https://am.yhshyp.xyz/install.sh | sh</code></pre>
+        </div>
+
+        <p class="hero-meta">v0.2.0 · Linux x86_64 · Apache-2.0</p>
+      </div>
+
+      <figure class="hero-visual">
+        <ol class="workflow" role="list" aria-label="一个目标在团队中的流转">
+          <li class="wf-step"><span class="wf-node">目标</span></li>
+          <li class="wf-step"><span class="wf-node wf-node-lead">Lead / Reasoner</span></li>
+          <li class="wf-step wf-step-fan">
+            <span class="wf-node wf-node-small">Agent</span>
+            <span class="wf-node wf-node-small">Agent</span>
+            <span class="wf-node wf-node-small">Worker</span>
+          </li>
+          <li class="wf-step"><span class="wf-node">结果 / artifact</span></li>
+          <li class="wf-step"><span class="wf-node wf-node-lead">Lead 评审</span></li>
+          <li class="wf-step"><span class="wf-node wf-node-final">持久化结果</span></li>
+        </ol>
+        <figcaption>一个目标进入。Lead 委派任务，worker 回传结果与 artifact，最终留下的是被真正写入持久化状态的那个答案。</figcaption>
+      </figure>
+    </section>
+  </div>
+
+  <section class="section" id="why" aria-labelledby="why-title">
+    <div class="wrap">
+      <h2 class="section-title" id="why-title">不再人工搬运 Agent 之间的上下文</h2>
+      <p class="section-lede">真正稀缺的是推理。在两个 Agent 之间手工转移文本不是，所以这部分交给 AgentMosaic 自动完成。</p>
+      <div class="compare">
+        <div class="compare-col">
+          <h3>手工流程</h3>
+          <ul class="flow-list">
+            <li>推理 Agent 做规划</li>
+            <li>你把指令复制过去</li>
+            <li>coding Agent 执行</li>
+            <li>你把结果复制回来</li>
+            <li>推理 Agent 评审</li>
+            <li>重复</li>
+          </ul>
+        </div>
+        <div class="compare-col compare-col-accent">
+          <h3>AgentMosaic</h3>
+          <ul class="flow-list">
+            <li>一个目标</li>
+            <li>Lead 委派</li>
+            <li>worker 执行</li>
+            <li>结果与 artifact 回流</li>
+            <li>Lead 跟进或综合</li>
+            <li>持久化结果</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="how-it-works" aria-labelledby="how-title">
+    <div class="wrap">
+      <h2 class="section-title" id="how-title">工作原理</h2>
+      <p class="prose lede">一个目标进入。Lead 读取目标，做出规划，并判断哪些部分可以委派出去。每个被委派的任务会交给运行环境合适的 Agent —— 通过 ACP 接入的 coding Agent，或确定性 worker。任务结束后，它的结果与产生的 artifact 会被写入持久化 board，并交回 Lead。Lead 查看回传内容，然后决定继续委派、要求修正，还是把全部结果综合成一个最终答案。这个答案连同它依赖的任务与 artifact 引用一起被持久化。整个过程不依赖某个对话窗口一直开着，也不需要你手工在 Agent 之间搬运文本。</p>
+      <p class="prose">更深入的实现细节见<a href="https://github.com/Yhyb24P/AgentMosaic/tree/main/docs">文档</a>。</p>
+    </div>
+  </section>
+
+  <section class="section" id="durable" aria-labelledby="durable-title">
+    <div class="wrap">
+      <h2 class="section-title" id="durable-title">持久化设计</h2>
+      <p class="section-lede">一次多 Agent 运行是否值得信任，取决于四个性质。</p>
+      <div class="cards">
+        <div class="card">
+          <h3>异构团队</h3>
+          <p>每个 Agent 保留自己的 runtime、模型和 provider 边界，AgentMosaic 不把你锁在单一厂商上。</p>
+        </div>
+        <div class="card">
+          <h3>自动回流</h3>
+          <p>被委派任务的结果与其 artifact 会回到 Lead，不需要任何人重新录入。</p>
+        </div>
+        <div class="card">
+          <h3>持久化状态</h3>
+          <p>任务、结果与 artifact 状态保存在项目本地的持久化状态中，而不是临时对话历史里。</p>
+        </div>
+        <div class="card">
+          <h3>恢复而非重跑</h3>
+          <p>中断之后，运行从持久化状态继续，而不是无条件重做已经完成的工作。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="agents" aria-labelledby="agents-title">
+    <div class="wrap">
+      <h2 class="section-title" id="agents-title">接入你的 Agent</h2>
+      <p class="section-lede">注册你已经在用的 runtime，然后让团队在它们之间调度工作。</p>
+      <div class="runtime-grid">
+        <div class="runtime-card">
+          <h3>Lead</h3>
+          <dl>
+            <dt>Codex</dt>
+            <dd>通过 <code>codex-app-server</code> 接入，当前作为参考的高推理 Lead。</dd>
+          </dl>
+        </div>
+        <div class="runtime-card">
+          <h3>Worker</h3>
+          <dl>
+            <dt>ACP 兼容的 coding runtime</dt>
+            <dd>这是 worker 边界。本地模型也经由它自己的 ACP runtime 接入。</dd>
+          </dl>
+        </div>
+      </div>
+      <div class="owns">
+        <div class="owns-col">
+          <h3>AgentMosaic 负责</h3>
+          <ul>
+            <li>角色</li>
+            <li>委派</li>
+            <li>任务状态</li>
+            <li>结果与 artifact 回流</li>
+            <li>恢复</li>
+          </ul>
+        </div>
+        <div class="owns-col">
+          <h3>外部 runtime 负责</h3>
+          <ul>
+            <li>登录</li>
+            <li>凭据</li>
+            <li>provider</li>
+            <li>模型</li>
+            <li>launcher profile</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="quickstart" aria-labelledby="quickstart-title">
+    <div class="wrap">
+      <h2 class="section-title" id="quickstart-title">快速开始</h2>
+      <ol class="steps prose">
+        <li><a href="#install">安装</a> <code>am</code> 命令。</li>
+        <li>在你的仓库里初始化项目状态。</li>
+        <li>注册恰好一个 <code>reasoner</code> 作为 Lead，以及一个 <code>worker</code>。</li>
+        <li>检查就绪状态，然后运行一个目标。</li>
+      </ol>
+      <div class="code-panel">
+        <div class="code-panel-bar">
+          <span class="code-panel-label">Shell</span>
+          <span class="copy-wrap">
+            <span class="copy-status" role="status" aria-live="polite"></span>
+            <button type="button" class="copy-btn" data-copy="cmd-quickstart" data-copied="已复制" data-failed="复制失败" hidden>复制</button>
+          </span>
+        </div>
+        <pre id="cmd-quickstart"><code>am init
+
+am agent add lead \
+  --role reasoner \
+  --adapter codex-app-server -- codex
+
+am agent add worker \
+  --role worker \
+  --adapter acp -- qwen --acp
+
+am doctor
+
+am run "implement the task, verify it, and summarize the result"</code></pre>
+      </div>
+      <p class="prose"><code>am init</code> 会把项目本地持久化状态写到 <code>.agentmosaic/state.db</code>。<code>--</code> 之后的内容是 launch argv，AgentMosaic 只原样存储与执行，因此凭据不应写在那里。</p>
+    </div>
+  </section>
+
+  <section class="section" id="release" aria-labelledby="release-title">
+    <div class="wrap">
+      <h2 class="section-title" id="release-title">当前发行版</h2>
+      <div class="release-card">
+        <p class="release-version">v0.2.0</p>
+        <ul class="release-facts">
+          <li>Linux x86_64</li>
+          <li>Shell installer</li>
+          <li>Apache-2.0</li>
+        </ul>
+        <p><a class="btn" href="/release">最新发行版</a></p>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap site-footer-inner">
+    <p>AgentMosaic</p>
+    <ul class="footer-links">
+      <li><a href="https://github.com/Yhyb24P/AgentMosaic">GitHub</a></li>
+      <li><a href="https://github.com/Yhyb24P/AgentMosaic/tree/main/docs">文档</a></li>
+      <li><a href="/release">最新发行版</a></li>
+      <li>Apache-2.0</li>
+      <li><a href="/" lang="en" hreflang="en">English</a> / <a href="/zh/" aria-current="page">简体中文</a></li>
+    </ul>
+  </div>
+</footer>
+
+</body>
+</html>

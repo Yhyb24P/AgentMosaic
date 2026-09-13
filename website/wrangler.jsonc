@@ -1,1 +1,16 @@
-{"name":"agentmosaic-site","main":"src/index.ts","compatibility_date":"2025-09-14","assets":{"directory":"./public","not_found_handling":"single-page-application"},"routes":[{"pattern":"am.yhshyp.xyz","custom_domain":true}]}
+{
+  "name": "agentmosaic-site",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-09-14",
+  "assets": {
+    "directory": "./public",
+    // Required: the Worker reaches static assets through env.ASSETS.fetch().
+    "binding": "ASSETS",
+    // Static multi-page site: a folder index.html is canonical at its trailing-slash URL.
+    "html_handling": "auto-trailing-slash",
+    // The site has no client-side router, so unmatched paths must be a real 404,
+    // not an index.html fallback.
+    "not_found_handling": "404-page"
+  },
+  "routes": [{ "pattern": "am.yhshyp.xyz", "custom_domain": true }]
+}
