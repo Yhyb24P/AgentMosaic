@@ -7,6 +7,8 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use serde_json::{json, Value};
 
+use crate::LaunchSpec;
+
 /// Upper bound on notifications retained while a correlated request is pending.
 const EVENT_QUEUE_CAPACITY: usize = 256;
 
@@ -60,14 +62,30 @@ pub struct CodexAppServer {
 
 impl CodexAppServer {
     pub fn spawn(executable: &str) -> Result<Self, CodexBridgeError> {
-        Self::spawn_with_overrides(executable, &[])
+        Self::spawn_launch(
+            LaunchSpec::new(executable, Vec::new()).map_err(CodexBridgeError::Io)?,
+            &[],
+        )
     }
 
     pub fn spawn_with_overrides(
         executable: &str,
         overrides: &[String],
     ) -> Result<Self, CodexBridgeError> {
-        let mut command = Command::new(executable);
+        Self::spawn_launch(
+            LaunchSpec::new(executable, Vec::new()).map_err(CodexBridgeError::Io)?,
+            overrides,
+        )
+    }
+
+    /// Spawn a configured external runtime. Its persisted base argv is always
+    /// retained before the adapter-owned app-server protocol arguments.
+    pub fn spawn_launch(
+        launch: LaunchSpec,
+        overrides: &[String],
+    ) -> Result<Self, CodexBridgeError> {
+        let mut command = Command::new(&launch.program);
+        command.args(&launch.args);
         command.args(["app-server", "--stdio"]);
         for override_value in overrides {
             command.args(["-c", override_value]);

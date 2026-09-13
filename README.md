@@ -54,44 +54,30 @@ Init -> Observe -> Model Decision -> Tool Execution -> Observe -> ...
 cargo build --release --workspace
 ```
 
-This produces `target/release/am` (the only first-class user command) and
-`target/release/am-codex-mcp` (the Codex app-server MCP bridge). The read-only board
-dashboard is reached through `am tui <database>`; there is no separate public TUI binary.
+This produces `target/release/am`, the only shipped product binary. The Codex
+collaboration bridge is a fixed hidden internal command; it is not separately
+configured or installed.
 
 ## Quickstart — one heterogeneous team objective
 
-Codex is the reference high-intelligence Lead; Qwen Code is the reference Worker. One
-objective in, one durable team result out.
+One objective in, one durable team result out. AgentMosaic owns roles,
+machine protocols and LaunchSpecs; each external runtime owns its login,
+credentials, provider, model and launcher profile.
 
 ```bash
-# 1. register the Codex Lead (reference Reasoner, codex-app-server driver)
-am register ./team.db codex-lead codex-lead reasoner \
-  codex-app-server codex - 1 codex,lead - \
-  '{"mcp_command":"/abs/path/to/target/release/am-codex-mcp","model":"gpt-5.5","max_events":200,"overrides":["model=\"gpt-5.5\"","model_reasoning_effort=\"low\""]}'
+# 1. initialize project-local durable state
+am init
 
-# 2. register the Qwen Code Worker and a utility agent (ACP driver)
-am register ./team.db qwen-worker qwen-worker worker \
-  acp qwen --acp 1 - - \
-  '{"auth_method":"openai","timeout_seconds":600,"artifact_paths":["worker.txt"]}'
-am register ./team.db qwen-utility qwen-utility utility \
-  acp qwen --acp 1 - - '{"auth_method":"openai","timeout_seconds":600}'
+# 2. register opaque external launch argv (do not put credentials here)
+am agent add lead --role reasoner --adapter codex-app-server -- codex -ds
+am agent add worker --role worker --adapter acp -- qwen -ds --acp
+am agent add utility --role utility --adapter acp -- aweswitch qw --acp
 
-# 3. run one objective through the whole team
-am run-team ./team.db /path/to/repo "produce worker.txt and summarize it"
+# 3. check project and protocol preparation without managing authentication
+am doctor
 
-# 4. read-only durable board views (no runtime is launched)
-am status ./team.db
-am registry ./team.db
-am tui ./team.db                    # read-only dashboard; q exits
-
-# 5. the durable answer and its exact refs
-am final ./team.db 1
-am artifact ./team.db 2
-am binding ./team.db 2
-
-# 6. after an interruption: close interrupted attempts, then resume
-am recover-all ./team.db
-am resume-team ./team.db /path/to/repo 1
+# 4. run one objective through the whole team
+am run "produce worker.txt and summarize it"
 ```
 
 Flags accepted by both `run-team` and `resume-team`:

@@ -1,10 +1,15 @@
 [package]
 name = "agentmosaic-cli"
-description = "Command-line entry point"
+description = "AgentMosaic command-line interface for heterogeneous Agent teams"
+repository = "https://github.com/Yhyb24P/AgentMosaic"
+homepage = "https://am.yhshyp.xyz"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+
+[package.metadata.dist]
+dist = true
 
 [[bin]]
 name = "am"

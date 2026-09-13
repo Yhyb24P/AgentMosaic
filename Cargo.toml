@@ -14,7 +14,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0-dev"
+version = "0.2.0"
 edition = "2021"
 license = "Apache-2.0"
 publish = false
@@ -35,3 +35,8 @@ schemars = "0.8"
 agent-client-protocol = "2.1.0"
 ratatui = "0.29"
 crossterm = "0.28"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

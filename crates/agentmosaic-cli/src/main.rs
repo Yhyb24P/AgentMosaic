@@ -5,8 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agentmosaic_runtime::{
-    AcpCancellation, AcpSessionStartedObserver, AcpWorkerConfig, AcpWorkerDriver, AcpWorkerError,
-    TeamRunOptions, TeamRunOutcome, TeamRunner,
+    run_codex_mcp_bridge, AcpCancellation, AcpSessionStartedObserver, AcpWorkerConfig,
+    AcpWorkerDriver, AcpWorkerError, CodexAppServer, LaunchSpec, TeamRunOptions, TeamRunOutcome,
+    TeamRunner,
 };
 use agentmosaic_storage::{
     AgentRegistryRecord, ExternalRuntimeBinding, SqliteAgentRegistry, SqliteTaskBoard,
@@ -14,11 +15,305 @@ use agentmosaic_storage::{
 use agentmosaic_team::{AgentTask, DriverKind, TaskAttempt, TaskBoard, TaskKind, TaskStatus};
 use rusqlite::Connection;
 
+const PROJECT_DIR: &str = ".agentmosaic";
+const PROJECT_DB: &str = "state.db";
+
 fn usage() -> &'static str {
-    "usage: am <register|registry|run-acp|continue-acp|run-team|resume-team|submit|status|cancel|override|recover|recover-all|resume|artifact|binding|final|tui> <database> [fields]\n\
+    "usage: am <init|agent|doctor|run|register|registry|run-acp|continue-acp|run-team|resume-team|submit|status|cancel|override|recover|recover-all|resume|artifact|binding|final|tui> [fields]\n\
+     \x20      am init [PATH]\n\
+     \x20      am agent add <id> --role <reasoner|worker|utility> --adapter <acp|codex-app-server> [--name NAME] [--concurrency N] [--tag TAG] [--artifact RELPATH] -- <program> [arg ...]\n\
+     \x20      am agent list\n\
+     \x20      am doctor\n\
+     \x20      am run \"<objective...>\"\n\
      \x20      am run-team <database> <repo> \"<objective...>\" [--lead <agent-id>] [--max-rounds N] [--max-tasks N] [--max-retries N]\n\
      \x20      am resume-team <database> <repo> <root-task-id> [--lead <agent-id>] [--max-rounds N] [--max-tasks N] [--max-retries N]\n\
      \x20      am tui <database>"
+}
+
+fn state_path(root: &Path) -> PathBuf {
+    root.join(PROJECT_DIR).join(PROJECT_DB)
+}
+
+fn discover_project(start: &Path) -> Result<(PathBuf, PathBuf), String> {
+    let start = start
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve current directory: {e}"))?;
+    for directory in start.ancestors() {
+        let database = state_path(directory);
+        if database.is_file() {
+            return Ok((directory.to_path_buf(), database));
+        }
+    }
+    Err("no initialized AgentMosaic project found; run `am init` first".into())
+}
+
+fn init_project(path: Option<&str>) -> Result<String, String> {
+    let requested = path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let requested = requested
+        .canonicalize()
+        .map_err(|e| format!("init path is not available: {e}"))?;
+    if !requested.is_dir() {
+        return Err("init path must be a directory".into());
+    }
+    let root = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&requested)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()
+        .filter(|result| result.status.success())
+        .and_then(|result| String::from_utf8(result.stdout).ok())
+        .map(|value| PathBuf::from(value.trim()))
+        .unwrap_or(requested);
+    let directory = root.join(PROJECT_DIR);
+    std::fs::create_dir_all(&directory)
+        .map_err(|e| format!("create project state directory: {e}"))?;
+    let database = state_path(&root);
+    open(database.to_str().ok_or("project state path is not UTF-8")?)?;
+    let ignore = root.join(".gitignore");
+    if root.join(".git").exists() {
+        let existing = std::fs::read_to_string(&ignore).unwrap_or_default();
+        if !existing.lines().any(|line| line.trim() == "/.agentmosaic/") {
+            let suffix = if existing.is_empty() || existing.ends_with('\n') {
+                ""
+            } else {
+                "\n"
+            };
+            std::fs::write(&ignore, format!("{existing}{suffix}/.agentmosaic/\n"))
+                .map_err(|e| format!("update .gitignore: {e}"))?;
+        }
+    }
+    Ok(format!("initialized AgentMosaic\nproject: {}\nstate:   {}\n\nnext:\n  am agent add ...\n  am doctor", root.display(), database.display()))
+}
+
+fn project_database() -> Result<(PathBuf, PathBuf), String> {
+    discover_project(&std::env::current_dir().map_err(|e| e.to_string())?)
+}
+
+fn agent_add(fields: &[String]) -> Result<String, String> {
+    let id = fields.first().ok_or("agent add requires an id")?.clone();
+    let mut role = None;
+    let mut adapter = None;
+    let mut name = None;
+    let mut concurrency = 1_i64;
+    let mut tags = Vec::new();
+    let mut artifacts = Vec::new();
+    let mut index = 1;
+    while index < fields.len() {
+        match fields[index].as_str() {
+            "--" => {
+                index += 1;
+                break;
+            }
+            "--role" => {
+                index += 1;
+                role = fields.get(index).cloned();
+            }
+            "--adapter" => {
+                index += 1;
+                adapter = fields.get(index).cloned();
+            }
+            "--name" => {
+                index += 1;
+                name = fields.get(index).cloned();
+            }
+            "--concurrency" => {
+                index += 1;
+                concurrency =
+                    parse_concurrency(fields.get(index).ok_or("--concurrency requires a value")?)?;
+            }
+            "--tag" => {
+                index += 1;
+                tags.push(fields.get(index).ok_or("--tag requires a value")?.clone());
+            }
+            "--artifact" => {
+                index += 1;
+                artifacts.push(
+                    fields
+                        .get(index)
+                        .ok_or("--artifact requires a value")?
+                        .clone(),
+                );
+            }
+            option => return Err(format!("unknown agent add option {option}")),
+        };
+        index += 1;
+    }
+    let role = role.ok_or("agent add requires --role")?;
+    if !matches!(role.as_str(), "reasoner" | "worker" | "utility") {
+        return Err("--role must be reasoner, worker, or utility".into());
+    }
+    let adapter = adapter.ok_or("agent add requires --adapter")?;
+    if !matches!(adapter.as_str(), "acp" | "codex-app-server") {
+        return Err("--adapter must be acp or codex-app-server".into());
+    }
+    let program = fields
+        .get(index)
+        .ok_or("agent add requires a launch command after --")?
+        .clone();
+    index += 1;
+    let args = fields[index..].to_vec();
+    let config = if artifacts.is_empty() {
+        None
+    } else {
+        Some(serde_json::json!({"artifact_paths": artifacts}).to_string())
+    };
+    let (_, database) = project_database()?;
+    SqliteAgentRegistry::open(&database)
+        .map_err(|e| e.to_string())?
+        .upsert_agent(&AgentRegistryRecord {
+            id: id.clone(),
+            name: name.unwrap_or_else(|| id.clone()),
+            tier: role,
+            driver_kind: Some(adapter),
+            executable: Some(program),
+            driver_args_json: Some(serde_json::to_string(&args).map_err(|e| e.to_string())?),
+            max_concurrency: Some(concurrency),
+            tags_json: Some(serde_json::to_string(&tags).map_err(|e| e.to_string())?),
+            runtime_version: None,
+            driver_config_json: config,
+        })
+        .map_err(|e| format!("agent add: {e}"))?;
+    Ok(format!("added agent={id}"))
+}
+
+fn doctor() -> Result<String, String> {
+    let (root, database) = project_database()?;
+    let registry = SqliteAgentRegistry::open(&database).map_err(|e| format!("doctor: {e}"))?;
+    let agents = registry.list_agents().map_err(|e| format!("doctor: {e}"))?;
+    let mut lines = vec![
+        format!("project   READY {}", root.display()),
+        "state     READY schema=11".into(),
+    ];
+    let mut tiers = [0usize; 3];
+    for agent in agents {
+        match agent.tier.as_str() {
+            "reasoner" => tiers[0] += 1,
+            "worker" => tiers[1] += 1,
+            "utility" => tiers[2] += 1,
+            _ => {}
+        }
+        let ready = agent.executable.as_deref().is_some_and(program_on_path);
+        let launch = agent
+            .executable
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+            && agent
+                .driver_args_json
+                .as_deref()
+                .map(|raw| serde_json::from_str::<Vec<String>>(raw).is_ok())
+                .unwrap_or(true);
+        let stages = if !ready {
+            "PROGRAM_NOT_FOUND".to_string()
+        } else if !launch {
+            "PROGRAM_FOUND LAUNCHSPEC_INVALID".to_string()
+        } else {
+            format!(
+                "PROGRAM_FOUND LAUNCHSPEC_VALID {}",
+                doctor_probe(&agent, &root)
+            )
+        };
+        lines.push(format!(
+            "{}      {}    {}",
+            agent.id,
+            agent.driver_kind.as_deref().unwrap_or("-"),
+            stages
+        ));
+    }
+    lines.push(format!(
+        "team      reasoner={} worker={} utility={}",
+        tiers[0], tiers[1], tiers[2]
+    ));
+    if tiers[0] != 1 {
+        lines.push("lead      LEAD_SELECTION_AMBIGUOUS_OR_MISSING".into());
+    }
+    Ok(lines.join("\n"))
+}
+
+/// Probe the configured adapter without a prompt, model selection, or login.
+/// The adapter owns the protocol details; the CLI reports only a bounded
+/// readiness classification and never exposes protocol transcripts.
+fn doctor_probe(agent: &AgentRegistryRecord, root: &Path) -> String {
+    let Some(program) = agent.executable.as_deref() else {
+        return "LAUNCHSPEC_INVALID".into();
+    };
+    let args = match agent.driver_args_json.as_deref() {
+        Some(raw) => match serde_json::from_str::<Vec<String>>(raw) {
+            Ok(args) => args,
+            Err(_) => return "LAUNCHSPEC_INVALID".into(),
+        },
+        None => Vec::new(),
+    };
+    let launch = match LaunchSpec::new(program, args.clone()) {
+        Ok(launch) => launch,
+        Err(_) => return "LAUNCHSPEC_INVALID".into(),
+    };
+    match agent.driver_kind.as_deref() {
+        Some("acp") => {
+            let driver = match AcpWorkerDriver::new(AcpWorkerConfig {
+                runtime_kind: "acp".into(),
+                command: launch.program,
+                args,
+                auth_method: None,
+                working_directory: root.to_path_buf(),
+                timeout: Duration::from_secs(5),
+                max_prompt_bytes: 1,
+                max_result_bytes: 1,
+                artifact_paths: Vec::new(),
+            }) {
+                Ok(driver) => driver,
+                Err(_) => return "SPAWN_FAILED".into(),
+            };
+            match team_runtime().and_then(|runtime| {
+                runtime
+                    .block_on(driver.probe_readiness())
+                    .map_err(|error| error.to_string())
+            }) {
+                Ok(()) => "SPAWN_OK PROTOCOL_OK SESSION_OK READY".into(),
+                Err(error) if error.to_ascii_lowercase().contains("auth") => {
+                    "RUNTIME_PREPARATION_REQUIRED".into()
+                }
+                Err(error) if error.contains("timed out") => "PROTOCOL_UNAVAILABLE".into(),
+                Err(error) if error.contains("No such file") => "SPAWN_FAILED".into(),
+                Err(_) => "PROTOCOL_UNAVAILABLE".into(),
+            }
+        }
+        Some("codex-app-server") => match CodexAppServer::spawn_launch(launch, &[]) {
+            Err(_) => "SPAWN_FAILED".into(),
+            Ok(mut server) => match server
+                .initialize("agentmosaic-doctor", "0.2")
+                .and_then(|_| {
+                    server.start_thread_with_options(
+                        &root.display().to_string(),
+                        None,
+                        "read-only",
+                        "never",
+                    )
+                }) {
+                Ok(_) => "SPAWN_OK PROTOCOL_OK SESSION_OK READY".into(),
+                Err(error) if error.to_string().to_ascii_lowercase().contains("auth") => {
+                    "RUNTIME_PREPARATION_REQUIRED".into()
+                }
+                Err(_) => "PROTOCOL_UNAVAILABLE".into(),
+            },
+        },
+        _ => "PROTOCOL_UNAVAILABLE".into(),
+    }
+}
+
+/// A doctor program check is intentionally non-invasive: it never starts an
+/// external Agent or attempts authentication. Protocol readiness is reported
+/// only by adapters that can perform a safe handshake.
+fn program_on_path(program: &str) -> bool {
+    let candidate = Path::new(program);
+    if candidate.components().count() > 1 || candidate.is_absolute() {
+        return candidate.is_file();
+    }
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|directory| directory.join(program).is_file())
+    })
 }
 
 fn open(path: &str) -> Result<SqliteTaskBoard, String> {
@@ -758,7 +1053,11 @@ fn run_team(database: &str, fields: &[String]) -> Result<String, String> {
             "run-team requires an objective: <database> <repo> \"<objective>\" {TEAM_FLAGS}"
         ));
     }
-    let runner = TeamRunner::new(database, repo, invocation.options);
+    let host = LaunchSpec::new(
+        std::env::current_exe().map_err(|e| format!("locate am executable: {e}"))?,
+        Vec::new(),
+    )?;
+    let runner = TeamRunner::new(database, repo, invocation.options).with_bridge_host(host);
     let runtime = team_runtime()?;
     let outcome = runtime
         .block_on(runner.run(&objective))
@@ -781,7 +1080,11 @@ fn resume_team(database: &str, fields: &[String]) -> Result<String, String> {
         }
     };
     let repo = invocation.positional[0].clone();
-    let runner = TeamRunner::new(database, repo, invocation.options);
+    let host = LaunchSpec::new(
+        std::env::current_exe().map_err(|e| format!("locate am executable: {e}"))?,
+        Vec::new(),
+    )?;
+    let runner = TeamRunner::new(database, repo, invocation.options).with_bridge_host(host);
     let runtime = team_runtime()?;
     let outcome = runtime
         .block_on(runner.resume(root))
@@ -794,6 +1097,33 @@ fn run(args: &[String]) -> Result<String, String> {
         .first()
         .map(String::as_str)
         .ok_or_else(|| usage().to_string())?;
+    match command {
+        "init" => return init_project(args.get(1).map(String::as_str)),
+        "agent" => match args.get(1).map(String::as_str) {
+            Some("add") => return agent_add(&args[2..]),
+            Some("list") => {
+                let (_, database) = project_database()?;
+                return registry_list(
+                    database.to_str().ok_or("project state path is not UTF-8")?,
+                    None,
+                );
+            }
+            _ => return Err("usage: am agent <add|list>".into()),
+        },
+        "doctor" => return doctor(),
+        "run" => {
+            let (root, database) = project_database()?;
+            let objective = args.get(1..).unwrap_or_default().join(" ");
+            if objective.trim().is_empty() {
+                return Err("am run requires an objective".into());
+            }
+            return run_team(
+                database.to_str().ok_or("project state path is not UTF-8")?,
+                &[root.display().to_string(), objective],
+            );
+        }
+        _ => {}
+    }
     let database = args.get(1).ok_or_else(|| usage().to_string())?;
     let mut board = open(database)?;
     match command {
@@ -984,6 +1314,11 @@ fn main() {
         println!("am {}", env!("CARGO_PKG_VERSION"));
         return;
     }
+    if matches!(args.as_slice(), [internal, bridge] if internal == "__internal" && bridge == "codex-mcp")
+    {
+        run_codex_mcp_bridge();
+        return;
+    }
     match run(&args) {
         Ok(output) => println!("{output}"),
         Err(error) => {
@@ -995,11 +1330,17 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::run;
+    use super::{run, usage};
 
     #[test]
     fn rejects_unknown_command() {
         assert!(run(&["unknown".into(), ":memory:".into()]).is_err());
+    }
+
+    #[test]
+    fn normal_usage_does_not_advertise_the_internal_bridge() {
+        assert!(!usage().contains("__internal"));
+        assert!(!usage().contains("codex-mcp"));
     }
 
     #[test]

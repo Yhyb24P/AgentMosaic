@@ -62,10 +62,12 @@ async fn scheduler_result_is_the_extracted_final_agent_message() {
     let driver = PersistedCodexTeamDriver::new(
         CodexTeamDriverConfig {
             command: MOCK.into(),
+            args: Vec::new(),
             working_directory: working_directory.clone(),
             // The mock ignores `-c` overrides, so any existing file satisfies
             // the configuration guard.
             mcp_command: PathBuf::from(MOCK),
+            mcp_args: Vec::new(),
             artifact_paths: Vec::new(),
             max_events: 16,
             overrides: Vec::new(),

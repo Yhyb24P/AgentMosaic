@@ -51,44 +51,28 @@ Init -> Observe -> Model Decision -> Tool Execution -> Observe -> ...
 cargo build --release --workspace
 ```
 
-产物为 `target/release/am`（唯一的一等用户命令）与 `target/release/am-codex-mcp`
-（Codex app-server MCP bridge）。只读看板面板通过 `am tui <database>` 进入，没有
-独立的公共 TUI 二进制。
+产物为 `target/release/am`，即唯一的产品二进制。Codex MCP bridge 是固定的隐藏内部
+命令，不单独配置或安装。
 
 ## 快速开始 — 一个异构团队目标
 
-Codex 是参考的高智能 Lead，Qwen Code 是参考的 Worker。一个目标进，一个持久化的
-团队结果出。
+一个目标进，一个持久化的团队结果出。AgentMosaic 管理角色、机器协议和 LaunchSpec；
+外部 runtime 管理自己的登录、凭据、provider、模型和 launcher profile。
 
 ```bash
-# 1. 注册 Codex Lead（参考 Reasoner，codex-app-server 驱动）
-am register ./team.db codex-lead codex-lead reasoner \
-  codex-app-server codex - 1 codex,lead - \
-  '{"mcp_command":"/abs/path/to/target/release/am-codex-mcp","model":"gpt-5.5","max_events":200,"overrides":["model=\"gpt-5.5\"","model_reasoning_effort=\"low\""]}'
+# 1. 初始化项目本地状态
+am init
 
-# 2. 注册 Qwen Code Worker 与 utility agent（ACP 驱动）
-am register ./team.db qwen-worker qwen-worker worker \
-  acp qwen --acp 1 - - \
-  '{"auth_method":"openai","timeout_seconds":600,"artifact_paths":["worker.txt"]}'
-am register ./team.db qwen-utility qwen-utility utility \
-  acp qwen --acp 1 - - '{"auth_method":"openai","timeout_seconds":600}'
+# 2. 注册外部 runtime 的不透明 argv
+am agent add lead --role reasoner --adapter codex-app-server -- codex -ds
+am agent add worker --role worker --adapter acp -- qwen -ds --acp
+am agent add utility --role utility --adapter acp -- aweswitch qw --acp
 
-# 3. 用一个目标跑完整的团队流程
-am run-team ./team.db /path/to/repo "生成 worker.txt 并总结"
+# 3. 不管理认证地检查就绪状态
+am doctor
 
-# 4. 只读的持久化看板视图（不启动 runtime）
-am status ./team.db
-am registry ./team.db
-am tui ./team.db                    # 只读面板；q 退出
-
-# 5. 持久化最终答案及其精确引用
-am final ./team.db 1
-am artifact ./team.db 2
-am binding ./team.db 2
-
-# 6. 中断后：先关闭中断的 attempt，再 resume
-am recover-all ./team.db
-am resume-team ./team.db /path/to/repo 1
+# 4. 用一个目标跑完整的团队流程
+am run "生成 worker.txt 并总结"
 ```
 
 `run-team` 与 `resume-team` 都接受：
@@ -100,7 +84,7 @@ am resume-team ./team.db /path/to/repo 1
 --max-retries N     单 agent 在重新指派前的重试上限
 ```
 
-`register` 字段语法（尾部 8 到 10 个字段）：
+高级兼容接口 `register` 的字段语法（尾部 8 到 10 个字段）：
 
 ```text
 am register <database> <agent-id> <name> <tier> <driver-kind> <executable> <driver-args> <max-concurrency> <tags> [<runtime-version-or->] [<driver-config-json-or->]
@@ -113,11 +97,8 @@ am register <database> <agent-id> <name> <tier> <driver-kind> <executable> <driv
 - 可选的第 10 个字段是一个非机密 JSON 对象，或 `-`。看起来像凭据的键
   （`token`、`key`、`secret`、`password`、`endpoint`）会被拒绝，因此凭据不可能
   经此写入。
-  - `acp`：`auth_method`、`timeout_seconds`、`max_prompt_bytes`、
-    `max_result_bytes`、`artifact_paths`。
-  - `codex-app-server`：`mcp_command`（必需，必须是一个已存在的文件，即构建出的
-    `am-codex-mcp`）、`artifact_paths`、`max_events`、`overrides`；当该 agent 是
-    本次运行的 Lead 时还会读取 `model`、`max_prompt_bytes`、`max_answer_bytes`。
+  - 旧 ACP `auth_method` 与旧 Codex `mcp_command` 仅为已有 v11 board 的兼容字段；
+    正常 onboarding 不写入它们。新产品路径自动使用内部 MCP bridge。
 
 `submit` 只创建一个 pending 看板任务，不是一次团队运行；`run-team` 才是团队入口。
 所有命令直接操作权威 SQLite board。

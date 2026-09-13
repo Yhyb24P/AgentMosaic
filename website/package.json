@@ -1,0 +1,1 @@
+{"name":"agentmosaic-site","private":true,"devDependencies":{"wrangler":"4.38.0"},"scripts":{"check":"wrangler deploy --dry-run"}}

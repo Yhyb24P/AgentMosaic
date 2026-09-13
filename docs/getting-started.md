@@ -9,41 +9,28 @@ one durable team result out.
 cargo build --release --workspace
 ```
 
-This produces the two shipping binaries:
+This produces `target/release/am`, the only shipped product binary. Its Codex
+MCP bridge is a fixed internal command, never a separately installed binary.
 
-- `target/release/am` — the only first-class user command.
-- `target/release/am-codex-mcp` — the Codex app-server MCP bridge used by the Codex Lead.
+## Initialize and add Agents
 
-The read-only board dashboard is reached through `am tui <database>`; there is no
-separate public TUI binary.
-
-## Register Agents
-
-AgentMosaic is driven by a durable registry. Register the reference Codex Lead, the Qwen
-Code Worker, and a utility agent:
+AgentMosaic keeps one project-local durable registry. An external runtime retains
+its own login, credentials, provider, model and launcher profile.
 
 ```bash
-# 1. Codex Lead (reference Reasoner, codex-app-server driver)
-am register ./team.db codex-lead codex-lead reasoner \
-  codex-app-server codex - 1 codex,lead - \
-  '{"mcp_command":"/abs/path/to/target/release/am-codex-mcp","model":"gpt-5.5","max_events":200,"overrides":["model=\"gpt-5.5\"","model_reasoning_effort=\"low\""]}'
-
-# 2. Qwen Code Worker and a utility agent (ACP driver)
-am register ./team.db qwen-worker qwen-worker worker \
-  acp qwen --acp 1 - - \
-  '{"auth_method":"openai","timeout_seconds":600,"artifact_paths":["worker.txt"]}'
-am register ./team.db qwen-utility qwen-utility utility \
-  acp qwen --acp 1 - - '{"auth_method":"openai","timeout_seconds":600}'
+am init
+am agent add lead --role reasoner --adapter codex-app-server -- codex -ds
+am agent add worker --role worker --adapter acp -- qwen -ds --acp
+am agent add utility --role utility --adapter acp -- aweswitch qw --acp
+am doctor
 ```
 
-`mcp_command` must be the absolute path of the built `am-codex-mcp` bridge. The optional
-10th field is one non-secret JSON object of driver options; a key that looks like a
-credential (`token`, `key`, `secret`, `password`, `endpoint`) is refused.
+Everything after `--` is persisted opaque argv. Do not put credentials in it.
 
 ## Run one objective
 
 ```bash
-am run-team ./team.db /path/to/repo "produce worker.txt and summarize it"
+am run "produce worker.txt and summarize it"
 ```
 
 `am run-team` opens/migrates the board, loads the persisted agent registry, builds the

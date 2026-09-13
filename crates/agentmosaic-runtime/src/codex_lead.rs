@@ -25,7 +25,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::{CodexAppServer, CodexBridgeError, CodexBridgeEvent};
+use crate::{CodexAppServer, CodexBridgeError, CodexBridgeEvent, LaunchSpec};
 
 /// The Lead only reasons: its thread may not write the workspace and may never
 /// raise an approval prompt.
@@ -77,8 +77,8 @@ const DEVELOPER_INSTRUCTIONS: &str = concat!(
 /// Configuration for the resident Codex Lead brain.
 #[derive(Debug, Clone)]
 pub struct CodexLeadConfig {
-    /// The Codex executable to spawn as `codex app-server --stdio`.
-    pub command: String,
+    /// The configured runtime launch; the adapter appends `app-server --stdio`.
+    pub launch: LaunchSpec,
     /// The directory the Lead thread runs in.
     pub working_directory: PathBuf,
     /// An optional model override (`-c model="..."`).
@@ -95,9 +95,7 @@ pub struct CodexLeadConfig {
 
 impl CodexLeadConfig {
     pub fn validate(&self) -> Result<(), String> {
-        if self.command.trim().is_empty() {
-            return Err("Codex executable is required".into());
-        }
+        self.launch.validate()?;
         if !self.working_directory.is_dir() {
             return Err("Codex lead working directory must exist".into());
         }
@@ -162,7 +160,7 @@ impl CodexLeadBrain {
                 LeadBrainError::Unavailable("Codex lead working directory is not UTF-8".into())
             })?
             .to_string();
-        let mut server = CodexAppServer::spawn_with_overrides(&self.config.command, &overrides)
+        let mut server = CodexAppServer::spawn_launch(self.config.launch.clone(), &overrides)
             .map_err(|e| unavailable("spawn the codex app-server", e))?;
         let started = server
             .initialize("agentmosaic-codex-lead", "0.1")
@@ -622,10 +620,11 @@ mod tests {
     use agentmosaic_team::{AgentMessage, AgentTaskResult, ArtifactMeta, LeadContext};
 
     use super::{CodexLeadBrain, CodexLeadConfig};
+    use crate::LaunchSpec;
 
     fn config(max_prompt_bytes: usize) -> CodexLeadConfig {
         CodexLeadConfig {
-            command: "codex".into(),
+            launch: LaunchSpec::new("codex", Vec::new()).unwrap(),
             working_directory: PathBuf::from("."),
             model: None,
             overrides: Vec::new(),
@@ -701,7 +700,10 @@ mod tests {
     #[test]
     fn config_fails_closed_before_any_process_starts() {
         let mut broken = config(4096);
-        broken.command = "  ".into();
+        broken.launch = LaunchSpec {
+            program: "  ".into(),
+            args: Vec::new(),
+        };
         assert!(broken.validate().is_err());
         broken = config(4096);
         broken.working_directory = PathBuf::from("definitely-not-a-directory");

@@ -41,7 +41,8 @@ use agentmosaic_team::{AgentDriver, DriverKind};
 use serde_json::{Map, Value};
 
 use crate::{
-    AcpWorkerConfig, CodexTeamDriverConfig, PersistedAcpWorkerDriver, PersistedCodexTeamDriver,
+    AcpWorkerConfig, CodexTeamDriverConfig, LaunchSpec, PersistedAcpWorkerDriver,
+    PersistedCodexTeamDriver,
 };
 
 /// Default bound for one ACP task.
@@ -118,6 +119,7 @@ impl std::error::Error for DriverFactoryError {}
 pub struct DriverFactory {
     database: PathBuf,
     repo: PathBuf,
+    bridge_host: Option<LaunchSpec>,
 }
 
 impl DriverFactory {
@@ -125,7 +127,15 @@ impl DriverFactory {
         Self {
             database: database.into(),
             repo: repo.into(),
+            bridge_host: None,
         }
+    }
+
+    /// The public CLI injects its own executable here. Generic runtime code
+    /// never assumes `current_exe()` is the AgentMosaic product binary.
+    pub fn with_bridge_host(mut self, host: LaunchSpec) -> Self {
+        self.bridge_host = Some(host);
+        self
     }
 
     /// Build a driver for every record. Every record must produce exactly one
@@ -180,8 +190,7 @@ impl DriverFactory {
         options: &AgentOptions,
     ) -> Result<Arc<dyn AgentDriver>, DriverFactoryError> {
         let agent = record.id.clone();
-        let command = executable(record)?;
-        let args = driver_args(record)?;
+        let launch = launch_spec(record)?;
         let timeout_seconds = options
             .timeout_seconds
             .unwrap_or(DEFAULT_ACP_TIMEOUT_SECONDS);
@@ -208,8 +217,8 @@ impl DriverFactory {
         }
         let config = AcpWorkerConfig {
             runtime_kind: "acp".into(),
-            command: PathBuf::from(command),
-            args,
+            command: launch.program,
+            args: launch.args,
             auth_method: options.auth_method.clone(),
             working_directory: self.repo.clone(),
             timeout: Duration::from_secs(timeout_seconds),
@@ -235,16 +244,29 @@ impl DriverFactory {
         options: &AgentOptions,
     ) -> Result<Arc<dyn AgentDriver>, DriverFactoryError> {
         let agent = record.id.clone();
-        let command = executable(record)?;
-        let mcp_command = options
-            .mcp_command
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| DriverFactoryError::InvalidDriverConfig {
+        let launch = launch_spec(record)?;
+        let mcp_launch = match &self.bridge_host {
+            Some(host) => LaunchSpec::new(
+                host.program.clone(),
+                vec!["__internal".into(), "codex-mcp".into()],
+            )
+            .map_err(|detail| DriverFactoryError::Driver {
                 agent: agent.clone(),
-                detail: "codex-app-server requires a non-empty `mcp_command`".into(),
-            })?;
+                detail,
+            })?,
+            None => {
+                let legacy = options.mcp_command.as_deref().map(str::trim).filter(|value| !value.is_empty())
+                    .ok_or_else(|| DriverFactoryError::InvalidDriverConfig {
+                        agent: agent.clone(), detail: "codex-app-server requires an injected AM bridge host (legacy mcp_command is accepted only for compatibility)".into(),
+                    })?;
+                LaunchSpec::new(legacy, Vec::new()).map_err(|detail| {
+                    DriverFactoryError::Driver {
+                        agent: agent.clone(),
+                        detail,
+                    }
+                })?
+            }
+        };
         let max_events = options.max_events.unwrap_or(DEFAULT_CODEX_MAX_EVENTS);
         if max_events == 0 {
             return Err(DriverFactoryError::InvalidDriverConfig {
@@ -256,9 +278,11 @@ impl DriverFactory {
             validate_artifact_path(&agent, path)?;
         }
         let config = CodexTeamDriverConfig {
-            command,
+            command: launch.program_display(),
+            args: launch.args,
             working_directory: self.repo.clone(),
-            mcp_command: PathBuf::from(mcp_command),
+            mcp_command: mcp_launch.program,
+            mcp_args: mcp_launch.args,
             artifact_paths: options.artifact_paths.clone(),
             max_events,
             overrides: options.overrides.clone(),
@@ -270,6 +294,26 @@ impl DriverFactory {
             })?;
         Ok(Arc::new(driver))
     }
+}
+
+/// Derive the sole external process launch representation from a durable v11
+/// registry row. No additional persisted launch configuration exists.
+pub(crate) fn launch_spec(record: &AgentRegistryRecord) -> Result<LaunchSpec, DriverFactoryError> {
+    let args = driver_args(record)?;
+    LaunchSpec::from_registry(record.executable.as_deref(), args).map_err(|detail| {
+        if record
+            .executable
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            DriverFactoryError::MissingExecutable(record.id.clone())
+        } else {
+            DriverFactoryError::Driver {
+                agent: record.id.clone(),
+                detail,
+            }
+        }
+    })
 }
 
 /// The non-secret driver options one `driver_config_json` object may carry.
@@ -411,16 +455,6 @@ fn string_array(
             format!("`{key}` must be an array of strings"),
         )),
     }
-}
-
-fn executable(record: &AgentRegistryRecord) -> Result<String, DriverFactoryError> {
-    record
-        .executable
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| DriverFactoryError::MissingExecutable(record.id.clone()))
 }
 
 fn driver_args(record: &AgentRegistryRecord) -> Result<Vec<String>, DriverFactoryError> {

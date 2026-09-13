@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use agentmosaic_runtime::{CodexLeadBrain, CodexLeadConfig};
+use agentmosaic_runtime::{CodexLeadBrain, CodexLeadConfig, LaunchSpec};
 use agentmosaic_team::{
     AgentMessage, AgentTaskResult, ArtifactMeta, LeadBrain, LeadBrainError, LeadContext,
     LeadDecision, TaskKind,
@@ -72,7 +72,7 @@ impl Harness {
         );
         let brain = CodexLeadBrain::new(
             CodexLeadConfig {
-                command: MOCK.to_string(),
+                launch: LaunchSpec::new(MOCK, Vec::new()).unwrap(),
                 working_directory: root.clone(),
                 model: None,
                 overrides,
@@ -99,7 +99,7 @@ impl Harness {
         let root = unique_root();
         let brain = CodexLeadBrain::new(
             CodexLeadConfig {
-                command: root.join("missing-codex").display().to_string(),
+                launch: LaunchSpec::new(root.join("missing-codex"), Vec::new()).unwrap(),
                 working_directory: root.clone(),
                 model: None,
                 overrides: Vec::new(),

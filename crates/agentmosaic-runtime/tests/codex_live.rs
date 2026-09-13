@@ -1022,8 +1022,10 @@ async fn real_scheduler_runs_qwen_worker_and_utility_on_one_board() {
     let codex = PersistedCodexTeamDriver::new(
         CodexTeamDriverConfig {
             command: "codex".into(),
+            args: Vec::new(),
             working_directory: cwd.clone(),
             mcp_command: mcp,
+            mcp_args: Vec::new(),
             artifact_paths: vec!["lead-final.txt".into()],
             max_events: 200,
             overrides: low_cost_codex_overrides(),

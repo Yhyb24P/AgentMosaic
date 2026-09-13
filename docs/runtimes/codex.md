@@ -5,24 +5,16 @@ Codex is the reference high-intelligence Lead. It runs through the
 
 ## Registration
 
-An Agent is registered with driver kind `codex-app-server` and a non-secret driver
-config JSON object:
+An Agent is registered with the project-aware command and its opaque external
+launch argv:
 
-```json
-{
-  "mcp_command": "/abs/path/to/target/release/am-codex-mcp",
-  "model": "gpt-5.5",
-  "max_events": 200,
-  "artifact_paths": ["lead-final.txt"],
-  "overrides": ["model=\"gpt-5.5\"", "model_reasoning_effort=\"low\""]
-}
+```bash
+am agent add lead --role reasoner --adapter codex-app-server -- codex -ds
 ```
 
-- `mcp_command` is required and must point at the built `am-codex-mcp` bridge.
-- `overrides` are Codex config overrides; the driver appends the MCP bridge wiring for
-  the run.
-- When the Agent is the run's Lead, `model`, `max_prompt_bytes` and `max_answer_bytes`
-  are also read.
+AgentMosaic does not select a Codex model, account, provider, credentials or
+launcher profile. Existing v11 records containing `mcp_command` remain readable,
+but new product paths do not require or write it.
 
 ## How it runs
 
@@ -36,10 +28,12 @@ match `contracts/lead_decision.schema.json` fails closed after at most one bound
 correction turn. A Lead brain failure propagates and the root task cannot become
 `succeeded`.
 
-## The `am-codex-mcp` bridge
+## Internal MCP bridge
 
-`am-codex-mcp` is a narrow stdio MCP bridge. The driver wires it in as the MCP server
-`agentmosaic` with per-task environment:
+`am __internal codex-mcp` is a fixed narrow stdio MCP bridge. The normal CLI
+injects its own executable as the bridge host; users never configure a second
+binary. The driver wires it in as the MCP server `agentmosaic` with per-task
+environment:
 
 ```text
 AGENTMOSAIC_DB          the board database path

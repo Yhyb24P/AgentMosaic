@@ -9,7 +9,7 @@
 #   SHA256SUMS.txt
 #   release-manifest.json
 #
-# The tarball contains the two shipping binaries `am` and `am-codex-mcp`, the project
+# The tarball contains the sole shipping binary `am`, the project
 # LICENSE, both READMEs and the third-party license report. The TUI is reached through
 # `am tui` and has no separate public binary. Test/mock binaries are not packaged.
 #
@@ -38,7 +38,6 @@ rm -rf "${STAGE_ROOT}"
 mkdir -p "${PKG}"
 
 install -m 0755 "${RELEASE_DIR}/am"           "${PKG}/am"
-install -m 0755 "${RELEASE_DIR}/am-codex-mcp" "${PKG}/am-codex-mcp"
 install -m 0644 "${SOURCE_DIR}/LICENSE"             "${PKG}/LICENSE"
 install -m 0644 "${SOURCE_DIR}/README.md"           "${PKG}/README.md"
 install -m 0644 "${SOURCE_DIR}/README.zh-CN.md"     "${PKG}/README.zh-CN.md"
@@ -55,7 +54,6 @@ tar --create --gzip \
     "${NAME}"
 
 CLI_SHA="$(sha256sum "${PKG}/am"           | awk '{print $1}')"
-MCP_SHA="$(sha256sum "${PKG}/am-codex-mcp" | awk '{print $1}')"
 TARBALL_SHA="$(sha256sum "${OUT_DIR}/${NAME}.tar.gz" | awk '{print $1}')"
 
 cat > "${OUT_DIR}/release-manifest.json" <<JSON
@@ -68,10 +66,7 @@ cat > "${OUT_DIR}/release-manifest.json" <<JSON
   "rustc": "${RUSTC_VERSION}",
   "asset": "${NAME}.tar.gz",
   "asset_sha256": "${TARBALL_SHA}",
-  "binaries": {
-    "am": "${CLI_SHA}",
-    "am-codex-mcp": "${MCP_SHA}"
-  },
+  "binaries": { "am": "${CLI_SHA}" },
   "public_release_ready": false
 }
 JSON

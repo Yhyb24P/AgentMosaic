@@ -155,6 +155,32 @@ impl AcpWorkerDriver {
         }
         Ok(Self { config })
     }
+
+    /// Verify that an ACP runtime can initialize and open the smallest safe
+    /// session.  This deliberately does not authenticate, send a prompt, or
+    /// execute a user task: it is the bounded protocol check used by `am
+    /// doctor`.
+    pub async fn probe_readiness(&self) -> Result<(), AcpWorkerError> {
+        let agent =
+            AcpAgent::new(AcpAgentConfig::new(&self.config.command).args(self.config.args.clone()));
+        let cwd = self.config.working_directory.clone();
+        let run =
+            Client
+                .builder()
+                .name("agentmosaic-doctor")
+                .connect_with(agent, async move |cx| {
+                    cx.build_session(&cwd)
+                        .block_task()
+                        .start_session()
+                        .await
+                        .map(|_session| ())
+                });
+        tokio::time::timeout(self.config.timeout, run)
+            .await
+            .map_err(|_| AcpWorkerError::TimedOut)?
+            .map_err(|error| AcpWorkerError::Protocol(error.to_string()))
+    }
+
     pub async fn run(&self, task: &AgentTask) -> Result<(String, String), AcpWorkerError> {
         let (_cancellation, mut listener) = AcpCancellation::new();
         self.run_with_cancellation(task, &mut listener).await

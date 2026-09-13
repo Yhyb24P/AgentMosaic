@@ -7,7 +7,9 @@ use agentmosaic_storage::{RuntimeCollaborationRecord, SqliteTaskBoard};
 use agentmosaic_team::{TaskBoard, TaskStatus};
 use serde_json::{json, Value};
 
-fn main() {
+/// Run the fixed stdio bridge. This is intentionally not a general command
+/// dispatcher; `am __internal codex-mcp` is its only product entrypoint.
+pub fn run_codex_mcp_bridge() {
     let db = std::env::var("AGENTMOSAIC_DB").expect("AGENTMOSAIC_DB required");
     let task = std::env::var("AGENTMOSAIC_TASK_ID")
         .expect("AGENTMOSAIC_TASK_ID")

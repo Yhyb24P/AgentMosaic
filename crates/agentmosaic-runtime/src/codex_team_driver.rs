@@ -19,8 +19,11 @@ use crate::{CodexAppServer, CodexBridgeEvent};
 #[derive(Debug, Clone)]
 pub struct CodexTeamDriverConfig {
     pub command: String,
+    /// Base argv from the durable LaunchSpec, preserved before adapter args.
+    pub args: Vec<String>,
     pub working_directory: PathBuf,
     pub mcp_command: PathBuf,
+    pub mcp_args: Vec<String>,
     pub artifact_paths: Vec<String>,
     pub max_events: usize,
     pub overrides: Vec<String>,
@@ -149,6 +152,7 @@ impl PersistedCodexTeamDriver {
                 "mcp_servers.agentmosaic.command={:?}",
                 self.config.mcp_command.display().to_string()
             ),
+            format!("mcp_servers.agentmosaic.args={:?}", self.config.mcp_args),
             format!(
                 "mcp_servers.agentmosaic.env.AGENTMOSAIC_DB={:?}",
                 self.database.display().to_string()
@@ -163,8 +167,11 @@ impl PersistedCodexTeamDriver {
             ),
             format!("mcp_servers.agentmosaic.env.AGENTMOSAIC_ATTEMPT=\"{attempt}\""),
         ]);
-        let mut client = CodexAppServer::spawn_with_overrides(&self.config.command, &overrides)
-            .map_err(|e| e.to_string())?;
+        let mut client = CodexAppServer::spawn_launch(
+            crate::LaunchSpec::new(&self.config.command, self.config.args.clone())?,
+            &overrides,
+        )
+        .map_err(|e| e.to_string())?;
         let outcome = (|| {
             client
                 .initialize("agentmosaic-scheduler-codex", "0.1")
@@ -276,8 +283,10 @@ mod tests {
     fn invalid_driver_config_rejects_before_runtime_launch() {
         let config = CodexTeamDriverConfig {
             command: String::new(),
+            args: Vec::new(),
             working_directory: PathBuf::from("."),
             mcp_command: PathBuf::from("missing"),
+            mcp_args: Vec::new(),
             artifact_paths: vec!["../escape".into()],
             max_events: 0,
             overrides: Vec::new(),

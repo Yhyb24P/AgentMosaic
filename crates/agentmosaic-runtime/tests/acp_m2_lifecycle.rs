@@ -68,6 +68,17 @@ fn task_for(id: u64) -> AgentTask {
 }
 
 #[tokio::test]
+async fn readiness_probe_initializes_and_opens_a_session_without_a_prompt() {
+    let cwd = mock_cwd("readiness");
+    let driver = AcpWorkerDriver::new(valid_config(&cwd, "sync")).expect("valid mock driver");
+    driver
+        .probe_readiness()
+        .await
+        .expect("mock accepts a safe initialize and session check");
+    let _ = std::fs::remove_dir_all(&cwd);
+}
+
+#[tokio::test]
 async fn invalid_configs_are_rejected_before_spawn() {
     let cwd = mock_cwd("invalid");
     let mut cfg = valid_config(&cwd, "sync");

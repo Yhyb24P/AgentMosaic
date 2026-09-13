@@ -48,8 +48,8 @@ bins = {
 }
 if "am" not in bins:
     raise SystemExit("missing public `am` binary target")
-if "am-codex-mcp" not in bins:
-    raise SystemExit("missing `am-codex-mcp` helper target")
+if "am-codex-mcp" in bins:
+    raise SystemExit("retired `am-codex-mcp` must not be a product binary target")
 PY
 
 echo 'identity gate: PASS'

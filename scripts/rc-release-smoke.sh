@@ -1,8 +1,8 @@
 #!/bin/bash
 # Copied release-binary real heterogeneous-team smoke (RC qualification, R12).
 #
-# Copies the release CLI and the AgentMosaic Codex MCP bridge OUT of the source tree into a
-# scratch directory, registers a real Codex Lead and real Qwen Worker/Utility agents
+# Copies the sole release CLI OUT of the source tree into a scratch directory,
+# registers a real Codex Lead and real Qwen Worker/Utility agents
 # through the public CLI, issues exactly one `run-team` for one objective, and reads the
 # durable result back in separate processes.
 #
@@ -19,27 +19,22 @@ RELEASE_DIR="${1:-target/release}"
 WORK_DIR="${2:-$(mktemp -d "${TMPDIR:-/tmp}/agentmosaic-rc-smoke.XXXXXX")}"
 
 CLI_SRC="${RELEASE_DIR}/am"
-MCP_SRC="${RELEASE_DIR}/am-codex-mcp"
-for binary in "${CLI_SRC}" "${MCP_SRC}"; do
-  if [ ! -x "${binary}" ]; then
-    echo "missing release binary ${binary}; run: cargo build --release --workspace" >&2
-    exit 2
-  fi
-done
+if [ ! -x "${CLI_SRC}" ]; then
+  echo "missing release binary ${CLI_SRC}; run: cargo build --release --workspace" >&2
+  exit 2
+fi
 
 CLI="${WORK_DIR}/am"
-MCP="${WORK_DIR}/am-codex-mcp"
 DB="${WORK_DIR}/team.db"
 REPO="${WORK_DIR}/repo"
 LOG="${WORK_DIR}/smoke.log"
 mkdir -p "${WORK_DIR}" "${REPO}"
 cp "${CLI_SRC}" "${CLI}"
-cp "${MCP_SRC}" "${MCP}"
 
 TOKEN="RCTOK-$(openssl rand -hex 12)"
-CODEX_CFG=$(printf '{"mcp_command":"%s","artifact_paths":["lead-final.txt"],"max_events":200,"model":"gpt-5.5","overrides":["model=\\"gpt-5.5\\"","model_reasoning_effort=\\"low\\""]}' "${MCP}")
-QWEN_CFG='{"auth_method":"openai","timeout_seconds":600,"max_result_bytes":4096,"artifact_paths":["worker.txt"]}'
-UTIL_CFG='{"auth_method":"openai","timeout_seconds":600,"max_result_bytes":4096}'
+CODEX_CFG='{"artifact_paths":["lead-final.txt"],"max_events":200}'
+QWEN_CFG='{"timeout_seconds":600,"max_result_bytes":4096,"artifact_paths":["worker.txt"]}'
+UTIL_CFG='{"timeout_seconds":600,"max_result_bytes":4096}'
 
 cd "${REPO}"
 git init --quiet .
@@ -54,7 +49,6 @@ OBJECTIVE="Objective: in this repository, make the file worker.txt contain exact
 {
   echo "### copied binaries outside the source tree: ${WORK_DIR}"
   echo "### cli sha256: $(sha256sum "${CLI}" | cut -d' ' -f1)"
-  echo "### mcp sha256: $(sha256sum "${MCP}" | cut -d' ' -f1)"
   echo "### token: ${TOKEN}"
   echo
   echo "### register"

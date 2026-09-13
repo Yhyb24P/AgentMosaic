@@ -31,8 +31,8 @@ use agentmosaic_team::{
 };
 use rusqlite::Connection;
 
-use crate::driver_factory::{parse_agent_options, DriverFactory, DriverFactoryError};
-use crate::{CodexLeadBrain, CodexLeadConfig};
+use crate::driver_factory::{launch_spec, parse_agent_options, DriverFactory, DriverFactoryError};
+use crate::{CodexLeadBrain, CodexLeadConfig, LaunchSpec};
 
 /// Default bound for one automatic team run.
 pub const DEFAULT_MAX_ROUNDS: u32 = 8;
@@ -188,6 +188,7 @@ pub struct TeamRunner {
     database: PathBuf,
     repo: PathBuf,
     options: TeamRunOptions,
+    bridge_host: Option<LaunchSpec>,
 }
 
 impl TeamRunner {
@@ -200,7 +201,13 @@ impl TeamRunner {
             database: database.into(),
             repo: repo.into(),
             options,
+            bridge_host: None,
         }
+    }
+
+    pub fn with_bridge_host(mut self, host: LaunchSpec) -> Self {
+        self.bridge_host = Some(host);
+        self
     }
 
     /// Run `objective` to a durable final result: create the root, drive the
@@ -385,9 +392,12 @@ impl TeamRunner {
         &self,
         records: &[AgentRegistryRecord],
     ) -> Result<BTreeMap<String, Arc<dyn AgentDriver>>, TeamRunnerError> {
-        DriverFactory::new(&self.database, &self.repo)
-            .build(records)
-            .map_err(TeamRunnerError::Driver)
+        let factory = DriverFactory::new(&self.database, &self.repo);
+        let factory = match &self.bridge_host {
+            Some(host) => factory.with_bridge_host(host.clone()),
+            None => factory,
+        };
+        factory.build(records).map_err(TeamRunnerError::Driver)
     }
 
     /// The resident Lead brain for `lead`, configured from the Lead's own
@@ -400,14 +410,14 @@ impl TeamRunner {
         candidates: Vec<&str>,
     ) -> Result<CodexLeadBrain, TeamRunnerError> {
         let options = parse_agent_options(&lead.id, lead.driver_config_json.as_deref())?;
-        let command = lead
-            .executable
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| TeamRunnerError::MissingLeadExecutable(lead.id.clone()))?;
+        let launch = launch_spec(lead).map_err(|error| match error {
+            DriverFactoryError::MissingExecutable(_) => {
+                TeamRunnerError::MissingLeadExecutable(lead.id.clone())
+            }
+            other => TeamRunnerError::Driver(other),
+        })?;
         let config = CodexLeadConfig {
-            command: command.to_string(),
+            launch,
             working_directory: self.repo.clone(),
             model: options.model.clone(),
             overrides: options.overrides.clone(),
