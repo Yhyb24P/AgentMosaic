@@ -1,4 +1,0 @@
-/home/yhshy/.npm-global/bin/qwen
-0.23.3
-/home/yhshy/.local/bin/codex
-codex-cli 0.154.0
