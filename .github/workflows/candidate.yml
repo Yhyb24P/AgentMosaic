@@ -4,7 +4,7 @@ name: rust-candidate
 #
 # Real authenticated Codex + Qwen Code E2E is NOT run here: CI has no model
 # credentials. That is a local reference-profile gate, performed through the
-# public CLI `agent-code-cli run-team` on a machine where `codex` and `qwen` are
+# public CLI `am run-team` on a machine where `codex` and `qwen` are
 # already authenticated.
 #
 # Readiness claims are separate and must never be conflated:
@@ -55,14 +55,14 @@ jobs:
       - name: Diff hygiene
         run: git diff --check
       - name: Authentic historical v8 migration
-        run: cargo test -p agent-code-storage --test schema_v8_migration
+        run: cargo test -p agentmosaic-storage --test schema_v8_migration
       - name: Copied-binary board smoke
         run: |
           set -euo pipefail
           work="$(mktemp -d)"
-          cp target/release/agent-code-cli "${work}/agent-code-cli"
+          cp target/release/am "${work}/am"
           cd "${work}"
-          ./agent-code-cli --help > /dev/null
-          ./agent-code-cli --version > /dev/null
-          ./agent-code-cli submit ./board.db utility "deterministic smoke task" > /dev/null
-          ./agent-code-cli status ./board.db | grep -q "task=1 status=pending"
+          ./am --help > /dev/null
+          ./am --version > /dev/null
+          ./am submit ./board.db utility "deterministic smoke task" > /dev/null
+          ./am status ./board.db | grep -q "task=1 status=pending"

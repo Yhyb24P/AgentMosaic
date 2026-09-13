@@ -2,9 +2,9 @@ name: rust
 
 on:
   push:
-    branches: [v2/rust-agent-team]
+    branches: [main]
   pull_request:
-    branches: [v2/rust-agent-team]
+    branches: [main]
 
 jobs:
   rust:
@@ -15,6 +15,8 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Identity gate
+        run: scripts/ci/check_identity.sh
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy

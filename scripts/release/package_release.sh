@@ -1,42 +1,50 @@
 #!/usr/bin/env bash
-# Package the v0.1.0 release assets (P9).
+# Package AgentMosaic release assets from binaries already built.
 #
-# Builds, from binaries and files already present:
-#   research-agent-system-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+# usage: package_release.sh <release-dir> <source-dir> <out-dir> \
+#            [release-commit] [target] [executable-candidate]
+#
+# Produces, under <out-dir>:
+#   agentmosaic-v<version>-<target>.tar.gz
 #   SHA256SUMS.txt
 #   release-manifest.json
 #
-# The tarball intentionally contains only the shipping binaries, the project
-# LICENSE, both READMEs and the third-party license report. The workspace also
-# builds `acp_m2_mock` and `codex_bridge_mock`; those are test/mock binaries and
-# are deliberately NOT packaged.
+# The tarball contains the two shipping binaries `am` and `am-codex-mcp`, the project
+# LICENSE, both READMEs and the third-party license report. The TUI is reached through
+# `am tui` and has no separate public binary. Test/mock binaries are not packaged.
+#
+# This script never creates a git tag or a GitHub Release. Publishing a release is a
+# separate, explicitly authorized action.
 set -euo pipefail
 
-RELEASE_DIR="${1:?usage: package_release.sh <release-dir> <source-dir> <out-dir> [release-commit]}"
-SOURCE_DIR="${2:?usage: package_release.sh <release-dir> <source-dir> <out-dir> [release-commit]}"
-OUT_DIR="${3:?usage: package_release.sh <release-dir> <source-dir> <out-dir> [release-commit]}"
+RELEASE_DIR="${1:?usage: package_release.sh <release-dir> <source-dir> <out-dir> [release-commit] [target] [executable-candidate]}"
+SOURCE_DIR="${2:?usage: package_release.sh <release-dir> <source-dir> <out-dir> [release-commit] [target] [executable-candidate]}"
+OUT_DIR="${3:?usage: package_release.sh <release-dir> <source-dir> <out-dir> [release-commit] [target] [executable-candidate]}"
 RELEASE_COMMIT="${4:-unknown}"
+TARGET="${5:-x86_64-unknown-linux-gnu}"
+EXECUTABLE_CANDIDATE="${6:-unknown}"
 
-VERSION="0.1.0"
-TAG="v0.1.0"
-TARGET="x86_64-unknown-linux-gnu"
-EXECUTABLE_FREEZE="89ac979d333fe3fc2e311fb566f3ab0056bec4c5"
-NAME="research-agent-system-${TAG}-${TARGET}"
+VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "${SOURCE_DIR}/Cargo.toml" | head -1)"
+if [[ -z "${VERSION}" ]]; then
+    echo "could not read workspace version from ${SOURCE_DIR}/Cargo.toml" >&2
+    exit 2
+fi
+TAG="v${VERSION}"
+NAME="agentmosaic-${TAG}-${TARGET}"
 
 STAGE_ROOT="${OUT_DIR}/stage"
 PKG="${STAGE_ROOT}/${NAME}"
 rm -rf "${STAGE_ROOT}"
 mkdir -p "${PKG}"
 
-install -m 0755 "${RELEASE_DIR}/agent-code-cli" "${PKG}/agent-code-cli"
-install -m 0755 "${RELEASE_DIR}/agent-code-tui" "${PKG}/agent-code-tui"
-install -m 0755 "${RELEASE_DIR}/ras_codex_mcp"  "${PKG}/ras_codex_mcp"
+install -m 0755 "${RELEASE_DIR}/am"           "${PKG}/am"
+install -m 0755 "${RELEASE_DIR}/am-codex-mcp" "${PKG}/am-codex-mcp"
 install -m 0644 "${SOURCE_DIR}/LICENSE"             "${PKG}/LICENSE"
 install -m 0644 "${SOURCE_DIR}/README.md"           "${PKG}/README.md"
 install -m 0644 "${SOURCE_DIR}/README.zh-CN.md"     "${PKG}/README.zh-CN.md"
 install -m 0644 "${OUT_DIR}/THIRD_PARTY_LICENSES.html" "${PKG}/THIRD_PARTY_LICENSES.html"
 
-RUSTC_VERSION="$(rustup run 1.98.1 rustc --version | awk '{print $2}')"
+RUSTC_VERSION="$(rustc --version | awk '{print $2}')"
 MTIME="@$(git -C "${SOURCE_DIR}" show -s --format=%ct HEAD)"
 
 tar --create --gzip \
@@ -46,9 +54,8 @@ tar --create --gzip \
     --file="${OUT_DIR}/${NAME}.tar.gz" \
     "${NAME}"
 
-CLI_SHA="$(sha256sum "${PKG}/agent-code-cli"   | awk '{print $1}')"
-TUI_SHA="$(sha256sum "${PKG}/agent-code-tui"   | awk '{print $1}')"
-MCP_SHA="$(sha256sum "${PKG}/ras_codex_mcp"    | awk '{print $1}')"
+CLI_SHA="$(sha256sum "${PKG}/am"           | awk '{print $1}')"
+MCP_SHA="$(sha256sum "${PKG}/am-codex-mcp" | awk '{print $1}')"
 TARBALL_SHA="$(sha256sum "${OUT_DIR}/${NAME}.tar.gz" | awk '{print $1}')"
 
 cat > "${OUT_DIR}/release-manifest.json" <<JSON
@@ -56,19 +63,14 @@ cat > "${OUT_DIR}/release-manifest.json" <<JSON
   "version": "${VERSION}",
   "tag": "${TAG}",
   "release_commit": "${RELEASE_COMMIT}",
-  "executable_source_candidate": "${EXECUTABLE_FREEZE}",
+  "executable_source_candidate": "${EXECUTABLE_CANDIDATE}",
   "target": "${TARGET}",
   "rustc": "${RUSTC_VERSION}",
   "asset": "${NAME}.tar.gz",
   "asset_sha256": "${TARBALL_SHA}",
   "binaries": {
-    "agent-code-cli": "${CLI_SHA}",
-    "agent-code-tui": "${TUI_SHA}",
-    "ras_codex_mcp": "${MCP_SHA}"
-  },
-  "reference_profile": {
-    "codex": "0.154.0",
-    "qwen_code": "0.23.3"
+    "am": "${CLI_SHA}",
+    "am-codex-mcp": "${MCP_SHA}"
   },
   "public_release_ready": false
 }

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Copied release-binary real heterogeneous-team smoke (RC qualification, R12).
 #
-# Copies the release CLI and the RAS Codex MCP bridge OUT of the source tree into a
+# Copies the release CLI and the AgentMosaic Codex MCP bridge OUT of the source tree into a
 # scratch directory, registers a real Codex Lead and real Qwen Worker/Utility agents
 # through the public CLI, issues exactly one `run-team` for one objective, and reads the
 # durable result back in separate processes.
@@ -16,10 +16,10 @@
 set -euo pipefail
 
 RELEASE_DIR="${1:-target/release}"
-WORK_DIR="${2:-$(mktemp -d "${TMPDIR:-/tmp}/ras-rc-smoke.XXXXXX")}"
+WORK_DIR="${2:-$(mktemp -d "${TMPDIR:-/tmp}/agentmosaic-rc-smoke.XXXXXX")}"
 
-CLI_SRC="${RELEASE_DIR}/agent-code-cli"
-MCP_SRC="${RELEASE_DIR}/ras_codex_mcp"
+CLI_SRC="${RELEASE_DIR}/am"
+MCP_SRC="${RELEASE_DIR}/am-codex-mcp"
 for binary in "${CLI_SRC}" "${MCP_SRC}"; do
   if [ ! -x "${binary}" ]; then
     echo "missing release binary ${binary}; run: cargo build --release --workspace" >&2
@@ -27,8 +27,8 @@ for binary in "${CLI_SRC}" "${MCP_SRC}"; do
   fi
 done
 
-CLI="${WORK_DIR}/agent-code-cli"
-MCP="${WORK_DIR}/ras_codex_mcp"
+CLI="${WORK_DIR}/am"
+MCP="${WORK_DIR}/am-codex-mcp"
 DB="${WORK_DIR}/team.db"
 REPO="${WORK_DIR}/repo"
 LOG="${WORK_DIR}/smoke.log"

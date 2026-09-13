@@ -7,7 +7,7 @@ policy pass, flagging dependencies whose declared license is missing or outside 
 permissive allowlist, so the release build fails loudly rather than shipping an
 unreviewed license.
 
-usage: third_party_licenses.py <cargo-manifest-dir> <output.html> [--package-name NAME]
+usage: third_party_licenses.py <cargo-manifest-dir> <output.html> [--package-name NAME] [--version VERSION] [--target TARGET]
 """
 
 from __future__ import annotations
@@ -135,7 +135,22 @@ def main() -> int:
         return 2
     manifest_dir, output = sys.argv[1], sys.argv[2]
 
+    package_name, version, target = "AgentMosaic", "", ""
+    extra = sys.argv[3:]
+    for index, arg in enumerate(extra):
+        value = extra[index + 1] if index + 1 < len(extra) else ""
+        if arg == "--package-name" and value:
+            package_name = value
+        elif arg == "--version" and value:
+            version = value
+        elif arg == "--target" and value:
+            target = value
+
     meta = load_metadata(manifest_dir)
+    if not version and meta["packages"]:
+        version = meta["packages"][0]["version"]
+    if not target:
+        target = "x86_64-unknown-linux-gnu"
     workspace_members = set(meta["workspace_members"])
     root = Path(manifest_dir).resolve()
 
@@ -196,6 +211,9 @@ def main() -> int:
         crate_rows="".join(rows),
         crate_count=len(crates),
         details="".join(details),
+        package_name=escape(package_name),
+        version=escape(version),
+        target=escape(target),
         flagged=(
             "<p class='bad'><strong>Policy pass:</strong> "
             + "; ".join(f"{n} {v} [{l}]" for n, v, l in flagged)
@@ -229,7 +247,7 @@ TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Third-Party Licenses — Research Agent System v0.1.0</title>
+<title>Third-Party Licenses — {package_name} {version}</title>
 <style>
   body {{ font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 60rem; line-height: 1.5; }}
   table {{ border-collapse: collapse; width: 100%; }}
@@ -243,8 +261,8 @@ TEMPLATE = """<!doctype html>
 </head>
 <body>
 <h1>Third-Party Licenses</h1>
-<p>Binary distribution: Research Agent System v0.1.0
-(<code>x86_64-unknown-linux-gnu</code>). {crate_count} third-party Rust crates are
+<p>Binary distribution: {package_name} {version}
+(<code>{target}</code>). {crate_count} third-party Rust crates are
 statically linked into or required by the shipped binaries. Full license texts follow
 the summary table.</p>
 {flagged}
@@ -256,7 +274,7 @@ the summary table.</p>
 <h2>License texts</h2>
 {details}
 <h2>Project license</h2>
-<p>Research Agent System itself is licensed under Apache-2.0; see <code>LICENSE</code>
+<p>{package_name} itself is licensed under Apache-2.0; see <code>LICENSE</code>
 in the distribution.</p>
 </body>
 </html>
