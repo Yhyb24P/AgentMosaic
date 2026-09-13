@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use agent_code_runtime::{
-    AcpWorkerConfig, AcpWorkerDriver, CodexAppServer, CodexBridgeEvent, PersistedAcpWorkerDriver,
+    AcpWorkerConfig, AcpWorkerDriver, CodexAppServer, CodexBridgeEvent, CodexTeamDriverConfig,
+    PersistedAcpWorkerDriver, PersistedCodexTeamDriver,
 };
 use agent_code_storage::{ExternalRuntimeBinding, SqliteTaskBoard};
 use agent_code_team::{
@@ -754,7 +755,28 @@ async fn real_scheduler_runs_qwen_worker_and_utility_on_one_board() {
         "qwen",
     )
     .unwrap();
+    let mcp = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("ras_codex_mcp");
+    let codex = PersistedCodexTeamDriver::new(
+        CodexTeamDriverConfig {
+            command: "codex".into(),
+            working_directory: cwd.clone(),
+            mcp_command: mcp,
+            artifact_paths: vec!["lead-final.txt".into()],
+            max_events: 200,
+            overrides: low_cost_codex_overrides(),
+        },
+        db.clone(),
+        "codex",
+    )
+    .unwrap();
     let mut drivers: BTreeMap<String, Arc<dyn AgentDriver>> = BTreeMap::new();
+    drivers.insert("codex".into(), Arc::new(codex));
     drivers.insert("qwen".into(), Arc::new(qwen));
     drivers.insert("utility".into(), Arc::new(LiveUtility));
     let board = SqliteTaskBoard::open(Connection::open(&db).unwrap()).unwrap();
@@ -763,128 +785,62 @@ async fn real_scheduler_runs_qwen_worker_and_utility_on_one_board() {
         TaskSpec { objective: "In this isolated Git repository, replace worker.txt with exactly worker=complete followed by one newline, run sh check.sh, then return exactly this JSON peer result: {\"summary\":\"scheduler Qwen worker complete\"}. Do not modify any other file.".into(), kind: TaskKind::Bulk, target: Some("qwen".into()), parent: None, context: Vec::new() },
         TaskSpec { objective: "produce deterministic utility result".into(), kind: TaskKind::Utility, target: Some("utility".into()), parent: None, context: Vec::new() },
     ]).await.unwrap();
+    for result in &results {
+        if let Err(error) = &result.result {
+            let category = if error.contains("expected one strict JSON object") {
+                "invalid-strict-peer-result"
+            } else if error.contains("database is locked") {
+                "sqlite-lock"
+            } else if error.contains("timed out") {
+                "runtime-timeout"
+            } else {
+                "other-driver-error"
+            };
+            eprintln!(
+                "sanitized scheduler failure task={} category={} error_sha256={:x}",
+                result.task_id,
+                category,
+                Sha256::digest(error.as_bytes())
+            );
+        }
+    }
     assert!(results.iter().all(|result| result.result.is_ok()));
     assert_eq!(
         std::fs::read(cwd.join("worker.txt")).unwrap(),
         b"worker=complete\n"
     );
-    let board = scheduler.board().lock().unwrap();
     let qwen_task = results[0].task_id;
-    assert_eq!(
-        board.task(qwen_task).unwrap().unwrap().status,
-        TaskStatus::Succeeded
-    );
-    assert_eq!(board.artifacts(qwen_task).unwrap().len(), 1);
-    let binding = board.external_binding(qwen_task, 1).unwrap().unwrap();
-    assert_eq!(binding.lifecycle_state, "completed");
-    assert_eq!(board.messages_to("codex").unwrap().len(), 1);
-    drop(board);
-    let lead_task = {
-        let mut board = scheduler.board().lock().unwrap();
-        let lead_task = board
-            .create_task(
-                "synthesize scheduler results",
-                None,
-                TaskKind::Reasoning,
-                Some("codex".into()),
-            )
-            .unwrap();
-        board.assign(lead_task, "codex").unwrap();
-        board
-            .record_attempt(&TaskAttempt {
-                task_id: lead_task,
-                attempt: 1,
-                agent_id: "codex".into(),
-                status: TaskStatus::Running,
-                result: None,
-                error: None,
-            })
-            .unwrap();
-        board.set_status(lead_task, TaskStatus::Running).unwrap();
-        lead_task
-    };
-    let bridge_log =
-        std::env::temp_dir().join(format!("ras_scheduler_lead_{}.log", std::process::id()));
-    let _ = std::fs::remove_file(&bridge_log);
-    let mcp = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("ras_codex_mcp");
-    let mut overrides = low_cost_codex_overrides();
-    overrides.extend([
-        format!("mcp_servers.ras.command={:?}", mcp.display().to_string()),
-        format!("mcp_servers.ras.env.RAS_DB={:?}", db.display().to_string()),
-        format!(
-            "mcp_servers.ras.env.RAS_BRIDGE_LOG={:?}",
-            bridge_log.display().to_string()
-        ),
-        format!("mcp_servers.ras.env.RAS_TASK_ID=\"{lead_task}\""),
-        "mcp_servers.ras.env.RAS_ATTEMPT=\"1\"".into(),
-    ]);
-    let mut codex = CodexAppServer::spawn_with_overrides("codex", &overrides).unwrap();
-    codex.initialize("ras-m5-lead", "0.1").unwrap();
-    let thread = codex.start_thread_with_developer_instructions(cwd.to_str().unwrap(), Some("For this bounded M5 team follow-up, invoke ras_request_context exactly once before answering. The tool result is the only teammate-result source.")).unwrap();
-    let turn = codex.start_turn(&thread, "Before answering, invoke ras_request_context exactly once with JSON arguments {\"purpose\":\"scheduler-lead\"}. Do not use teammate information from this user message. After receiving the tool result, create lead-final.txt containing exactly scheduler lead complete followed by one newline. Then respond exactly: scheduler lead done.").unwrap();
-    let mut completed = false;
-    for _ in 0..200 {
-        match codex.next_event().unwrap() {
-            CodexBridgeEvent::TurnCompleted { .. } => {
-                completed = true;
-                break;
-            }
-            CodexBridgeEvent::Notification(_) | CodexBridgeEvent::ToolCall { .. } => {}
-            CodexBridgeEvent::McpElicitation {
-                request_id,
-                server_name,
-            } => codex
-                .respond_ras_elicitation(request_id, &server_name)
-                .unwrap(),
-        }
+    {
+        let board = scheduler.board().lock().unwrap();
+        assert_eq!(
+            board.task(qwen_task).unwrap().unwrap().status,
+            TaskStatus::Succeeded
+        );
+        assert_eq!(board.artifacts(qwen_task).unwrap().len(), 1);
+        let binding = board.external_binding(qwen_task, 1).unwrap().unwrap();
+        assert_eq!(binding.lifecycle_state, "completed");
+        assert_eq!(board.messages_to("codex").unwrap().len(), 1);
     }
-    assert!(
-        completed,
-        "Codex Lead completes after bounded scheduler context"
-    );
+    let lead_results = scheduler
+        .schedule(&[TaskSpec {
+            objective: "Synthesize the persisted scheduler worker result. Before relying on teammate results, call ras_request_context exactly once. Create lead-final.txt containing exactly scheduler lead complete followed by one newline. Do not modify any other file.".into(),
+            kind: TaskKind::Reasoning,
+            target: Some("codex".into()),
+            parent: None,
+            context: Vec::new(),
+        }])
+        .await
+        .unwrap();
+    assert!(lead_results[0].result.is_ok());
+    let lead_task = lead_results[0].task_id;
     let lead_bytes = std::fs::read(cwd.join("lead-final.txt")).unwrap();
     assert_eq!(lead_bytes, b"scheduler lead complete\n");
-    let lead_hash = format!("{:x}", Sha256::digest(&lead_bytes));
-    codex.close().unwrap();
     let mut board = scheduler.board().lock().unwrap();
-    board
-        .upsert_external_binding(&ExternalRuntimeBinding {
-            team_task_id: lead_task,
-            attempt: 1,
-            agent_id: "codex".into(),
-            runtime_kind: "codex-app-server".into(),
-            native_thread_id: Some(thread),
-            native_turn_id: Some(turn),
-            lifecycle_state: "completed".into(),
-        })
-        .unwrap();
-    board
-        .commit_successful_result(
-            &TaskAttempt {
-                task_id: lead_task,
-                attempt: 1,
-                agent_id: "codex".into(),
-                status: TaskStatus::Succeeded,
-                result: Some("scheduler lead complete".into()),
-                error: None,
-            },
-            &AgentTaskResult {
-                task_id: lead_task,
-                summary: "scheduler lead complete".into(),
-                artifacts: vec![ArtifactMeta {
-                    path: "lead-final.txt".into(),
-                    sha256: lead_hash,
-                }],
-                message: None,
-            },
-        )
-        .unwrap();
+    let lead_binding = board.external_binding(lead_task, 1).unwrap().unwrap();
+    assert_eq!(lead_binding.lifecycle_state, "completed");
+    assert!(lead_binding.native_thread_id.is_some());
+    assert!(lead_binding.native_turn_id.is_some());
+    assert_eq!(board.artifacts(lead_task).unwrap().len(), 1);
     let qwen_artifact = board.artifacts(qwen_task).unwrap().pop().unwrap();
     board
         .record_final_refs(

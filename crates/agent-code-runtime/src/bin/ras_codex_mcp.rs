@@ -4,7 +4,7 @@
 use std::io::{self, BufRead, Write};
 
 use agent_code_storage::{RuntimeCollaborationRecord, SqliteTaskBoard};
-use agent_code_team::TaskBoard;
+use agent_code_team::{TaskBoard, TaskStatus};
 use serde_json::{json, Value};
 
 fn main() {
@@ -112,7 +112,9 @@ fn main() {
 
 /// Build the small, persisted team projection that is safe to send to the
 /// active Codex turn. This is intentionally sourced from the board rather than
-/// caller-supplied tool arguments or a raw runtime transcript.
+/// caller-supplied tool arguments or a raw runtime transcript. Successful
+/// task summaries and artifact hashes make a worker result available even
+/// where a worker had no directed free-form message to the Lead.
 fn bounded_team_context(board: &SqliteTaskBoard, target: &str) -> String {
     const MAX_CONTEXT_CHARS: usize = 1024;
     let Ok(messages) = board.messages_to(target) else {
@@ -125,6 +127,44 @@ fn bounded_team_context(board: &SqliteTaskBoard, target: &str) -> String {
             break;
         }
         text.push_str(&line);
+    }
+    if let Ok(task_ids) = board.task_ids() {
+        for task_id in task_ids.into_iter().take(8) {
+            let Ok(Some(task)) = board.task(task_id) else {
+                continue;
+            };
+            if task.status != TaskStatus::Succeeded {
+                continue;
+            }
+            let summary = board
+                .attempts(task_id)
+                .ok()
+                .and_then(|attempts| {
+                    attempts
+                        .into_iter()
+                        .rev()
+                        .find(|attempt| attempt.status == TaskStatus::Succeeded)
+                        .and_then(|attempt| attempt.result)
+                })
+                .unwrap_or_else(|| "completed".into());
+            let artifacts = board
+                .artifacts(task_id)
+                .unwrap_or_default()
+                .into_iter()
+                .take(2)
+                .map(|artifact| format!(" {}#{}", artifact.path, artifact.sha256))
+                .collect::<String>();
+            let line = format!(
+                "task={task_id} from={} result={} artifacts={}\n",
+                task.assignee.unwrap_or_else(|| "unassigned".into()),
+                summary.chars().take(256).collect::<String>(),
+                artifacts.chars().take(256).collect::<String>(),
+            );
+            if text.chars().count().saturating_add(line.chars().count()) > MAX_CONTEXT_CHARS {
+                break;
+            }
+            text.push_str(&line);
+        }
     }
     if text == "bounded persisted team context:\n" {
         text.push_str("no directed team message available\n");
@@ -152,7 +192,9 @@ fn audit(event: &str) {
 mod tests {
     use super::bounded_team_context;
     use agent_code_storage::SqliteTaskBoard;
-    use agent_code_team::{AgentMessage, TaskBoard, TaskKind};
+    use agent_code_team::{
+        AgentMessage, AgentTaskResult, ArtifactMeta, TaskAttempt, TaskBoard, TaskKind, TaskStatus,
+    };
 
     #[test]
     fn context_is_bounded_and_sourced_from_directed_board_messages() {
@@ -174,10 +216,46 @@ mod tests {
                 body: "not for codex".into(),
             })
             .expect("other message");
+        board
+            .record_attempt(&TaskAttempt {
+                task_id: task,
+                attempt: 1,
+                agent_id: "qwen".into(),
+                status: TaskStatus::Running,
+                result: None,
+                error: None,
+            })
+            .expect("running attempt");
+        board
+            .set_status(task, TaskStatus::Running)
+            .expect("running task");
+        board
+            .commit_successful_result(
+                &TaskAttempt {
+                    task_id: task,
+                    attempt: 1,
+                    agent_id: "qwen".into(),
+                    status: TaskStatus::Succeeded,
+                    result: Some("bounded worker summary".into()),
+                    error: None,
+                },
+                &AgentTaskResult {
+                    task_id: task,
+                    summary: "bounded worker summary".into(),
+                    artifacts: vec![ArtifactMeta {
+                        path: "worker.txt".into(),
+                        sha256: "a".repeat(64),
+                    }],
+                    message: None,
+                },
+            )
+            .expect("result");
         assert_eq!(task, 1);
 
         let context = bounded_team_context(&board, "codex");
         assert!(context.contains("from=qwen: bounded worker finding"));
+        assert!(context.contains("result=bounded worker summary"));
+        assert!(context.contains("worker.txt#"));
         assert!(!context.contains("not for codex"));
         assert!(context.chars().count() <= 1024);
     }

@@ -139,6 +139,19 @@ async fn session_binding_observer_runs_before_a_successful_prompt() {
 }
 
 #[tokio::test]
+async fn invalid_first_peer_result_gets_one_same_session_strict_repair() {
+    let cwd = mock_cwd("strict-repair");
+    let driver = AcpWorkerDriver::new(valid_config(&cwd, "repair")).expect("valid mock driver");
+    let execution = driver
+        .execute_task(&task_for(18))
+        .await
+        .expect("one bounded same-session repair returns strict result");
+    assert_eq!(execution.external_session_id, "acp-m2-mock-session");
+    assert!(execution.result.summary.starts_with("mock-ok-"));
+    let _ = std::fs::remove_dir_all(&cwd);
+}
+
+#[tokio::test]
 async fn persisted_scheduler_driver_binds_foreign_session_before_returning_result() {
     let cwd = mock_cwd("persisted-driver");
     let database = cwd.join("team.db");

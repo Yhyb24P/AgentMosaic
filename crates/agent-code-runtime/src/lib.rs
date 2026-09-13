@@ -10,6 +10,7 @@
 mod acp_worker;
 mod agent;
 mod codex_app_server;
+mod codex_team_driver;
 mod dispatch;
 
 pub use acp_worker::{
@@ -18,4 +19,5 @@ pub use acp_worker::{
 };
 pub use agent::{AgentConfig, AgentError, AgentLoop, Delivery};
 pub use codex_app_server::{CodexAppServer, CodexBridgeError, CodexBridgeEvent};
+pub use codex_team_driver::{CodexTeamDriverConfig, PersistedCodexTeamDriver};
 pub use dispatch::{dispatch, ToolOutcome};

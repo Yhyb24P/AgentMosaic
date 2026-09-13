@@ -182,6 +182,7 @@ impl AcpWorkerDriver {
         let agent =
             AcpAgent::new(AcpAgentConfig::new(&self.config.command).args(self.config.args.clone()));
         let cwd = self.config.working_directory.clone();
+        let max_result_bytes = self.config.max_result_bytes;
         let run = Client
             .builder()
             .name("agent-code-r6")
@@ -206,7 +207,36 @@ impl AcpWorkerDriver {
                         let native_session_id = session.session_id().clone();
                         tokio::select! {
                             response = session.read_to_string() => {
-                                Ok(AcpRunOutcome::Completed(session_id, response?))
+                                let response = response?;
+                                if parse_peer_result(&response, max_result_bytes).is_ok() {
+                                    Ok(AcpRunOutcome::Completed(session_id, response))
+                                } else {
+                                    // A worker may finish its bounded filesystem work but add
+                                    // prose around the required structured peer result. Ask once
+                                    // on the *same* external session; the final response still
+                                    // undergoes strict parsing below and is never accepted by
+                                    // heuristic extraction.
+                                    session.send_prompt("Your prior result did not satisfy the required peer-result contract. Return exactly one JSON object with only a non-empty string field named summary. Do not include prose, markdown, credentials, hidden reasoning, or other fields.")?;
+                                    let repaired = tokio::select! {
+                                        repaired = session.read_to_string() => repaired?,
+                                        _ = cancellation.cancelled() => {
+                                            connection.send_notification(CancelNotification::new(native_session_id))?;
+                                            loop {
+                                                match session.read_update().await? {
+                                                    SessionMessage::StopReason(StopReason::Cancelled) => break,
+                                                    SessionMessage::StopReason(reason) => {
+                                                        return Err(agent_client_protocol::Error::internal_error()
+                                                            .data(format!("ACP cancel returned unexpected stop reason: {reason:?}")));
+                                                    }
+                                                    SessionMessage::SessionMessage(_) => {}
+                                                    _ => {}
+                                                }
+                                            }
+                                            return Ok(AcpRunOutcome::Cancelled);
+                                        }
+                                    };
+                                    Ok(AcpRunOutcome::Completed(session_id, repaired))
+                                }
                             }
                             _ = cancellation.cancelled() => {
                                 connection.send_notification(CancelNotification::new(native_session_id))?;

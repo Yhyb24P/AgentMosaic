@@ -5,6 +5,7 @@ use agent_code_team::{
     TaskRecord, TaskStatus,
 };
 use rusqlite::{params, Connection, Row};
+use std::time::Duration;
 
 use crate::schema::{migrate, SCHEMA};
 
@@ -38,6 +39,11 @@ pub struct RuntimeCollaborationRecord {
 impl SqliteTaskBoard {
     /// Open a board on a connection, applying the schema and migrating.
     pub fn open(mut conn: Connection) -> Result<Self, rusqlite::Error> {
+        // Scheduler drivers bind external runtimes from independently opened
+        // connections while another task may settle on the canonical board.
+        // Wait briefly for SQLite's short writer lock rather than converting a
+        // benign contention race into a spurious runtime failure.
+        conn.busy_timeout(Duration::from_secs(5))?;
         conn.execute_batch(SCHEMA)?;
         migrate(&mut conn)?;
         Ok(Self { conn })

@@ -24,6 +24,7 @@ enum Mode {
     Hang,
     CancelWait,
     Crash,
+    Repair,
 }
 
 fn parse_mode(args: &[String]) -> Result<Mode, String> {
@@ -41,6 +42,7 @@ fn parse_mode(args: &[String]) -> Result<Mode, String> {
                     "hang" => Mode::Hang,
                     "cancel-wait" => Mode::CancelWait,
                     "crash" => Mode::Crash,
+                    "repair" => Mode::Repair,
                     other => return Err(format!("unknown mode: {other}")),
                 };
             }
@@ -112,13 +114,18 @@ fn handle_line(line: &str, mode: Mode, pending_prompt: &mut Option<Value>) -> Li
         }
         Some("session/prompt") => {
             let turn = PROMPT_TURNS.fetch_add(1, Ordering::SeqCst);
+            let text = if matches!(mode, Mode::Repair) && turn == 0 {
+                "not-a-peer-result".into()
+            } else {
+                format!(r#"{{"summary":"mock-ok-{turn}"}}"#)
+            };
             write_notification(&json!({
                 "sessionId": MOCK_SESSION,
                 "update": {
                     "sessionUpdate": "agent_message_chunk",
                     "content": {
                         "type": "text",
-                        "text": format!(r#"{{"summary":"mock-ok-{turn}"}}"#),
+                        "text": text,
                     },
                 },
             }));
@@ -133,7 +140,7 @@ fn handle_line(line: &str, mode: Mode, pending_prompt: &mut Option<Value>) -> Li
                     *pending_prompt = id;
                     return LineOutcome::Done;
                 }
-                Mode::Sync | Mode::Crash => {}
+                Mode::Sync | Mode::Crash | Mode::Repair => {}
             }
             if !matches!(mode, Mode::Hang) {
                 write_response(&id, json!({ "stopReason": "end_turn" }));

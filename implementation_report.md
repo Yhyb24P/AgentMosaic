@@ -1118,6 +1118,49 @@ This is real partial M5 evidence, not a readiness claim. The topology has not
 yet exercised retry, reassignment, user override, and recovery together, so
 `M5_R6_TEAM_READY` remains `NOT_RUN`; M6–M9 remain unchanged.
 
+## 47. Scheduler-owned Codex driver and Qwen strict-result repair (2026-09-13)
+
+The M5 live topology now dispatches Codex through
+`PersistedCodexTeamDriver`, so the scheduler creates and persists the Lead
+attempt before the app-server driver starts. The driver persists opaque Codex
+thread/turn references only; canonical task/result state remains on the team
+board. Its only collaboration surface is the allowlisted RAS MCP server.
+
+`ras_request_context` now supplies a bounded (1024-character) persisted board
+projection: directed messages plus completed task summaries and artifact hashes.
+It neither copies raw runtime transcripts nor accepts task/runtime identity
+from tool arguments. A unit test confirms the projection remains bounded and
+excludes a message addressed to another agent.
+
+Qwen Code sometimes completed bounded filesystem work while returning prose
+around, rather than exactly matching, the strict peer-result JSON contract.
+The ACP driver retains fail-closed parsing but makes one same-session bounded
+format-correction request before returning an error. The local ACP lifecycle
+mock proves that only a valid second strict result succeeds; this is not JSON
+extraction or schema relaxation.
+
+The updated real command passed:
+
+```text
+cargo test -p agent-code-runtime --test codex_live real_scheduler_runs_qwen_worker_and_utility_on_one_board -- --ignored --nocapture
+```
+
+Exit `0`; 1 passed, 0 failed, 0 ignored, 3 filtered out; 46.35 seconds.
+Sanitized log SHA-256:
+`69e9e64e7919c4a118df7c51b15a61d977138cb625d602b35546ca4e8746d012`.
+It proves scheduler-owned real Qwen ACP + utility + scheduler-owned real Codex
+Lead, bounded persisted result delivery, one live RAS collaboration call,
+durable bindings, exact selected artifact reference, and SQLite reopen. Codex
+was pinned to `gpt-5.5` / `low` by the harness. Two pre-repair invocations
+failed closed on invalid strict Qwen output and are not success evidence.
+
+The exact current full Rust gate also passed: `cargo fmt --all -- --check`,
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+`cargo test --workspace --all-features`, and `git diff --check`, all exit `0`;
+170 passed, 0 failed, 11 ignored. M5 stays `NOT_RUN`: retry, reassignment,
+user override, and recovery still need live scheduler-topology evidence. No
+later milestone or readiness claim changes.
+
 ## 46. Codex Lead follow-up from persisted board context (2026-09-13)
 
 The real Codex Lead harness no longer inserts a teammate result into the

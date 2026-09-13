@@ -145,3 +145,41 @@ This adds the missing live Codex Lead follow-up to this narrow topology. It is
 still partial M5 evidence: retry, reassignment, user override, and recovery
 must be exercised in the same scheduler-owned topology before M5 can be
 marked passed.
+
+## Scheduler-owned Codex driver and strict Qwen result repair
+
+The scheduler topology was then changed so Codex is itself an
+`AgentDriver` rather than a harness-managed app-server call. Its external
+thread/turn binding is persisted against the scheduler-created running attempt
+before the turn proceeds. `ras_request_context` now returns a bounded board
+projection containing directed messages plus succeeded worker summaries and
+artifact hashes; it does not return a raw transcript or accept runtime identity
+from tool arguments.
+
+The shared ACP worker still rejects an invalid peer result. When a completed
+worker's first response is not the required strict JSON object, it sends one
+bounded correction request on the same ACP session. Only that final response
+is parsed with the existing strict schema; a second invalid response remains a
+failed task. The correction branch is covered by the local ACP lifecycle mock.
+
+The current live command passed after this repair:
+
+```text
+cargo test -p agent-code-runtime --test codex_live real_scheduler_runs_qwen_worker_and_utility_on_one_board -- --ignored --nocapture
+```
+
+Exit `0`; 1 passed, 0 failed, 0 ignored, 3 filtered out; 46.35 seconds.
+Sanitized log SHA-256:
+`69e9e64e7919c4a118df7c51b15a61d977138cb625d602b35546ca4e8746d012`.
+The fixture asserts the real Qwen ACP task, utility task, scheduler-created
+Codex Lead attempt, one persisted collaboration request, completed external
+bindings, exact Qwen/Lead artifacts, selected final reference, and SQLite
+reopen. Codex used `gpt-5.5` with `low` reasoning effort. No prompt, model
+response, external identifier, credential, endpoint, or raw protocol frame was
+retained.
+
+Two pre-repair scheduler invocations failed closed because the Qwen response
+was not a strict peer result; they are not counted as successful evidence.
+This live pass is stronger M5 partial evidence, but retry, reassignment, user
+override, and recovery have not yet been demonstrated together in this real
+topology, so M5 remains `NOT_RUN`.
