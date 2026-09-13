@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use agent_code_storage::SqliteTaskBoard;
+use agent_code_storage::{ExternalRuntimeBinding, SqliteTaskBoard};
 use agent_code_team::{
     reconstruct_team_result, AgentConfig, AgentDriver, AgentMessage, AgentRegistry, AgentTask,
     AgentTaskResult, AgentTier, ArtifactMeta, Lead, LeadBrain, LeadContext, LeadDecision,
@@ -456,6 +456,17 @@ fn interrupted_task_can_be_recovered() {
             })
             .expect("record running");
         board.set_status(id, TaskStatus::Running).expect("running");
+        board
+            .upsert_external_binding(&ExternalRuntimeBinding {
+                team_task_id: id,
+                attempt: 1,
+                agent_id: "worker-a".into(),
+                runtime_kind: "acp".into(),
+                native_thread_id: Some("opaque-session".into()),
+                native_turn_id: None,
+                lifecycle_state: "running".into(),
+            })
+            .expect("binding");
     }
 
     // Restart: reopen and recover the interrupted task.
@@ -473,7 +484,26 @@ fn interrupted_task_can_be_recovered() {
                 .unwrap_or(false)
         })
         .expect("interrupted task");
-    // Recovery: re-run as a new attempt; the interrupted Running attempt is kept.
+    // Recovery closes the interrupted attempt without replaying an external
+    // side effect. An explicit later resume may create a new attempt.
+    let recovered = board
+        .recover_interrupted_attempt(id)
+        .expect("recover")
+        .expect("one interrupted attempt");
+    assert_eq!(recovered.status, TaskStatus::Failed);
+    assert!(recovered
+        .error
+        .unwrap()
+        .contains("explicit resume required"));
+    assert_eq!(
+        board
+            .external_binding(id, 1)
+            .unwrap()
+            .unwrap()
+            .lifecycle_state,
+        "interrupted"
+    );
+    assert_eq!(board.task(id).unwrap().unwrap().status, TaskStatus::Failed);
     board
         .record_attempt(&TaskAttempt {
             task_id: id,
@@ -489,7 +519,7 @@ fn interrupted_task_can_be_recovered() {
         .expect("succeeded");
     let attempts = board.attempts(id).expect("attempts");
     assert_eq!(attempts.len(), 2);
-    assert_eq!(attempts[0].status, TaskStatus::Running);
+    assert_eq!(attempts[0].status, TaskStatus::Failed);
     assert_eq!(attempts[1].status, TaskStatus::Succeeded);
     assert_eq!(
         board.task(id).expect("task").expect("exists").status,

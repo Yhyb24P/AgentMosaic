@@ -130,6 +130,27 @@ pub trait TaskBoard {
     /// attempt is observable as Running before the driver runs, then settles to
     /// Succeeded/Failed without being overwritten by a later retry.
     fn complete_attempt(&mut self, attempt: &TaskAttempt) -> Result<(), BoardError>;
+    /// Close an attempt left Running by a process interruption without
+    /// replaying its driver. A caller may explicitly resume the task later.
+    fn recover_interrupted_attempt(
+        &mut self,
+        task: u64,
+    ) -> Result<Option<TaskAttempt>, BoardError> {
+        let interrupted = self
+            .attempts(task)?
+            .into_iter()
+            .rev()
+            .find(|attempt| attempt.status == TaskStatus::Running);
+        let Some(mut interrupted) = interrupted else {
+            return Ok(None);
+        };
+        interrupted.status = TaskStatus::Failed;
+        interrupted.error =
+            Some("interrupted before terminal driver result; explicit resume required".into());
+        self.complete_attempt(&interrupted)?;
+        self.set_status(task, TaskStatus::Failed)?;
+        Ok(Some(interrupted))
+    }
     /// Atomically (where the backing store supports it) commit a successful
     /// worker result flow.  Messages and artifact references become durable
     /// before the task is observable as succeeded, so a restart cannot expose

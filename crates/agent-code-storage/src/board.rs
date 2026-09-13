@@ -202,6 +202,46 @@ impl TaskBoard for SqliteTaskBoard {
         Ok(())
     }
 
+    fn recover_interrupted_attempt(
+        &mut self,
+        task: u64,
+    ) -> Result<Option<TaskAttempt>, BoardError> {
+        let interrupted = self
+            .attempts(task)?
+            .into_iter()
+            .rev()
+            .find(|attempt| attempt.status == TaskStatus::Running);
+        let Some(mut interrupted) = interrupted else {
+            return Ok(None);
+        };
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        interrupted.status = TaskStatus::Failed;
+        interrupted.error =
+            Some("interrupted before terminal driver result; explicit resume required".into());
+        let changed = tx.execute(
+            "UPDATE team_task_runs SET status = 'failed', result = NULL, error = ?3 WHERE task_id = ?1 AND attempt = ?2 AND status = 'running'",
+            params![task as i64, interrupted.attempt as i64, interrupted.error],
+        ).map_err(|e| BoardError::Storage(e.to_string()))?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        tx.execute(
+            "UPDATE team_tasks SET status = 'failed' WHERE id = ?1",
+            params![task as i64],
+        )
+        .map_err(|e| BoardError::Storage(e.to_string()))?;
+        tx.execute(
+            "UPDATE external_runtime_bindings SET lifecycle_state = 'interrupted' WHERE team_task_id = ?1 AND attempt = ?2 AND lifecycle_state IN ('starting', 'running')",
+            params![task as i64, interrupted.attempt as i64],
+        ).map_err(|e| BoardError::Storage(e.to_string()))?;
+        tx.commit()
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        Ok(Some(interrupted))
+    }
+
     fn commit_successful_result(
         &mut self,
         attempt: &TaskAttempt,

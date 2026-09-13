@@ -53,6 +53,21 @@ fn normal_path_reads_and_controls_the_authoritative_board() {
                 },
             )
             .unwrap();
+        let interrupted = board
+            .create_task("recover explicitly", None, TaskKind::Bulk, None)
+            .unwrap();
+        board.assign(interrupted, "worker").unwrap();
+        board
+            .record_attempt(&TaskAttempt {
+                task_id: interrupted,
+                attempt: 1,
+                agent_id: "worker".into(),
+                status: TaskStatus::Running,
+                result: None,
+                error: None,
+            })
+            .unwrap();
+        board.set_status(interrupted, TaskStatus::Running).unwrap();
     }
     let db = database.to_string_lossy().into_owned();
     let status = cli().args(["status", &db]).output().unwrap();
@@ -64,6 +79,12 @@ fn normal_path_reads_and_controls_the_authoritative_board() {
     let final_result = cli().args(["final", &db, "1"]).output().unwrap();
     assert!(final_result.status.success());
     assert_eq!(String::from_utf8_lossy(&final_result.stdout), "done\n");
+    let recover = cli().args(["recover", &db, "2"]).output().unwrap();
+    assert!(recover.status.success());
+    assert!(String::from_utf8_lossy(&recover.stdout).contains("interrupted_attempt=1"));
+    let recovered_status = cli().args(["status", &db]).output().unwrap();
+    assert!(String::from_utf8_lossy(&recovered_status.stdout).contains("task=2 status=failed"));
+    assert!(cli().args(["resume", &db, "2"]).status().unwrap().success());
     assert!(cli().args(["cancel", &db, "1"]).status().unwrap().success());
     assert!(cli().args(["resume", &db, "1"]).status().unwrap().success());
     assert!(cli()
