@@ -12,7 +12,7 @@ use agent_code_team::{AgentTask, DriverKind, TaskAttempt, TaskBoard, TaskKind, T
 use rusqlite::Connection;
 
 fn usage() -> &'static str {
-    "usage: agent-code-cli <register|registry|run-acp|continue-acp|submit|status|cancel|override|recover|resume|artifact|binding|final> <database> [fields]"
+    "usage: agent-code-cli <register|registry|run-acp|continue-acp|submit|status|cancel|override|recover|recover-all|resume|artifact|binding|final> <database> [fields]"
 }
 
 fn open(path: &str) -> Result<SqliteTaskBoard, String> {
@@ -572,6 +572,28 @@ fn run(args: &[String]) -> Result<String, String> {
                 None => Ok(format!(
                     "recover found no interrupted running attempt task={task}"
                 )),
+            }
+        }
+        "recover-all" => {
+            let ids = board
+                .task_ids()
+                .map_err(|e| format!("recover-all: {e:?}"))?;
+            let mut recovered = Vec::new();
+            for task in ids {
+                if let Some(attempt) = board
+                    .recover_interrupted_attempt(task)
+                    .map_err(|e| format!("recover-all: {e:?}"))?
+                {
+                    recovered.push(format!("{task}:{}", attempt.attempt));
+                }
+            }
+            if recovered.is_empty() {
+                Ok("recover-all found no interrupted running attempts".into())
+            } else {
+                Ok(format!(
+                    "recovered interrupted attempts={}",
+                    recovered.join(",")
+                ))
             }
         }
         "resume" => {

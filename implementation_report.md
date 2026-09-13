@@ -1465,3 +1465,30 @@ git diff --check                                                 exit 0
 This is an R7 visibility/configuration increment.  It does not launch a team
 driver or alter the outstanding R6 topology/recovery proof; M5–M9 remain
 unchanged and `M7_R7_NORMAL_PATH_READY` remains `NOT_PASSED`.
+
+## 49. R7 explicit board-wide interrupted-run recovery (2026-09-13)
+
+`agent-code-cli recover-all <database>` now scans the existing authoritative
+SQLite board and invokes the established fail-closed recovery transition for
+each task whose latest attempt remains `Running`.  It performs no runtime
+launch, no foreign-session replay, and no inferred completion.  Each recovered
+attempt is recorded as failed with the existing explicit-resume requirement;
+any corresponding `starting`/`running` external binding becomes
+`interrupted` atomically in the board implementation.
+
+The Rust CLI end-to-end normal-path test now creates a second interrupted task
+with an external binding, invokes `recover-all`, and verifies both the returned
+task/attempt receipt and the reopened binding lifecycle state.  This exposes a
+safe user-facing recovery operation for a prior team session, but does not
+replace the still-required real external-process crash/reconcile proof for M5.
+
+```text
+cargo fmt --all -- --check                                      exit 0
+cargo test -p agent-code-cli --test normal_path                  exit 0; 1 passed
+cargo clippy -p agent-code-cli --all-targets -- -D warnings      exit 0
+cargo test --workspace --all-features                            exit 0
+  173 passed, 0 failed, 11 ignored
+git diff --check                                                 exit 0
+```
+
+`M7_R7_NORMAL_PATH_READY` remains `NOT_PASSED`; M5–M9 remain unchanged.

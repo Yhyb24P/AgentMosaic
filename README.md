@@ -130,6 +130,7 @@ cargo run -p agent-code-cli -- submit ./team.db bulk "inspect and fix the task"
 cargo run -p agent-code-cli -- status ./team.db
 cargo run -p agent-code-cli -- cancel ./team.db 1
 cargo run -p agent-code-cli -- recover ./team.db 1
+cargo run -p agent-code-cli -- recover-all ./team.db
 cargo run -p agent-code-cli -- resume ./team.db 1
 cargo run -p agent-code-cli -- override ./team.db 1 worker-a
 cargo run -p agent-code-cli -- artifact ./team.db 1

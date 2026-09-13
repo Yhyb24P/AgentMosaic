@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use agent_code_storage::SqliteTaskBoard;
+use agent_code_storage::{ExternalRuntimeBinding, SqliteTaskBoard};
 use agent_code_team::{
     AgentTaskResult, ArtifactMeta, TaskAttempt, TaskBoard, TaskKind, TaskStatus,
 };
@@ -85,6 +85,50 @@ fn normal_path_reads_and_controls_the_authoritative_board() {
     assert!(String::from_utf8_lossy(&recover.stdout).contains("interrupted_attempt=1"));
     let recovered_status = cli().args(["status", &db]).output().unwrap();
     assert!(String::from_utf8_lossy(&recovered_status.stdout).contains("task=2 status=failed"));
+    let second_interrupted = {
+        let mut board = SqliteTaskBoard::open(Connection::open(&database).unwrap()).unwrap();
+        let task = board
+            .create_task("recover all explicitly", None, TaskKind::Utility, None)
+            .unwrap();
+        board.assign(task, "utility").unwrap();
+        board
+            .record_attempt(&TaskAttempt {
+                task_id: task,
+                attempt: 1,
+                agent_id: "utility".into(),
+                status: TaskStatus::Running,
+                result: None,
+                error: None,
+            })
+            .unwrap();
+        board.set_status(task, TaskStatus::Running).unwrap();
+        board
+            .upsert_external_binding(&ExternalRuntimeBinding {
+                team_task_id: task,
+                attempt: 1,
+                agent_id: "utility".into(),
+                runtime_kind: "native".into(),
+                native_thread_id: None,
+                native_turn_id: None,
+                lifecycle_state: "running".into(),
+            })
+            .unwrap();
+        task
+    };
+    let recover_all = cli().args(["recover-all", &db]).output().unwrap();
+    assert!(recover_all.status.success());
+    assert!(
+        String::from_utf8_lossy(&recover_all.stdout).contains(&format!("{second_interrupted}:1"))
+    );
+    let recovered_board = SqliteTaskBoard::open(Connection::open(&database).unwrap()).unwrap();
+    assert_eq!(
+        recovered_board
+            .external_binding(second_interrupted, 1)
+            .unwrap()
+            .unwrap()
+            .lifecycle_state,
+        "interrupted"
+    );
     assert!(cli().args(["resume", &db, "2"]).status().unwrap().success());
     assert!(cli().args(["cancel", &db, "1"]).status().unwrap().success());
     assert!(cli().args(["resume", &db, "1"]).status().unwrap().success());
