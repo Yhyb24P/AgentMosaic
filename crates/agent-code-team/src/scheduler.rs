@@ -122,7 +122,45 @@ impl<B: TaskBoard + Send + 'static> Scheduler<B> {
             }
         }
 
-        // 2. Run them concurrently. Each task persists its own lifecycle
+        self.run_existing(&task_ids, specs).await
+    }
+
+    /// Run one task that already exists on the board after an explicit caller
+    /// has moved it back to Pending. This never creates a replacement task;
+    /// a resumed external operation is recorded as a new attempt on the same
+    /// canonical task.
+    pub async fn resume_existing(
+        &mut self,
+        task_id: u64,
+    ) -> Result<ScheduledResult, ScheduleError> {
+        let record = self
+            .board
+            .lock()
+            .unwrap()
+            .task(task_id)?
+            .ok_or(BoardError::UnknownTask(task_id))?;
+        if record.status != TaskStatus::Pending {
+            return Err(ScheduleError::Board(BoardError::Storage(
+                "resume_existing requires an explicitly resumed pending task".into(),
+            )));
+        }
+        let specs = [TaskSpec {
+            objective: record.objective,
+            kind: record.kind,
+            target: record.target,
+            parent: record.parent_task,
+            context: Vec::new(),
+        }];
+        let mut results = self.run_existing(&[task_id], &specs).await?;
+        Ok(results.remove(0))
+    }
+
+    async fn run_existing(
+        &self,
+        task_ids: &[u64],
+        specs: &[TaskSpec],
+    ) -> Result<Vec<ScheduledResult>, ScheduleError> {
+        // Run them concurrently. Each task persists its own lifecycle
         //    (Assigned -> Running -> terminal) on the shared board, so the
         //    state is durable at every point, not only at the end.
         let mut handles = Vec::new();
@@ -235,7 +273,9 @@ async fn run_one<B: TaskBoard + Send + 'static>(
 ) -> Result<(Vec<TaskAttempt>, Result<AgentTaskResult, String>), BoardError> {
     let mut attempts = Vec::new();
     let mut last_result: Option<AgentTaskResult> = None;
-    let mut attempt_seq = 0u32;
+    // A recovered task resumes on the same canonical id; prior attempts must
+    // remain immutable and the next run gets the next sequence number.
+    let mut attempt_seq = board.lock().unwrap().attempts(task.id)?.len() as u32;
     for agent in &candidates {
         let driver = match drivers.get(agent) {
             Some(d) => d,
@@ -655,6 +695,43 @@ mod tests {
         assert_eq!(r.attempts[1].status, TaskStatus::Failed);
         assert_eq!(r.attempts[2].agent_id, "worker-b");
         assert_eq!(r.attempts[2].status, TaskStatus::Succeeded);
+    }
+
+    #[tokio::test]
+    async fn explicit_resume_reuses_task_and_appends_a_new_attempt() {
+        let mut board = MemBoard::default();
+        let task_id = board
+            .create_task(
+                "interrupted job",
+                None,
+                TaskKind::Bulk,
+                Some("worker-b".into()),
+            )
+            .unwrap();
+        board.assign(task_id, "worker-a").unwrap();
+        board
+            .record_attempt(&TaskAttempt {
+                task_id,
+                attempt: 1,
+                agent_id: "worker-a".into(),
+                status: TaskStatus::Running,
+                result: None,
+                error: None,
+            })
+            .unwrap();
+        board.recover_interrupted_attempt(task_id).unwrap();
+        board.set_status(task_id, TaskStatus::Pending).unwrap();
+        let drivers = BTreeMap::from([("worker-b".to_string(), ok_driver("resumed"))]);
+        let mut scheduler = Scheduler::new(trio_registry(), drivers, board, 1);
+        let result = scheduler.resume_existing(task_id).await.unwrap();
+        assert!(result.result.is_ok());
+        assert_eq!(result.task_id, task_id);
+        assert_eq!(result.attempts.len(), 1);
+        assert_eq!(result.attempts[0].attempt, 2);
+        let attempts = scheduler.board().lock().unwrap().attempts(task_id).unwrap();
+        assert_eq!(attempts.len(), 2);
+        assert_eq!(attempts[0].status, TaskStatus::Failed);
+        assert_eq!(attempts[1].status, TaskStatus::Succeeded);
     }
 
     // T13: an explicit target overrides the tier routing.
