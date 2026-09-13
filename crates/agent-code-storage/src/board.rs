@@ -1,8 +1,8 @@
 //! The SQLite implementation of the team's durable task board.
 
 use agent_code_team::{
-    AgentMessage, ArtifactMeta, BoardError, TaskAttempt, TaskBoard, TaskKind, TaskRecord,
-    TaskStatus,
+    AgentMessage, ArtifactMeta, BoardError, SelectedArtifactRef, TaskAttempt, TaskBoard, TaskKind,
+    TaskRecord, TaskStatus,
 };
 use rusqlite::{params, Connection, Row};
 
@@ -272,6 +272,101 @@ impl TaskBoard for SqliteTaskBoard {
         Ok(())
     }
 
+    fn record_final_refs(
+        &mut self,
+        root_task: u64,
+        task_refs: &[u64],
+        artifact_refs: &[SelectedArtifactRef],
+    ) -> Result<(), BoardError> {
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        let root_exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM team_tasks WHERE id = ?1)",
+                params![root_task as i64],
+                |row| row.get(0),
+            )
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        if !root_exists {
+            return Err(BoardError::UnknownTask(root_task));
+        }
+        tx.execute(
+            "DELETE FROM team_final_task_refs WHERE root_task_id = ?1",
+            params![root_task as i64],
+        )
+        .map_err(|e| BoardError::Storage(e.to_string()))?;
+        tx.execute(
+            "DELETE FROM team_final_artifact_refs WHERE root_task_id = ?1",
+            params![root_task as i64],
+        )
+        .map_err(|e| BoardError::Storage(e.to_string()))?;
+        for task_id in task_refs {
+            tx.execute(
+                "INSERT INTO team_final_task_refs (root_task_id, selected_task_id) VALUES (?1, ?2)",
+                params![root_task as i64, *task_id as i64],
+            )
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        }
+        for selected in artifact_refs {
+            tx.execute(
+                "INSERT INTO team_final_artifact_refs (root_task_id, task_id, path, sha256)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    root_task as i64,
+                    selected.task_id as i64,
+                    selected.artifact.path,
+                    selected.artifact.sha256,
+                ],
+            )
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        }
+        tx.commit().map_err(|e| BoardError::Storage(e.to_string()))
+    }
+
+    fn final_refs(
+        &self,
+        root_task: u64,
+    ) -> Result<(Vec<u64>, Vec<SelectedArtifactRef>), BoardError> {
+        let mut tasks = self
+            .conn
+            .prepare(
+                "SELECT selected_task_id FROM team_final_task_refs
+                 WHERE root_task_id = ?1 ORDER BY selected_task_id",
+            )
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        let task_refs = tasks
+            .query_map(params![root_task as i64], |row| row.get::<_, i64>(0))
+            .map_err(|e| BoardError::Storage(e.to_string()))?
+            .map(|row| {
+                row.map(|id| id as u64)
+                    .map_err(|e| BoardError::Storage(e.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut artifacts = self
+            .conn
+            .prepare(
+                "SELECT task_id, path, sha256 FROM team_final_artifact_refs
+                 WHERE root_task_id = ?1 ORDER BY task_id, path, sha256",
+            )
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        let artifact_refs = artifacts
+            .query_map(params![root_task as i64], |row| {
+                Ok(SelectedArtifactRef {
+                    task_id: row.get::<_, i64>(0)? as u64,
+                    artifact: ArtifactMeta {
+                        path: row.get(1)?,
+                        sha256: row.get(2)?,
+                    },
+                })
+            })
+            .map_err(|e| BoardError::Storage(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        Ok((task_refs, artifact_refs))
+    }
+
     fn task(&self, id: u64) -> Result<Option<TaskRecord>, BoardError> {
         let row = self.conn.query_row(
             "SELECT id, objective, parent_task, kind, target, assignee, status
@@ -468,5 +563,48 @@ mod tests {
         );
         assert!(board.messages_to("lead").expect("messages").is_empty());
         assert!(board.artifacts(task).expect("artifacts").is_empty());
+    }
+
+    #[test]
+    fn final_refs_preserve_explicit_selection_not_all_successful_tasks() {
+        let mut board = SqliteTaskBoard::in_memory().expect("board");
+        let root = board
+            .create_task("team objective", None, TaskKind::Reasoning, None)
+            .expect("root");
+        let selected = board
+            .create_task("selected worker", Some(root), TaskKind::Bulk, None)
+            .expect("selected");
+        let unselected = board
+            .create_task(
+                "other completed worker",
+                Some(root),
+                TaskKind::Utility,
+                None,
+            )
+            .expect("unselected");
+        let selected_artifact = ArtifactMeta {
+            path: "selected.txt".into(),
+            sha256: "a".repeat(64),
+        };
+        board
+            .record_artifact(selected, &selected_artifact)
+            .expect("selected artifact");
+        board
+            .record_final_refs(
+                root,
+                &[selected],
+                &[SelectedArtifactRef {
+                    task_id: selected,
+                    artifact: selected_artifact.clone(),
+                }],
+            )
+            .expect("persist selection");
+
+        let (task_refs, artifact_refs) = board.final_refs(root).expect("read selection");
+        assert_eq!(task_refs, vec![selected]);
+        assert!(!task_refs.contains(&unselected));
+        assert_eq!(artifact_refs.len(), 1);
+        assert_eq!(artifact_refs[0].task_id, selected);
+        assert_eq!(artifact_refs[0].artifact, selected_artifact);
     }
 }

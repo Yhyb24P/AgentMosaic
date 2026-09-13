@@ -157,7 +157,11 @@ impl LeadBrain for E2eBrain {
                     .map(|(_, r)| r.summary.clone())
                     .collect::<Vec<_>>()
                     .join("; ");
-                LeadDecision::Complete(TeamResult { answer, task_refs })
+                LeadDecision::Complete(TeamResult {
+                    answer,
+                    task_refs,
+                    artifact_refs: Vec::new(),
+                })
             }
         }
     }

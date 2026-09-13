@@ -1091,6 +1091,50 @@ M3_QWEN_WORKER_READY      = IN_PROGRESS
 M7_R7_NORMAL_PATH_READY   = NOT_PASSED
 ```
 
+## 44. R6 final-result selections and v8 -> v9 migration (2026-09-13)
+
+The team board previously reconstructed a final result by collecting every
+successful descendant. That is not an exact Lead selection and can silently
+change a final answer when an unrelated child later succeeds. Schema version 9
+adds `team_final_task_refs` and `team_final_artifact_refs`; the board now stores
+the Lead-selected task IDs and exact `(task, path, sha256)` artifact references
+before its root task is exposed as succeeded. Reconstruction reads only those
+persisted selections. The new tables remain part of the existing SQLite team
+board, not a second state system.
+
+The actual v8 fixture removes only the two v9 tables, seeds a team row, opens
+through the normal migration, reopens, and verifies both old data preservation
+and usable persisted selection data. Commands and results:
+
+```text
+cargo test -p agent-code-storage v8_database_migrates_preserves_team_rows_and_accepts_final_refs -- --nocapture
+exit 0; 1 passed, 0 failed; 0.83 seconds
+
+cargo test -p agent-code-team final_result_is_reconstructable_from_board -- --nocapture
+exit 0; 1 passed, 0 failed
+
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+git diff --check
+all exit 0; workspace execution reports 162 passed, 0 failed, 13 ignored
+(`cargo test --workspace -- --list`: 175 listed tests, including ignored tests).
+```
+
+The real Codex Lead plan/follow-up test was also executed at the current
+runtime versions with the test's explicit `model="gpt-5.5"` and
+`model_reasoning_effort="low"` overrides: exit `0`; 1 passed, 0 failed, 2
+filtered; 18.13 seconds. The refactored no-ACC Codex+Qwen E2E was then run
+with a captured exit receipt: exit `0`; 1 passed, 0 failed, 2 filtered; 38.65
+seconds. Its sanitized evidence is
+`.acc-evidence/r6-codex-qwen-product-e2e.md` (captured log SHA-256
+`49067c43b2f15153618097cccbb54dd1fa079508c594eb62033597e5bb0b2a5f`).
+
+This satisfies a real bounded product-result-flow slice, but does not close
+M1/M2/M3/M7 by itself: M1 still needs one end-to-end Lead result consumption
+path free of harness-directed context injection; M2/M3/M7 remain `UNKNOWN /
+NOT_PASSED`, `IN_PROGRESS`, and `NOT_PASSED` respectively.
+
 ## 43. M2 cancellable driver seam (2026-09-12)
 
 `AcpWorkerDriver` now exposes a bounded, caller-owned cancellation pair:

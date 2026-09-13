@@ -454,4 +454,71 @@ CREATE TABLE IF NOT EXISTS observations (
 
         let _ = std::fs::remove_file(&path);
     }
+
+    #[test]
+    fn v8_database_migrates_preserves_team_rows_and_accepts_final_refs() {
+        use agent_code_team::{ArtifactMeta, SelectedArtifactRef, TaskBoard, TaskKind};
+
+        use super::{SqliteTaskBoard, SCHEMA, SCHEMA_VERSION};
+
+        let path = temp_db("v8to9-final-refs");
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = Connection::open(&path).expect("open v8 fixture");
+            conn.execute_batch(SCHEMA).expect("base schema");
+            conn.execute_batch(
+                "DROP TABLE team_final_artifact_refs;
+                 DROP TABLE team_final_task_refs;",
+            )
+            .expect("remove v9 tables for v8 fixture");
+            conn.pragma_update(None, "user_version", 8).expect("set v8");
+            conn.execute(
+                "INSERT INTO team_tasks (objective, kind, status) VALUES ('preserved root', 'reasoning', 'pending')",
+                [],
+            )
+            .expect("seed v8 row");
+        }
+
+        let mut board = SqliteTaskBoard::open(Connection::open(&path).expect("reopen"))
+            .expect("migrate v8 to v9");
+        assert_eq!(
+            board.schema_version().expect("schema version"),
+            SCHEMA_VERSION
+        );
+        assert_eq!(
+            board
+                .task(1)
+                .expect("read preserved row")
+                .expect("row")
+                .objective,
+            "preserved root"
+        );
+        let child = board
+            .create_task("selected child", Some(1), TaskKind::Bulk, None)
+            .expect("create child after migration");
+        let artifact = ArtifactMeta {
+            path: "selected.txt".into(),
+            sha256: "b".repeat(64),
+        };
+        board.record_artifact(child, &artifact).expect("artifact");
+        board
+            .record_final_refs(
+                1,
+                &[child],
+                &[SelectedArtifactRef {
+                    task_id: child,
+                    artifact: artifact.clone(),
+                }],
+            )
+            .expect("write final refs");
+        drop(board);
+
+        let reopened = SqliteTaskBoard::open(Connection::open(&path).expect("reopen again"))
+            .expect("reopen v9");
+        let (tasks, artifacts) = reopened.final_refs(1).expect("read final refs");
+        assert_eq!(tasks, vec![child]);
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].artifact, artifact);
+        let _ = std::fs::remove_file(&path);
+    }
 }

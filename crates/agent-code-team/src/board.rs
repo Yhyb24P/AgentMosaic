@@ -81,10 +81,19 @@ pub struct AgentMessage {
 }
 
 /// Artifact metadata: a path and its content hash.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactMeta {
     pub path: String,
     pub sha256: String,
+}
+
+/// One exact artifact selected by the Lead for a final team result. The task
+/// remains canonical; path and digest prevent reconstruction from silently
+/// substituting a newer or unrelated artifact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedArtifactRef {
+    pub task_id: u64,
+    pub artifact: ArtifactMeta,
 }
 
 /// An error from the task board.
@@ -148,6 +157,20 @@ pub trait TaskBoard {
     fn record_message(&mut self, message: &AgentMessage) -> Result<(), BoardError>;
     /// Persist artifact metadata for a task.
     fn record_artifact(&mut self, task: u64, artifact: &ArtifactMeta) -> Result<(), BoardError>;
+    /// Persist the Lead's explicitly selected completed task and artifact
+    /// references before the root task becomes observable as succeeded.
+    fn record_final_refs(
+        &mut self,
+        root_task: u64,
+        task_refs: &[u64],
+        artifact_refs: &[SelectedArtifactRef],
+    ) -> Result<(), BoardError>;
+    /// Read exactly the final references selected for `root_task`, rather
+    /// than inferring them from every successful descendant.
+    fn final_refs(
+        &self,
+        root_task: u64,
+    ) -> Result<(Vec<u64>, Vec<SelectedArtifactRef>), BoardError>;
     /// Read a task.
     fn task(&self, id: u64) -> Result<Option<TaskRecord>, BoardError>;
     /// Read all attempts for a task, in attempt order.

@@ -9,9 +9,9 @@
 //! objective as a root task and persists the final answer as that root task's
 //! successful result, so both can be reconstructed from the board alone.
 
-use std::collections::{BTreeMap, BTreeSet};
-
-use crate::board::{AgentMessage, ArtifactMeta, BoardError, TaskAttempt, TaskBoard, TaskStatus};
+use crate::board::{
+    AgentMessage, ArtifactMeta, BoardError, SelectedArtifactRef, TaskAttempt, TaskBoard, TaskStatus,
+};
 use crate::registry::{AgentTaskResult, TaskKind};
 use crate::scheduler::{ScheduleError, Scheduler, TaskSpec};
 
@@ -32,6 +32,8 @@ pub struct TeamResult {
     pub answer: String,
     /// The completed tasks whose actual results ground this answer.
     pub task_refs: Vec<u64>,
+    /// Exact artifact digests selected by the Lead for this answer.
+    pub artifact_refs: Vec<SelectedArtifactRef>,
 }
 
 /// The context handed to the Lead brain each round.
@@ -256,6 +258,20 @@ impl<B: TaskBoard + Send + 'static> Lead<B> {
                 return Err(LeadError::CompletionNotGrounded);
             }
         }
+        for selected in &result.artifact_refs {
+            if !result.task_refs.contains(&selected.task_id) {
+                return Err(LeadError::CompletionNotGrounded);
+            }
+            let artifacts = board
+                .artifacts(selected.task_id)
+                .map_err(LeadError::Board)?;
+            if !artifacts
+                .iter()
+                .any(|artifact| artifact == &selected.artifact)
+            {
+                return Err(LeadError::CompletionNotGrounded);
+            }
+        }
         Ok(())
     }
 
@@ -263,6 +279,12 @@ impl<B: TaskBoard + Send + 'static> Lead<B> {
     /// objective and the final result are both reconstructable from the board.
     fn persist_final(&self, root_id: u64, result: &TeamResult) -> Result<(), LeadError> {
         let mut board = self.scheduler.board().lock().unwrap();
+        // Persist explicit selections before the root task becomes visible as
+        // succeeded. A crash can leave a non-terminal root with refs, never a
+        // terminal final result whose grounding is absent.
+        board
+            .record_final_refs(root_id, &result.task_refs, &result.artifact_refs)
+            .map_err(LeadError::Board)?;
         board
             .record_attempt(&TaskAttempt {
                 task_id: root_id,
@@ -281,9 +303,9 @@ impl<B: TaskBoard + Send + 'static> Lead<B> {
 }
 
 /// Reconstruct the final team result from the durable board: the root task's
-/// successful result (the answer) and the completed tasks it references (T16).
-/// This is what makes "the final result is reconstructable" true, not just the
-/// in-memory return value.
+/// successful result (the answer) and the exact refs selected by the Lead.
+/// This deliberately does not infer selections from every successful
+/// descendant, because such inference silently changes a final result.
 pub fn reconstruct_team_result<B: TaskBoard>(
     board: &B,
     root_id: u64,
@@ -295,41 +317,12 @@ pub fn reconstruct_team_result<B: TaskBoard>(
         .find(|a| a.status == TaskStatus::Succeeded)
         .and_then(|a| a.result.clone())
         .ok_or(BoardError::Storage("no successful root result".into()))?;
-    let mut task_refs = Vec::new();
-    for id in descendants_of(board, root_id)? {
-        if let Some(record) = board.task(id)? {
-            if record.status == TaskStatus::Succeeded {
-                task_refs.push(id);
-            }
-        }
-    }
-    task_refs.sort();
-    Ok(TeamResult { answer, task_refs })
-}
-
-/// The task ids reachable from `root` by following `parent_task` links.
-fn descendants_of<B: TaskBoard>(board: &B, root: u64) -> Result<Vec<u64>, BoardError> {
-    let all = board.task_ids()?;
-    let mut children: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
-    for &id in &all {
-        if let Some(record) = board.task(id)? {
-            if let Some(parent) = record.parent_task {
-                children.entry(parent).or_default().push(id);
-            }
-        }
-    }
-    let mut seen = BTreeSet::new();
-    let mut stack = vec![root];
-    while let Some(cur) = stack.pop() {
-        if let Some(kids) = children.get(&cur) {
-            for &kid in kids {
-                if seen.insert(kid) {
-                    stack.push(kid);
-                }
-            }
-        }
-    }
-    Ok(seen.into_iter().collect())
+    let (task_refs, artifact_refs) = board.final_refs(root_id)?;
+    Ok(TeamResult {
+        answer,
+        task_refs,
+        artifact_refs,
+    })
 }
 
 #[cfg(test)]
@@ -386,7 +379,11 @@ mod tests {
                         .map(|(_, r)| r.summary.clone())
                         .collect::<Vec<_>>()
                         .join("; ");
-                    LeadDecision::Complete(TeamResult { answer, task_refs })
+                    LeadDecision::Complete(TeamResult {
+                        answer,
+                        task_refs,
+                        artifact_refs: Vec::new(),
+                    })
                 }
             }
         }
@@ -466,6 +463,7 @@ mod tests {
                 LeadDecision::Complete(TeamResult {
                     answer: "made up".into(),
                     task_refs: Vec::new(),
+                    artifact_refs: Vec::new(),
                 })
             }
         }

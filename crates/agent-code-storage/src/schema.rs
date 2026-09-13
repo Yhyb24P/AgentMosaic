@@ -2,8 +2,9 @@
 /// and `tool_calls.request` on top of the R3 (version 1) schema. Version 3
 /// extends the team tables for the durable task board: task parent/kind/
 /// target/assignee, run attempt/result/error, and task-keyed artifacts.
-/// Version 8 adds the durable runtime agent registry (agent_registry).
-pub const SCHEMA_VERSION: i32 = 8;
+/// Version 8 adds the durable runtime agent registry (agent_registry). Version
+/// 9 adds explicit Lead-selected final task/artifact references.
+pub const SCHEMA_VERSION: i32 = 9;
 
 /// The durable journal schema. Deliberately small; it does not reproduce the
 /// legacy qualification/audit schema.
@@ -136,6 +137,18 @@ CREATE TABLE IF NOT EXISTS agent_registry (
     max_concurrency INTEGER NOT NULL,
     tags_json TEXT
 );
+CREATE TABLE IF NOT EXISTS team_final_task_refs (
+    root_task_id INTEGER NOT NULL REFERENCES team_tasks(id),
+    selected_task_id INTEGER NOT NULL REFERENCES team_tasks(id),
+    PRIMARY KEY (root_task_id, selected_task_id)
+);
+CREATE TABLE IF NOT EXISTS team_final_artifact_refs (
+    root_task_id INTEGER NOT NULL REFERENCES team_tasks(id),
+    task_id INTEGER NOT NULL REFERENCES team_tasks(id),
+    path TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    PRIMARY KEY (root_task_id, task_id, path, sha256)
+);
 "#;
 
 /// Idempotently bring `conn` up to [`SCHEMA_VERSION`]. A fresh database is
@@ -184,6 +197,21 @@ pub fn migrate(conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error> {
             runtime_kind TEXT NOT NULL, native_call_id TEXT NOT NULL, kind TEXT NOT NULL,
             payload_summary TEXT NOT NULL, response_summary TEXT,
             UNIQUE (runtime_kind, native_call_id)
+         );",
+    )?;
+    // R8 -> R9: final results persist exactly which completed task/artifact
+    // refs the Lead selected. They are not inferred from all descendants.
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS team_final_task_refs (
+            root_task_id INTEGER NOT NULL REFERENCES team_tasks(id),
+            selected_task_id INTEGER NOT NULL REFERENCES team_tasks(id),
+            PRIMARY KEY (root_task_id, selected_task_id)
+         );
+         CREATE TABLE IF NOT EXISTS team_final_artifact_refs (
+            root_task_id INTEGER NOT NULL REFERENCES team_tasks(id),
+            task_id INTEGER NOT NULL REFERENCES team_tasks(id),
+            path TEXT NOT NULL, sha256 TEXT NOT NULL,
+            PRIMARY KEY (root_task_id, task_id, path, sha256)
          );",
     )?;
     // R7 -> R8: the durable runtime agent registry.

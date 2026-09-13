@@ -7,7 +7,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::board::{
-    AgentMessage, ArtifactMeta, BoardError, TaskAttempt, TaskBoard, TaskRecord, TaskStatus,
+    AgentMessage, ArtifactMeta, BoardError, SelectedArtifactRef, TaskAttempt, TaskBoard,
+    TaskRecord, TaskStatus,
 };
 use crate::registry::{
     AgentConfig, AgentDriver, AgentRegistry, AgentTask, AgentTaskResult, AgentTier, TaskKind,
@@ -82,6 +83,7 @@ pub struct MemBoard {
     pub attempts: BTreeMap<u64, Vec<TaskAttempt>>,
     pub messages: Vec<AgentMessage>,
     pub artifacts: BTreeMap<u64, Vec<ArtifactMeta>>,
+    pub final_refs: BTreeMap<u64, (Vec<u64>, Vec<SelectedArtifactRef>)>,
     next_id: u64,
 }
 
@@ -157,6 +159,28 @@ impl TaskBoard for MemBoard {
             .or_default()
             .push(artifact.clone());
         Ok(())
+    }
+    fn record_final_refs(
+        &mut self,
+        root_task: u64,
+        task_refs: &[u64],
+        artifact_refs: &[SelectedArtifactRef],
+    ) -> Result<(), BoardError> {
+        if !self.tasks.contains_key(&root_task) {
+            return Err(BoardError::UnknownTask(root_task));
+        }
+        self.final_refs
+            .insert(root_task, (task_refs.to_vec(), artifact_refs.to_vec()));
+        Ok(())
+    }
+    fn final_refs(
+        &self,
+        root_task: u64,
+    ) -> Result<(Vec<u64>, Vec<SelectedArtifactRef>), BoardError> {
+        if !self.tasks.contains_key(&root_task) {
+            return Err(BoardError::UnknownTask(root_task));
+        }
+        Ok(self.final_refs.get(&root_task).cloned().unwrap_or_default())
     }
     fn task(&self, id: u64) -> Result<Option<TaskRecord>, BoardError> {
         Ok(self.tasks.get(&id).cloned())

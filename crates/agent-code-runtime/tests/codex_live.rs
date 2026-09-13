@@ -1,12 +1,10 @@
 //! Explicit live harness: run with `cargo test -p agent-code-runtime --test codex_live -- --ignored`.
 
 use agent_code_runtime::{AcpWorkerConfig, AcpWorkerDriver, CodexAppServer, CodexBridgeEvent};
-use agent_code_storage::{ExternalRuntimeBinding, SqliteAccStore, SqliteTaskBoard};
+use agent_code_storage::{ExternalRuntimeBinding, SqliteTaskBoard};
 use agent_code_team::{
-    AccState, AccTaskState, AcceptanceCriterion, AgentCapability, AgentMessage, AgentTaskResult,
-    ArtifactMeta, Authority, Classification, CollaborationEvent, CollaborationPayload, ContextItem,
-    ContextManifest, Provenance, TaskAssignment, TaskAttempt, TaskBoard, TaskContract, TaskGraph,
-    TaskGraphProposal, TaskKind, TaskRole, TaskStatus, TrustStatus,
+    reconstruct_team_result, AgentMessage, AgentTaskResult, ArtifactMeta, SelectedArtifactRef,
+    TaskAttempt, TaskBoard, TaskKind, TaskStatus,
 };
 use rusqlite::Connection;
 use serde::Deserialize;
@@ -80,7 +78,12 @@ async fn real_codex_thread_turn_uses_bounded_qwen_peer_result() {
         .unwrap();
     board.set_status(task, TaskStatus::Running).unwrap();
     let qwen_task = board
-        .create_task("return a bounded peer finding", None, TaskKind::Bulk, None)
+        .create_task(
+            "return a bounded peer finding",
+            Some(task),
+            TaskKind::Bulk,
+            None,
+        )
         .unwrap();
     board
         .record_attempt(&TaskAttempt {
@@ -312,8 +315,8 @@ async fn real_codex_thread_turn_uses_bounded_qwen_peer_result() {
         .expect("Codex must create the bounded result artifact");
     assert_eq!(artifact_bytes, b"phase23 artifact\n");
     let artifact_sha256 = format!("{:x}", Sha256::digest(&artifact_bytes));
-    // This durable team result is intentionally distinct from ACC acceptance:
-    // a completed external turn only supplies a submitted worker outcome.
+    // This is the durable R6 team result, intentionally independent of the
+    // retired ACC acceptance workflow.
     board
         .commit_successful_result(
             &TaskAttempt {
@@ -339,137 +342,22 @@ async fn real_codex_thread_turn_uses_bounded_qwen_peer_result() {
             },
         )
         .unwrap();
-    // A completed external turn is merely a submitted result.  The artifact
-    // enters the existing ACC store only after its exact bytes are verified,
-    // and only an independently-bound verifier can transition it to accepted.
-    let acc_task_id = format!("codex-live-{task}");
-    let acc_task = TaskContract {
-        task_id: acc_task_id.clone(),
-        objective: "produce the exact bounded live collaboration artifact".into(),
-        required_agent_capabilities: std::collections::BTreeSet::from([AgentCapability(
-            "code.implement".into(),
-        )]),
-        requested_capabilities: std::collections::BTreeSet::new(),
-        expected_outputs: vec!["phase23-result.txt".into()],
-        acceptance: vec![AcceptanceCriterion {
-            criterion_id: "independent-hash-review".into(),
-            requirement:
-                "an independently-bound verifier confirms the submitted immutable artifact hash"
-                    .into(),
-            independent_review: true,
-        }],
-        idempotency_key: format!("live-codex-{task}-1"),
-    };
-    let graph = TaskGraph::validate(TaskGraphProposal {
-        proposal_id: format!("live-codex-proposal-{task}"),
-        tasks: vec![acc_task],
-        dependencies: Vec::new(),
-    })
-    .unwrap();
-    let mut acc = AccState::new(graph.clone());
-    acc.mark_ready(&std::collections::BTreeSet::new());
-    acc.assign(TaskAssignment {
-        task_id: acc_task_id.clone(),
-        agent_id: "codex".into(),
-        runtime_id: "codex-app-server".into(),
-        role: TaskRole::Implementer,
-        trusted_grants: std::collections::BTreeSet::new(),
-    })
-    .unwrap();
-    let manifest = ContextManifest::build(
-        format!("live-codex-manifest-{task}"),
-        acc_task_id.clone(),
-        vec![ContextItem {
-            item_id: "bounded-contract".into(),
-            content: "Create exactly phase23-result.txt containing the approved bounded artifact."
-                .into(),
-            authority: Authority::TaskContract,
-            trust: TrustStatus::Verified,
-            classification: Classification::Internal,
-            provenance: Provenance {
-                source: "live-codex-harness".into(),
-                source_version: "r6".into(),
-            },
-            forwardable: true,
-        }],
-    );
-    acc.persist_manifest(manifest.clone()).unwrap();
-    let store = SqliteAccStore::open(Connection::open(&db).unwrap()).unwrap();
-    store.put_graph(&graph).unwrap();
-    store.put_manifest(&manifest).unwrap();
-    store
-        .set_task_state(&acc_task_id, AccTaskState::Assigned)
+    // The final team result selects the exact completed Qwen artifact before
+    // the Lead task is marked succeeded. This is product result flow, not an
+    // ACC acceptance/verification side channel.
+    board
+        .record_final_refs(
+            task,
+            &[qwen_task],
+            &[SelectedArtifactRef {
+                task_id: qwen_task,
+                artifact: ArtifactMeta {
+                    path: "qwen-worker.txt".into(),
+                    sha256: qwen_artifact_sha256.clone(),
+                },
+            }],
+        )
         .unwrap();
-    macro_rules! ingest {
-        ($actor:expr, $runtime:expr, $event_id:expr, $payload:expr $(,)?) => {{
-            let event = CollaborationEvent {
-                event_id: $event_id,
-                task_id: acc_task_id.clone(),
-                actor_id: $actor.into(),
-                runtime_id: $runtime.into(),
-                correlation_id: format!("live-codex-turn-{task}"),
-                causation_id: None,
-                authority: Authority::Observation,
-                payload: $payload,
-            };
-            acc.ingest($actor, $runtime, event).unwrap();
-            store.append_event(&acc.events().last().unwrap().1).unwrap();
-        }};
-    }
-    let artifact_id = format!("phase23-result-{task}");
-    ingest!(
-        "codex",
-        "codex-app-server",
-        format!("live-codex-artifact-{task}"),
-        CollaborationPayload::ArtifactPublish {
-            artifact_id: artifact_id.clone(),
-            artifact_sha256: artifact_sha256.clone(),
-            artifact_version: 1,
-        },
-    );
-    ingest!(
-        "codex",
-        "codex-app-server",
-        format!("live-codex-result-{task}"),
-        CollaborationPayload::TaskResultSubmitted {
-            artifact_id: artifact_id.clone(),
-            artifact_sha256: artifact_sha256.clone(),
-            artifact_version: 1,
-        },
-    );
-    assert_eq!(acc.state(&acc_task_id), Some(AccTaskState::ResultSubmitted));
-    ingest!(
-        "codex",
-        "codex-app-server",
-        format!("live-codex-review-request-{task}"),
-        CollaborationPayload::ReviewRequest {
-            artifact_id: artifact_id.clone(),
-            artifact_sha256: artifact_sha256.clone(),
-            artifact_version: 1,
-        },
-    );
-    // This distinct trusted verification binding only attests the already
-    // checked bytes; it is not a Codex or Qwen self-acceptance claim.
-    ingest!(
-        "independent-verifier",
-        "rust-hash-verifier",
-        format!("live-codex-independent-review-{task}"),
-        CollaborationPayload::ReviewResponse {
-            approved: true,
-            artifact_id: artifact_id.clone(),
-            artifact_sha256: artifact_sha256.clone(),
-            artifact_version: 1,
-        },
-    );
-    assert_eq!(acc.state(&acc_task_id), Some(AccTaskState::Accepted));
-    store
-        .put_artifact(&artifact_id, &acc_task_id, &artifact_sha256, 1)
-        .unwrap();
-    store
-        .set_task_state(&acc_task_id, AccTaskState::Accepted)
-        .unwrap();
-    drop(store);
-    eprintln!("sanitized ACC result submitted, independently hash-reviewed, and accepted");
     client.close().unwrap();
     // A fresh app-server process must be able to reconcile the persisted
     // external thread reference.  This does not reconstruct canonical state
@@ -514,19 +402,23 @@ async fn real_codex_thread_turn_uses_bounded_qwen_peer_result() {
     assert_eq!(artifacts[0].sha256, artifact_sha256);
     assert_eq!(reopened.messages_to("lead").unwrap().len(), 1);
     assert_eq!(reopened.messages_to("codex").unwrap().len(), 1);
-    drop(reopened);
-    let recovered_acc = SqliteAccStore::open(Connection::open(&db).unwrap()).unwrap();
+    let final_result = reconstruct_team_result(&reopened, task).unwrap();
     assert_eq!(
-        recovered_acc.task_states().unwrap(),
-        vec![(acc_task_id.clone(), "ACCEPTED".into())]
+        final_result.answer,
+        "Codex completed bounded collaboration turn"
     );
-    assert_eq!(recovered_acc.events_after(0).unwrap().len(), 4);
-    assert_eq!(recovered_acc.artifact_refs().unwrap().len(), 1);
-    assert!(recovered_acc
-        .manifest(&manifest.manifest_id)
-        .unwrap()
-        .unwrap()
-        .verify_hash());
+    assert_eq!(final_result.task_refs, vec![qwen_task]);
+    assert_eq!(final_result.artifact_refs.len(), 1);
+    assert_eq!(final_result.artifact_refs[0].task_id, qwen_task);
+    assert_eq!(
+        final_result.artifact_refs[0].artifact.path,
+        "qwen-worker.txt"
+    );
+    assert_eq!(
+        final_result.artifact_refs[0].artifact.sha256,
+        qwen_artifact_sha256
+    );
+    drop(reopened);
     let _ = std::fs::remove_file(db);
     let _ = std::fs::remove_dir(cwd);
 }
