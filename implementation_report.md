@@ -1641,3 +1641,26 @@ The sanitized evidence manifest added with this receipt binds the candidate,
 commands, exit codes, and evidence-file SHA-256 values.  It contains no raw
 wire frame, transcript, credential, endpoint, native session id, or private
 filesystem path.
+
+## 54. R7 live CLI cancellation seam (2026-09-13)
+
+Candidate code commit `8b73657de52c4a342e85c0fa0893aafbb676c0e9` adds
+cross-process cancellation without a process manager or parallel state store.
+`run-acp` polls only its authoritative SQLite task record; an independent
+`cancel` CLI invocation writes the existing `cancelled` task state.  The
+running process owns the non-serializable `AcpCancellation` and sends typed
+ACP cancellation only on the session it created.  It never receives a native
+session ID from the control invocation.
+
+A real Qwen ACP drill observed: cancel exit `0`; running `run-acp` exit `2`
+with `ACP worker cancelled`; reopened task and attempt both `cancelled`; and
+the reopened external binding `cancelled`.  No Qwen ACP child remained.  A
+response racing cancellation is fail-closed and cannot become a successful
+result.  Sanitized receipt:
+`.acc-evidence/r7-cli-live-cancel-20260913.md`.
+
+Full Rust CI for the candidate passed (`cargo fmt`, all-features clippy,
+workspace tests, and `git diff --check`, all exit `0`; 175 passed, 0 failed,
+16 ignored).  M7 remains `NOT_PASSED` pending candidate-bound normal-path
+coverage of submit/observe/control/resume through the real runtime and a
+final CLI/TUI documentation/release audit.
