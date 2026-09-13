@@ -22,10 +22,9 @@ The previous "Trusted Control Plane / qualification / verification" product dire
 retired. Do not extend it. The active work is the Rust v2 strangler rewrite on branch
 `v2/rust-agent-team` (baseline `8cf27dc2a9e03ffbc1fbd091a576e0fb0f16bb93`).
 
-- The Python `researchd` control-plane implementation is a frozen reference, not the
-  active roadmap. Do not add features to it.
+- The former Python `researchd` control plane and qualification framework were
+  removed in R8. They are historical Git content, not a product path.
 - The active roadmap is `R0 -> R8`, documented in `docs/v2/ROADMAP.md`.
-- `docs/qualification/` is the frozen legacy qualification framework. Historical only.
 
 ## Do not recreate as core
 
@@ -78,26 +77,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-## Legacy Python (transition)
-
-The Python package under `src/researchd/` (daemons `researchd`, `researchctl`,
-`research`) is the frozen reference implementation. It still builds and tests, but it is
-not the active direction. Do not extend it. R8 deletes the unreachable control-plane
-modules after Rust E2E parity.
-
-Legacy commands (still work, not the roadmap):
-
-```bash
-uv sync --frozen
-uv run pytest -q
-uv run mypy src tests
-git diff --check
-```
-
 ## Structure
 
 - `crates/`: the Rust v2 workspace (active).
-- `src/researchd/`: legacy Python control-plane reference (transition; targeted for R8).
 - `docs/v2/`: the active Rust v2 roadmap and contracts.
-- `docs/qualification/`: frozen legacy qualification framework, historical only.
-- `tests/`: legacy Python test gates.

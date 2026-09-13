@@ -479,7 +479,7 @@ budget/contention on the shared local vLLM node, not a hung runtime; see
 ## 29. R6–R8 Source-Informed Productization
 
 ```json
-{"active_roadmap":"R6-R8","active_product":"heterogeneous-agent-coding-team","milestones":{"M1_CODEX_TEAM_READY":"PASSED","M2_ACP_DRIVER_READY":"PASSED","M3_QWEN_WORKER_READY":"PASSED","M4_KIMI_PROFILE_CLASSIFIED":"KIMI_READY","M5_R6_TEAM_READY":"PASSED","M6_R6_SEALED":"PASSED","M7_R7_NORMAL_PATH_READY":"PASSED","M8_R8_DEBLOATED":"NOT_RUN","M9_PRODUCT_RC_READY":"NOT_RUN"}}
+{"active_roadmap":"R6-R8","active_product":"heterogeneous-agent-coding-team","milestones":{"M1_CODEX_TEAM_READY":"PASSED","M2_ACP_DRIVER_READY":"PASSED","M3_QWEN_WORKER_READY":"PASSED","M4_KIMI_PROFILE_CLASSIFIED":"KIMI_READY","M5_R6_TEAM_READY":"PASSED","M6_R6_SEALED":"PASSED","M7_R7_NORMAL_PATH_READY":"PASSED","M8_R8_DEBLOATED":"PASSED","M9_PRODUCT_RC_READY":"NOT_RUN"}}
 ```
 
 Historical A–N/J/K/L/M/Q are `HISTORICAL_COMPATIBILITY_ONLY` for this R6–R8
@@ -1687,3 +1687,24 @@ path and explicitly states it does not launch legacy Python.
 
 Therefore `M7_R7_NORMAL_PATH_READY = PASSED`.  This is not a release claim:
 M8 de-bloating, release build/install/upgrade smoke, and M9 remain outstanding.
+
+## 56. R8 legacy deletion (2026-09-13)
+
+After R6/R7 parity, the unreachable retired Python control-plane was removed:
+`src/researchd`, Python-only tests, qualification documentation/schemas/scripts,
+Alembic configuration, Python package metadata/lockfile, and legacy launcher
+examples.  The deletion includes the retired policy, approval, verifier,
+qualification, backup/DR, WorkOrder, delegation, and invocation product
+surfaces.  Historical material remains in Git history, not in the installed
+or launched product.
+
+The Rust workspace remains the sole normal path. README, README.zh-CN,
+AGENTS.md, and `docs/v2/ROADMAP.md` now state that fact. A product-source
+reachability scan found no remaining reference to removed Python launchers or
+qualification paths. Full Rust CI completed with all commands exit `0`
+(`cargo fmt`, all-features clippy, workspace test, `git diff --check`; 175
+passed, 0 failed, 16 intentionally ignored live tests).
+
+Therefore `M8_R8_DEBLOATED = PASSED`. M9 remains `NOT_RUN` until release
+build, clean-install smoke, upgrade-migration smoke, candidate-bound release
+artifacts, and final product RC evidence are complete.

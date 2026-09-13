@@ -151,26 +151,12 @@ inspection and control.  It operates directly on the authoritative SQLite
 board and does not launch legacy Python.  Live Qwen ACP submit/run/continue
 and cancel/recovery evidence is recorded in `implementation_report.md`.
 
-## Legacy Python (frozen reference)
+## R8 legacy removal
 
-The Python package under `src/researchd/` (daemons `researchd`, `researchctl`,
-`research`) is the frozen reference implementation. It still builds and tests, but it is
-not the active direction. Do not extend it. R8 deletes the unreachable control-plane
-modules after Rust E2E parity.
-
-Essential legacy commands:
-
-```bash
-uv sync --frozen
-uv run pytest -q
-uv run mypy src tests
-git diff --check
-```
-
-Full legacy operational detail (control API routes, daemon commands, Browser Control
-Tower, TUI, backup/restore) is preserved in the frozen baseline
-`8cf27dc2a9e03ffbc1fbd091a576e0fb0f16bb93` and in git history. The legacy qualification
-framework lives in `docs/qualification/` and is historical only.
+The retired Python `researchd` control plane, Alembic migration chain,
+qualification framework, and their dedicated tests/scripts were removed after
+Rust R6/R7 parity. Historical implementation remains available in Git history;
+it is not installed, launched, or required by the current product.
 
 ## License
 

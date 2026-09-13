@@ -24,7 +24,8 @@ External full Coding Agents (Codex/Claude-style CLIs) connect through an
 - Reference baseline: `8cf27dc2a9e03ffbc1fbd091a576e0fb0f16bb93` on
   `preview/agent-control-closure`.
 - Development branch: `v2/rust-agent-team`.
-- The Python `researchd` implementation is a frozen reference (legacy/transition).
+- The former Python `researchd` implementation was removed in R8; Git history
+  retains the historical reference.
 - R4 is sealed at `2692869` with exact-commit CI green. Its acceptance record
   is [`R4_ACCEPTANCE.md`](R4_ACCEPTANCE.md).
 - R5 has a local, unpushed implementation stack under review; it is not sealed.
@@ -72,8 +73,9 @@ schema.
   Coding Agents use `ExternalCliAgentDriver`.
 - R7 TUI cutover. ratatui UX; the Rust binary is the normal path; legacy Python no
   longer launches by default.
-- R8 Delete legacy. After E2E parity, remove unreachable policy/verifier/qualification/
-  backup/control-plane Python code. Prefer deletion over compatibility wrappers.
+- R8 Delete legacy. Completed: unreachable policy/verifier/qualification/
+  backup/control-plane Python code and its dedicated package/test surface were
+  removed after R6/R7 parity. Prefer deletion over compatibility wrappers.
 
 ## Blocking E2E
 
