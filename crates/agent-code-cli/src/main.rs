@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use agent_code_runtime::{AcpSessionStartedObserver, AcpWorkerConfig, AcpWorkerDriver};
+use agent_code_runtime::{
+    AcpCancellation, AcpSessionStartedObserver, AcpWorkerConfig, AcpWorkerDriver, AcpWorkerError,
+};
 use agent_code_storage::{
     AgentRegistryRecord, ExternalRuntimeBinding, SqliteAgentRegistry, SqliteTaskBoard,
 };
@@ -274,17 +276,71 @@ fn run_acp(database: &str, fields: &[String]) -> Result<String, String> {
             })
             .map_err(|error| format!("persist ACP binding: {error}"))
     });
-    let execution = runtime.block_on(driver.execute_task_with_session_observer(
-        &AgentTask {
-            id: task_id,
-            objective: task.objective,
-            kind: task.kind,
-            context: Vec::new(),
-        },
-        session_started,
-    ));
+    let (cancellation, mut cancellation_listener) = AcpCancellation::new();
+    let cancellation_database = database.to_string();
+    let cancellation_request = cancellation.clone();
+    let execution = runtime.block_on(async {
+        let monitor = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let cancelled = open(&cancellation_database)
+                    .ok()
+                    .and_then(|board| board.task(task_id).ok().flatten())
+                    .is_some_and(|task| task.status == TaskStatus::Cancelled);
+                if cancelled {
+                    cancellation_request.cancel();
+                    break;
+                }
+            }
+        });
+        let result = driver
+            .execute_task_with_cancellation_and_session_observer(
+                &AgentTask {
+                    id: task_id,
+                    objective: task.objective,
+                    kind: task.kind,
+                    context: Vec::new(),
+                },
+                &mut cancellation_listener,
+                session_started,
+            )
+            .await;
+        monitor.abort();
+        result
+    });
     match execution {
         Ok(execution) => {
+            // A response that races a durable user cancellation is never
+            // committed as success. The running process may only accept a
+            // result while the authoritative task remains non-cancelled.
+            if board
+                .task(task_id)
+                .map_err(|e| format!("run-acp: {e:?}"))?
+                .is_some_and(|task| task.status == TaskStatus::Cancelled)
+            {
+                board
+                    .upsert_external_binding(&ExternalRuntimeBinding {
+                        team_task_id: task_id,
+                        attempt,
+                        agent_id: agent_id.clone(),
+                        runtime_kind: "acp".into(),
+                        native_thread_id: Some(execution.external_session_id),
+                        native_turn_id: None,
+                        lifecycle_state: "cancelled".into(),
+                    })
+                    .map_err(|e| format!("run-acp: {e:?}"))?;
+                board
+                    .complete_attempt(&TaskAttempt {
+                        task_id,
+                        attempt,
+                        agent_id: agent_id.clone(),
+                        status: TaskStatus::Cancelled,
+                        result: None,
+                        error: Some("user cancellation requested before result commit".into()),
+                    })
+                    .map_err(|e| format!("run-acp: {e:?}"))?;
+                return Err(format!("run-acp: task {task_id} was cancelled"));
+            }
             board
                 .upsert_external_binding(&ExternalRuntimeBinding {
                     team_task_id: task_id,
@@ -313,16 +369,44 @@ fn run_acp(database: &str, fields: &[String]) -> Result<String, String> {
         }
         Err(error) => {
             let text = error.to_string();
+            let cancelled = matches!(error, AcpWorkerError::Cancelled)
+                && board
+                    .task(task_id)
+                    .map_err(|e| format!("run-acp: {e:?}"))?
+                    .is_some_and(|task| task.status == TaskStatus::Cancelled);
+            if cancelled {
+                if let Some(binding) = board
+                    .external_binding(task_id, attempt)
+                    .map_err(|e| format!("run-acp: {e}"))?
+                {
+                    board
+                        .upsert_external_binding(&ExternalRuntimeBinding {
+                            lifecycle_state: "cancelled".into(),
+                            ..binding
+                        })
+                        .map_err(|e| format!("run-acp: {e}"))?;
+                }
+            }
             board
                 .complete_attempt(&TaskAttempt {
                     task_id,
                     attempt,
                     agent_id: agent_id.clone(),
-                    status: TaskStatus::Failed,
+                    status: if cancelled {
+                        TaskStatus::Cancelled
+                    } else {
+                        TaskStatus::Failed
+                    },
                     result: None,
                     error: Some(text.clone()),
                 })
-                .and_then(|_| board.set_status(task_id, TaskStatus::Failed))
+                .and_then(|_| {
+                    if cancelled {
+                        Ok(())
+                    } else {
+                        board.set_status(task_id, TaskStatus::Failed)
+                    }
+                })
                 .map_err(|e| format!("run-acp: {e:?}"))?;
             Err(format!("run-acp: {text}"))
         }

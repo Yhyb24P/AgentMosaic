@@ -369,8 +369,26 @@ impl AcpWorkerDriver {
         session_started: AcpSessionStartedObserver,
     ) -> Result<AcpTaskExecution, AcpWorkerError> {
         let (_cancellation, mut listener) = AcpCancellation::new();
+        self.execute_task_with_cancellation_and_session_observer(
+            task,
+            &mut listener,
+            session_started,
+        )
+        .await
+    }
+
+    /// Execute a task while a caller both observes the newly-created external
+    /// session and owns cancellation for that exact live session.  This keeps
+    /// the durable board as the cross-process intent channel while preventing
+    /// a separate process from naming or cancelling an arbitrary ACP session.
+    pub async fn execute_task_with_cancellation_and_session_observer(
+        &self,
+        task: &AgentTask,
+        cancellation: &mut AcpCancellationListener,
+        session_started: AcpSessionStartedObserver,
+    ) -> Result<AcpTaskExecution, AcpWorkerError> {
         let (external_session_id, response) = self
-            .run_with_cancellation_observed(task, &mut listener, Some(session_started))
+            .run_with_cancellation_observed(task, cancellation, Some(session_started))
             .await?;
         let summary = parse_peer_result(&response, self.config.max_result_bytes)?;
         let artifacts = self.collect_artifacts()?;
