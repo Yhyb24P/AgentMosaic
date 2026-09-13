@@ -33,3 +33,21 @@ exit receipt `9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa`.
 
 This is real Qwen result/artifact/binding evidence for M3. It does not prove
 continuation, cancellation, recovery/reconcile, or M5 cross-runtime team E2E.
+
+## Same-session continuation requalification
+
+At source `125d32d6b33ed741c10c0536c96ed4b5f38bb23d`, the current local Qwen
+profile also passed the focused live driver command:
+
+```text
+cargo test -p agent-code-runtime qwen_acp_reuses_one_authenticated_session_for_follow_up -- --ignored --nocapture
+```
+
+Exit `0`; 1 passed, 0 failed, 0 ignored, 22 filtered out; 11.64 seconds.
+The sanitized log SHA-256 is
+`46988f8c998381ad0d1e5a655a027103925a8cef15dba6ebaa700dbc70a7f747` and
+the exit-receipt SHA-256 is
+`9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa`.
+No session ID, prompt, response, frame, endpoint, or credential was retained.
+This requalifies the driver's same-session API, not a user-facing CLI
+continuation/recovery workflow.
