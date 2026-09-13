@@ -479,7 +479,7 @@ budget/contention on the shared local vLLM node, not a hung runtime; see
 ## 29. R6–R8 Source-Informed Productization
 
 ```json
-{"active_roadmap":"R6-R8","active_product":"heterogeneous-agent-coding-team","milestones":{"M1_CODEX_TEAM_READY":"PASSED","M2_ACP_DRIVER_READY":"PASSED","M3_QWEN_WORKER_READY":"IN_PROGRESS","M4_KIMI_PROFILE_CLASSIFIED":"KIMI_READY","M5_R6_TEAM_READY":"NOT_RUN","M6_R6_SEALED":"NOT_RUN","M7_R7_NORMAL_PATH_READY":"NOT_PASSED","M8_R8_DEBLOATED":"NOT_RUN","M9_PRODUCT_RC_READY":"NOT_RUN"}}
+{"active_roadmap":"R6-R8","active_product":"heterogeneous-agent-coding-team","milestones":{"M1_CODEX_TEAM_READY":"PASSED","M2_ACP_DRIVER_READY":"PASSED","M3_QWEN_WORKER_READY":"PASSED","M4_KIMI_PROFILE_CLASSIFIED":"KIMI_READY","M5_R6_TEAM_READY":"NOT_RUN","M6_R6_SEALED":"NOT_RUN","M7_R7_NORMAL_PATH_READY":"NOT_PASSED","M8_R8_DEBLOATED":"NOT_RUN","M9_PRODUCT_RC_READY":"NOT_RUN"}}
 ```
 
 Historical A–N/J/K/L/M/Q are `HISTORICAL_COMPATIBILITY_ONLY` for this R6–R8
@@ -496,8 +496,8 @@ execution.
 
 | Runtime | Exact local version | Driver/transport | Current live facts | State |
 |---|---|---|---|---|
-| Codex | `codex-cli 0.154.0` | app-server stdio + allowlisted RAS MCP | thread/turn, same-turn bounded context, artifact, persisted binding/reopen, thread resume, real same-thread two-task plan and durable utility follow-up | `M1_CODEX_TEAM_READY = PASSED`; Qwen topology remains M3/M5 work |
-| Qwen Code | `0.23.3` | `qwen --acp` via `agent-client-protocol 2.1.0` | normal Rust CLI submit/run-acp, exact artifact, durable binding inspection, and real `continue-acp` resume into a separate canonical task | `IN_PROGRESS`: active cancel and team scheduler topology remain required before M3 can pass |
+| Codex | `codex-cli 0.154.0` | app-server stdio + allowlisted RAS MCP | thread/turn, same-turn bounded context, artifact, persisted binding/reopen, thread resume, real same-thread two-task plan and durable utility follow-up | `M1_CODEX_TEAM_READY = PASSED`; full topology remains M5 work |
+| Qwen Code | `0.23.3` | `qwen --acp` via `agent-client-protocol 2.1.0` | normal Rust CLI submit/run-acp, exact artifact, durable binding inspection, real `continue-acp` resume, typed peer-confirmed cancel, and durable board-to-Codex context evidence | `M3_QWEN_WORKER_READY = PASSED`; scheduler topology remains M5 work |
 | Kimi Code | `0.42.0` | `kimi acp` candidate | real bounded ACP turn and external session reference; strict structured peer result rejected fail-closed | `KIMI_READY` for M4 classification only; no adapter readiness |
 
 Source references, protocol decisions, and licenses are recorded in
