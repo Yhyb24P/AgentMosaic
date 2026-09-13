@@ -73,7 +73,7 @@ See `release-binary-smoke.md`.
 
 ```text
 LOCAL_PRODUCT_RC_READY        = true   (see product_self_reaudit.md)
-REMOTE_DETERMINISTIC_CI_READY = false  (branch workflow not yet run on this candidate)
+REMOTE_DETERMINISTIC_CI_READY = true   (rust.yml 34759201679 + rust-candidate 34759220090)
 PUBLIC_RELEASE_READY          = false  (no tag, no GitHub Release, not authorized)
 ```
 

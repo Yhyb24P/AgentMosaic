@@ -172,9 +172,13 @@ verify.
 
 ```text
 LOCAL_PRODUCT_RC_READY        = true
-REMOTE_DETERMINISTIC_CI_READY = false   (branch workflow not yet green on this candidate)
+REMOTE_DETERMINISTIC_CI_READY = true    (rust.yml + rust-candidate green on the frozen candidate)
 PUBLIC_RELEASE_READY          = false   (no tag, no GitHub Release, not authorized)
 ```
+
+`REMOTE_DETERMINISTIC_CI_READY` is supported by run `34759201679` (`rust.yml`, push) and
+run `34759220090` (`rust-candidate`, workflow_dispatch), both green on `89ac979`; see
+`remote-ci.md`.
 
 `LOCAL_PRODUCT_RC_READY` is supported by: exact-candidate `fmt`/`clippy`/test/release-build/
 `git diff --check` all exit 0 with a clean worktree (257 passed / 0 failed / 17 ignored), a
@@ -206,7 +210,9 @@ order-independence. This is why the frozen candidate is `89ac979` rather than `2
 5. **The Lead brain calls the synchronous app-server transport directly inside its async
    `decide`.** It is correct for the current-thread runtime the runner uses, but it blocks
    that runtime thread for the duration of a Codex turn.
-6. **Remote deterministic CI has not run on the candidate**, so
-   `REMOTE_DETERMINISTIC_CI_READY` remains false.
+6. **Remote deterministic CI is green on the frozen candidate** (`rust.yml` run
+   `34759201679` and `rust-candidate` run `34759220090`), so
+   `REMOTE_DETERMINISTIC_CI_READY` is claimed. Neither workflow runs the authenticated
+   Codex/Qwen E2E, which remains a local reference-profile gate.
 7. **Out of scope by contract**: Kimi integration, OpenClaw, A2A, ACP unstable v2, TUI
    redesign, retired control-plane systems. Their absence is not a defect of this repair.

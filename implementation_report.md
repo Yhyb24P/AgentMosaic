@@ -53,7 +53,7 @@ any public release decision.
 
 ```text
 LOCAL_PRODUCT_RC_READY        = true  (exact-candidate gates + real Codex/Qwen E2E + copied release binary)
-REMOTE_DETERMINISTIC_CI_READY = false (no deterministic CI run on a frozen candidate)
+REMOTE_DETERMINISTIC_CI_READY = true  (rust.yml 34759201679 + rust-candidate 34759220090, both green)
 PUBLIC_RELEASE_READY          = false (no tag or GitHub Release; not authorized)
 ```
 
@@ -62,7 +62,8 @@ PUBLIC_RELEASE_READY          = false (no tag or GitHub Release; not authorized)
 - Exact-candidate freeze commit is set: `89ac979d333fe3fc2e311fb566f3ab0056bec4c5`.
 - `product_self_reaudit.md` exists; it is a self re-audit, not an independent
   third-party one.
-- Deterministic remote CI has not run on the frozen candidate.
+- Deterministic remote CI is green on the frozen candidate: `rust.yml` run `34759201679`
+  and `rust-candidate` run `34759220090` (see `.acc-evidence/rc-repair-fbc80bf/remote-ci.md`).
 - No tag or public release is authorized.
 
 ### Verified real production E2E (2026-09-13)

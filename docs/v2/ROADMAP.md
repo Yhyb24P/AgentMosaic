@@ -69,8 +69,10 @@ Readiness remains split: `LOCAL_PRODUCT_RC_READY`,
 `REMOTE_DETERMINISTIC_CI_READY`, and `PUBLIC_RELEASE_READY` are separate claims.
 The exact-candidate freeze commit is `89ac979d333fe3fc2e311fb566f3ab0056bec4c5`
 and the post-repair `product_self_reaudit.md` reports no remaining S0/S1 blocker,
-so `LOCAL_PRODUCT_RC_READY` is claimed; remote deterministic CI has not yet run
-on the candidate and no tag or public release is authorized.
+so `LOCAL_PRODUCT_RC_READY` is claimed. Deterministic remote CI is also green on
+that candidate (`rust.yml` and `rust-candidate`), so
+`REMOTE_DETERMINISTIC_CI_READY` is claimed as well. `PUBLIC_RELEASE_READY`
+remains false: no tag and no public release is authorized.
 
 ## Crate graph
 
