@@ -1,16 +1,45 @@
 //! Read-only interactive terminal dashboard for the authoritative team board.
 
-use agent_code_storage::SqliteTaskBoard;
+use agent_code_storage::{AgentRegistryRecord, SqliteTaskBoard};
 use agent_code_team::TaskBoard;
 
 /// Build the compact board view displayed by the R7 terminal UI.  It reads no
 /// runtime-local cache: every line is reconstructed from SQLite task records,
 /// attempts and artifact references.
 pub fn dashboard_text(board: &SqliteTaskBoard) -> Result<String, String> {
+    dashboard_text_with_agents(board, &[])
+}
+
+/// Same authoritative board projection with the persisted runtime registry.
+pub fn dashboard_text_with_agents(
+    board: &SqliteTaskBoard,
+    agents: &[AgentRegistryRecord],
+) -> Result<String, String> {
     let mut lines = vec![
         "Research Agent System — Team Board".to_string(),
+        "\nTeam".to_string(),
         "\nTasks".to_string(),
     ];
+    if agents.is_empty() {
+        lines.insert(2, "no configured agents".into());
+    } else {
+        for agent in agents.iter().rev() {
+            lines.insert(
+                2,
+                format!(
+                    "agent={} name={} tier={} driver={} concurrency={} tags={}",
+                    agent.id,
+                    agent.name,
+                    agent.tier,
+                    agent.driver_kind.as_deref().unwrap_or("-"),
+                    agent
+                        .max_concurrency
+                        .map_or_else(|| "-".into(), |value| value.to_string()),
+                    agent.tags_json.as_deref().unwrap_or("[]"),
+                ),
+            );
+        }
+    }
     for id in board.task_ids().map_err(|e| format!("tasks: {e:?}"))? {
         let task = board
             .task(id)
