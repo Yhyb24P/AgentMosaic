@@ -479,7 +479,7 @@ budget/contention on the shared local vLLM node, not a hung runtime; see
 ## 29. R6–R8 Source-Informed Productization
 
 ```json
-{"active_roadmap":"R6-R8","active_product":"heterogeneous-agent-coding-team","milestones":{"M1_CODEX_TEAM_READY":"PASSED","M2_ACP_DRIVER_READY":"PASSED","M3_QWEN_WORKER_READY":"PASSED","M4_KIMI_PROFILE_CLASSIFIED":"KIMI_READY","M5_R6_TEAM_READY":"NOT_RUN","M6_R6_SEALED":"NOT_RUN","M7_R7_NORMAL_PATH_READY":"NOT_PASSED","M8_R8_DEBLOATED":"NOT_RUN","M9_PRODUCT_RC_READY":"NOT_RUN"}}
+{"active_roadmap":"R6-R8","active_product":"heterogeneous-agent-coding-team","milestones":{"M1_CODEX_TEAM_READY":"PASSED","M2_ACP_DRIVER_READY":"PASSED","M3_QWEN_WORKER_READY":"PASSED","M4_KIMI_PROFILE_CLASSIFIED":"KIMI_READY","M5_R6_TEAM_READY":"PASSED","M6_R6_SEALED":"PASSED","M7_R7_NORMAL_PATH_READY":"NOT_PASSED","M8_R8_DEBLOATED":"NOT_RUN","M9_PRODUCT_RC_READY":"NOT_RUN"}}
 ```
 
 Historical A–N/J/K/L/M/Q are `HISTORICAL_COMPATIBILITY_ONLY` for this R6–R8
@@ -1531,5 +1531,113 @@ The wrapper did not retain its separate exit-code file, so this report does
 not fabricate an exit code.  Sanitized receipt:
 `.acc-evidence/r6-m5-scheduler-live-20260913.md`.
 
-M5 remains unsealed pending the distinct live external-process
-crash/reconcile criterion and final candidate-bound evidence.
+The prior missing exit-code receipt was corrected by the repeat run recorded
+in the same sanitized evidence file: exit `0`; 1 passed, 0 failed, 0 ignored,
+4 filtered out; 39.10s.  That rerun used the current working source and kept
+the tested command handle through its terminal result.
+
+The topology's explicit `target=worker-fail` is the user-target override path;
+the harness asserts it is honored for two bounded failures before reassignment
+to real Qwen.  Together with §52, the live topology and distinct crash/reopen
+requirements now have evidence.  M5 remains unsealed only until this source is
+bound to a candidate and requalified by the full Rust gate.
+
+## 52. M5 real Qwen ACP process-crash and reopen recovery (2026-09-13)
+
+The missing distinct crash/reconcile criterion now has a bounded live harness:
+`real_qwen_acp_process_crash_recovers_without_replay`.  It starts an isolated
+`qwen --acp` child through the production `PersistedAcpWorkerDriver`, waits
+only until the authenticated ACP session has caused a durable `running`
+external binding, and verifies the child PID against `/proc` before killing
+that exact test-owned process.  It does not enumerate or signal arbitrary
+processes.
+
+The controller future is deliberately abandoned after that durable checkpoint,
+before it can settle a terminal driver result.  A newly opened SQLite board
+then observes no artifact and the still-running attempt/binding, applies the
+existing fail-closed recovery transition, and verifies: failed attempt,
+`interrupted` binding, explicit-resume requirement, no automatic replay, and
+idempotent second recovery.  Native session identity remains opaque and is not
+written into evidence.
+
+```text
+cargo test -p agent-code-runtime --test codex_live \
+  real_qwen_acp_process_crash_recovers_without_replay \
+  -- --ignored --nocapture
+exit 0; 1 passed, 0 failed, 0 ignored, 4 filtered out; finished in 1.62s
+
+cargo fmt --all -- --check                                      exit 0
+cargo clippy -p agent-code-runtime --test codex_live --all-features -- -D warnings
+                                                                  exit 0
+cargo test -p agent-code-runtime --test codex_live --no-run      exit 0
+git diff --check                                                 exit 0
+```
+
+Sanitized receipt:
+`.acc-evidence/r6-qwen-acp-process-crash-recovery-20260913.md`.
+
+This closes the particular external-process crash + board-reopen recovery
+evidence gap identified in §51.  It is not a claim that M5 or R6 is sealed:
+the remaining topology controls (including a real user override and a
+candidate-bound final evidence run) must still be verified.
+
+## 53. R6 candidate requalification and seal (2026-09-13)
+
+The immutable R6 **code** candidate is
+`59a728b1839f613dee24e3fe635853947cd628ac`
+(`test(R6): verify Qwen ACP crash recovery`).  This report/evidence receipt is
+committed separately so the executable source identity is not obscured by a
+self-referential documentation hash.  No executable Rust source changed after
+that candidate.
+
+On that exact candidate, the two live tests retained their command exit codes:
+
+```text
+cargo test -p agent-code-runtime --test codex_live \
+  real_qwen_acp_process_crash_recovers_without_replay \
+  -- --ignored --nocapture
+exit 0; 1 passed, 0 failed, 0 ignored, 4 filtered out; 1.62s
+
+cargo test -p agent-code-runtime --test codex_live \
+  real_scheduler_runs_qwen_worker_and_utility_on_one_board \
+  -- --ignored --nocapture
+exit 0; 1 passed, 0 failed, 0 ignored, 4 filtered out; 47.16s
+```
+
+The full Rust requalification of the same source completed with all commands
+at exit `0`:
+
+```text
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
+git diff --check
+```
+
+The full test command observed 175 passed, 0 failed, and 16 intentionally
+ignored live tests.  The ignored set is not counted as substitute evidence:
+the two M5 live tests above were invoked explicitly and passed.  The full run
+also validates the existing deterministic ACC, persistence migration,
+registry, CLI/TUI, and contract suites.
+
+M5 requirements are now evidenced without manual copy/paste: real Codex Lead
+(`gpt-5.5` / `low`), real Qwen ACP worker, deterministic concurrent utility,
+persisted message/result/exact artifact/final selection, bounded Lead
+follow-up through the board, explicit target override, retry/reassignment,
+and reopened SQLite.  The distinct real Qwen process crash/reopen drill proves
+interrupted work is not blindly replayed and requires explicit resume.
+
+Accordingly the current milestone state is:
+
+```text
+M5_R6_TEAM_READY = PASSED
+M6_R6_SEALED     = PASSED
+M7_R7_NORMAL_PATH_READY = NOT_PASSED
+M8_R8_DEBLOATED  = NOT_RUN
+M9_PRODUCT_RC_READY = NOT_RUN
+```
+
+The sanitized evidence manifest added with this receipt binds the candidate,
+commands, exit codes, and evidence-file SHA-256 values.  It contains no raw
+wire frame, transcript, credential, endpoint, native session id, or private
+filesystem path.
