@@ -4,6 +4,7 @@
 use std::io::{self, BufRead, Write};
 
 use agent_code_storage::{RuntimeCollaborationRecord, SqliteTaskBoard};
+use agent_code_team::TaskBoard;
 use serde_json::{json, Value};
 
 fn main() {
@@ -66,7 +67,7 @@ fn main() {
                         native_call_id: call_id,
                         kind: name.into(),
                         payload_summary: summary.chars().take(512).collect(),
-                        response_summary: Some("team bridge acknowledged bounded request".into()),
+                        response_summary: Some("bounded team context delivered".into()),
                     })
                 } else {
                     Ok(false)
@@ -78,7 +79,14 @@ fn main() {
                         } else {
                             "collaboration-duplicate"
                         });
-                        json!({"content":[{"type":"text","text":if inserted { "bounded team response persisted" } else { "duplicate bounded request" }}],"isError":false})
+                        let text = if name == "ras_request_context" {
+                            bounded_team_context(&board, "codex")
+                        } else if inserted {
+                            "bounded team help request persisted".into()
+                        } else {
+                            "duplicate bounded request".into()
+                        };
+                        json!({"content":[{"type":"text","text":text}],"isError":false})
                     }
                     Ok(_) => {
                         json!({"content":[{"type":"text","text":"unsupported tool"}],"isError":true})
@@ -102,6 +110,28 @@ fn main() {
     }
 }
 
+/// Build the small, persisted team projection that is safe to send to the
+/// active Codex turn. This is intentionally sourced from the board rather than
+/// caller-supplied tool arguments or a raw runtime transcript.
+fn bounded_team_context(board: &SqliteTaskBoard, target: &str) -> String {
+    const MAX_CONTEXT_CHARS: usize = 1024;
+    let Ok(messages) = board.messages_to(target) else {
+        return "bounded team context unavailable".into();
+    };
+    let mut text = String::from("bounded persisted team context:\n");
+    for message in messages.into_iter().rev().take(4).rev() {
+        let line = format!("from={}: {}\n", message.from_agent, message.body);
+        if text.chars().count().saturating_add(line.chars().count()) > MAX_CONTEXT_CHARS {
+            break;
+        }
+        text.push_str(&line);
+    }
+    if text == "bounded persisted team context:\n" {
+        text.push_str("no directed team message available\n");
+    }
+    text
+}
+
 /// Optional operational breadcrumbs. They never include tool arguments,
 /// model text, credentials, prompts, or protocol bodies.
 fn audit(event: &str) {
@@ -116,4 +146,39 @@ fn audit(event: &str) {
         return;
     };
     let _ = writeln!(file, "{event}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bounded_team_context;
+    use agent_code_storage::SqliteTaskBoard;
+    use agent_code_team::{AgentMessage, TaskBoard, TaskKind};
+
+    #[test]
+    fn context_is_bounded_and_sourced_from_directed_board_messages() {
+        let mut board = SqliteTaskBoard::in_memory().expect("board");
+        let task = board
+            .create_task("worker result", None, TaskKind::Bulk, None)
+            .expect("task");
+        board
+            .record_message(&AgentMessage {
+                from_agent: "qwen".into(),
+                to_agent: "codex".into(),
+                body: "bounded worker finding".into(),
+            })
+            .expect("message");
+        board
+            .record_message(&AgentMessage {
+                from_agent: "other".into(),
+                to_agent: "lead".into(),
+                body: "not for codex".into(),
+            })
+            .expect("other message");
+        assert_eq!(task, 1);
+
+        let context = bounded_team_context(&board, "codex");
+        assert!(context.contains("from=qwen: bounded worker finding"));
+        assert!(!context.contains("not for codex"));
+        assert!(context.chars().count() <= 1024);
+    }
 }

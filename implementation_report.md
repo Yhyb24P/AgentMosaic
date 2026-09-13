@@ -1135,6 +1135,28 @@ M1/M2/M3/M7 by itself: M1 still needs one end-to-end Lead result consumption
 path free of harness-directed context injection; M2/M3/M7 remain `UNKNOWN /
 NOT_PASSED`, `IN_PROGRESS`, and `NOT_PASSED` respectively.
 
+## 45. R6 board-only active context delivery (2026-09-13)
+
+The Codex MCP bridge no longer replies to `ras_request_context` with a generic
+acknowledgement. It reads the existing SQLite board and returns at most four
+directed messages for Codex under a 1024-character bound. It records only a
+fixed response summary; tool arguments cannot name a task/session or supply
+the runtime identity. A unit test proves messages addressed to another agent
+are excluded.
+
+The live Codex+Qwen E2E was re-run after removing the Qwen message from the
+Codex turn prompt. The only Qwen result path into Codex was the persisted board
+through `ras_request_context`. Captured command result: exit `0`; 1 passed, 0
+failed, 2 filtered; 41.49 seconds. Codex was invoked with the test overrides
+`model="gpt-5.5"` and `model_reasoning_effort="low"`. Sanitized evidence is
+the board-only rerun section of `.acc-evidence/r6-codex-qwen-product-e2e.md`,
+log SHA-256 `02fa310b62c28c6a55f39432ecdf0335292c94c73516bd55d3ccdbe3cd7e522c`.
+
+This closes the harness text-injection defect for this R6 slice. It still does
+not satisfy the broader M1/M5 proof of scheduled Codex Lead consumption plus
+concurrent utility, retry/reassign and normal CLI control, so all current
+milestone values remain unchanged.
+
 ## 43. M2 cancellable driver seam (2026-09-12)
 
 `AcpWorkerDriver` now exposes a bounded, caller-owned cancellation pair:

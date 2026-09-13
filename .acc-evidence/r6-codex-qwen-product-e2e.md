@@ -29,3 +29,21 @@ path is committed.
 This is a real R6 product-result-flow evidence item. It does not by itself
 close M1/M5/M7: full Lead scheduling, retry/reassign, concurrent utility work,
 and normal-path CLI control remain separate requirements.
+
+## Board-only context delivery rerun
+
+After the bridge was changed to construct a bounded context only from directed
+messages in the persisted board, the same E2E was re-run without placing the
+Qwen result in the Codex user-turn text.
+
+- command: unchanged from above
+- exit code: `0`
+- result: 1 passed, 0 failed, 0 ignored, 2 filtered; 41.49 seconds
+- captured stdout/stderr SHA-256: `02fa310b62c28c6a55f39432ecdf0335292c94c73516bd55d3ccdbe3cd7e522c`
+- exit receipt SHA-256: `9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa`
+
+The sanitized sequence contains Qwen result persistence, a completed
+`ras_request_context` MCP call, a subsequent Codex file change and agent
+message, and bridge persistence. It contains no transferred Qwen prompt or
+result text. This verifies that the active Codex turn obtained its bounded peer
+context through the authoritative bridge rather than harness text injection.

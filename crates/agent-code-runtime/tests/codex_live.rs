@@ -188,7 +188,7 @@ async fn real_codex_thread_turn_uses_bounded_qwen_peer_result() {
     let thread = client
         .start_thread_with_developer_instructions(
             cwd.to_str().unwrap(),
-            Some("For this ACC integration thread, invoke ras_request_context exactly once before responding to the first user turn. This is a bounded collaboration requirement."),
+            Some("For this R6 team integration thread, invoke ras_request_context exactly once before responding to the first user turn. This is a bounded collaboration requirement."),
         )
         .unwrap();
     let status = client.mcp_status(&thread).unwrap();
@@ -212,7 +212,7 @@ async fn real_codex_thread_turn_uses_bounded_qwen_peer_result() {
     assert_eq!(qwen_artifacts.len(), 1);
     assert_eq!(qwen_artifacts[0].path, "qwen-worker.txt");
     assert_eq!(qwen_artifacts[0].sha256, qwen_artifact_sha256);
-    let turn = client.start_turn(&thread, &format!("This is a required integration test. Qwen supplied this bounded peer result: {}. Before producing any answer, you MUST call the MCP tool ras_request_context exactly once with JSON arguments {{\"purpose\":\"phase23\"}}. Do not explain or answer until the tool result has been received. After receiving the result, create phase23-result.txt in the current working directory containing exactly phase23 artifact followed by one newline. Then respond with exactly: phase23 done.", peer[0].body)).unwrap();
+    let turn = client.start_turn(&thread, "This is a required integration test. Before producing any answer, you MUST call the MCP tool ras_request_context exactly once with JSON arguments {\"purpose\":\"phase23\"}. Do not explain or answer until the tool result has been received. The tool result is the only source of the persisted Qwen team result. After receiving it, create phase23-result.txt in the current working directory containing exactly phase23 artifact followed by one newline. Then respond with exactly: phase23 done.").unwrap();
     eprintln!("sanitized Codex turn started with persisted Qwen peer result");
     board
         .upsert_external_binding(&ExternalRuntimeBinding {
