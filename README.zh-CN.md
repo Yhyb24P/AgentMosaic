@@ -2,145 +2,187 @@
 
 [English](README.md)
 
-AgentMosaic（`AM`）是一个**异构 Agent coding/work 团队**。一个目标进，一个持久化的
-团队结果出。
+[![CI](https://github.com/Yhyb24P/AgentMosaic/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/Yhyb24P/AgentMosaic/actions/workflows/rust.yml)
+[![Latest release](https://img.shields.io/github/v/release/Yhyb24P/AgentMosaic)](https://github.com/Yhyb24P/AgentMosaic/releases/latest)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-唯一职责：把不同长处的 Agent 接到同一个项目上。高智能 Agent 负责规划、难题推理、
-架构、综合与评审；本地或低成本 Agent 与确定性 worker 负责重复、长时间、文件密集、
-数据密集和工具密集的工作。结果与 artifact 自动回流到继续推理的那个 Agent，不需要
-人工在 Agent 之间复制粘贴。
+**把异构 coding Agent 作为一个持久化团队来运行。**
 
-通信、调度、恢复与安全边界是让多个 Agent 完成工作的支撑机制，它们不是产品本身。
+AgentMosaic 把高推理能力的 Lead、coding Agent、本地模型和确定性 worker 接到同一个项目上。
+给团队一个目标：Lead 负责规划与委派，worker 负责执行，结果与 artifact 自动回流，供 Lead
+评审与综合。
 
-旧产品身份与稳定的 `v0.1.0` 发行版说明见 [docs/history.md](docs/history.md)。
+本地模型通过 ACP 兼容的 runtime 接入；AgentMosaic 本身不托管、也不选择模型。
 
-## 架构
+不需要人工在 Agent 之间复制粘贴。
 
-```text
-User
-  |
-  v
-Team Session
-  |
-  v
-Lead / Reasoning Agent
-  | delegate
-  +------------------+-------------------+
-  v                  v                   v
-Reasoning Agent    Local Model Agent   Utility Worker
-  |                  |                   |
-  +----- result / files / messages ------+
-                       |
-                       v
-              Lead integrates result
-                       |
-                       v
-                    Deliver
+## 安装
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://am.yhshyp.xyz/install.sh | sh
 ```
 
-每个原生 model-backed Agent 运行同一个内部循环：
-
-```text
-Init -> Observe -> Model Decision -> Tool Execution -> Observe -> ...
-     -> Verify -> Deliver / Rollback
+```bash
+am --version
 ```
 
-## 构建
+预编译发行版目前只面向 Linux x86_64。如需自行构建二进制，见[源码构建](#源码构建)。
+
+## 快速开始
+
+```bash
+am init
+
+am agent add lead \
+  --role reasoner \
+  --adapter codex-app-server -- codex
+
+am agent add worker \
+  --role worker \
+  --adapter acp -- qwen --acp
+
+am doctor
+
+am run "implement the task, verify it, and summarize the result"
+```
+
+`am init` 在 `.agentmosaic/state.db` 创建项目本地持久化状态，并把它排除在版本控制之外。
+在项目内任意目录下，`am run` 都能发现这份状态。
+
+`--` 之后的全部内容是不透明的 launch argv。AgentMosaic 只存储并原样执行，从不解释
+launcher 专有参数，凭据也不应写在这里。
+
+`am doctor` 在不做任何认证的前提下检查项目、团队与 runtime 的就绪状态；只要注册的
+`reasoner` 不是恰好一个，它就会报告 `LEAD_SELECTION_AMBIGUOUS_OR_MISSING`。`am run`
+需要这个唯一的 Lead 才能启动。
+
+### 可选：增加一个 utility worker
+
+utility Agent 的注册方式相同，用于有边界的工具型工作：
+
+```bash
+am agent add utility --role utility --adapter acp -- <program> --acp
+```
+
+本地 launcher 保留自己的 argv，例如：
+
+```bash
+am agent add lead-ds --role reasoner --adapter codex-app-server -- codex -ds
+```
+
+## 为什么需要 AgentMosaic？
+
+手工串联两个 Agent 的流程是这样的：
+
+| 手工 Agent 流程 | AgentMosaic |
+|---|---|
+| 推理模型做规划 | 给团队一个目标 |
+| 你把指令复制到另一个 Agent | Lead 委派任务 |
+| worker 执行完，你把结果复制回来 | worker 执行并自动回传结果 |
+| 推理模型评审，然后你重复以上步骤 | Lead 跟进，最后持久化一个结果 |
+
+这样，昂贵的高推理模型把预算花在规划、难题推理和综合上；coding Agent、本地模型和
+确定性 worker 承担重复、长时间、文件密集和工具密集的工作。
+
+你不再是 Agent 之间的传输通道；运行即使中断，状态依然可检查，而不是丢在一次对话里。
+
+## 工作原理
+
+```text
+                    one objective
+                         |
+                         v
+                  Lead / Reasoner
+                 /      |       \
+                v       v        v
+             Agent    Agent    Worker
+                \       |       /
+                 +-- results ---+
+                         |
+                         v
+                 review / follow-up
+                         |
+                         v
+                  durable result
+```
+
+Lead 负责规划、难题推理、综合与评审。worker 完成 Lead 委派给它的任务。每个结果与
+artifact 都落到持久化的 board 上，因此 Lead 可以继续跟进、要求修正，或用一次最终答复
+结束目标。
+
+## Runtime 边界
+
+### AgentMosaic 负责
+
+```text
+roles
+delegation
+task state
+result / artifact flow
+bounded contracts
+recovery
+```
+
+### 外部 runtime 负责
+
+```text
+login
+credentials
+provider
+model
+launcher profile
+```
+
+ACP 兼容的 coding runtime 通过一个有边界的 worker 边界与 AgentMosaic 通信。ACP driver
+接收一个调度任务，返回有边界的结构化结果和 artifact 哈希；权威状态始终在 SQLite board 上。
+
+Codex 是当前通过 `codex-app-server` 接入的参考高推理 Lead。它的 thread 在规划、跟进和
+综合之间常驻，外部 thread/turn binding 会被持久化。任何满足同一能力边界的 Agent 或
+runtime 都可以承担这个角色。
+
+## 持久化与恢复
+
+- 项目本地 SQLite 状态，不是内存会话。
+- 委派任务、结果和 artifact 在产生的过程中即被持久化。
+- Lead 的决策遵循一份签入仓库的严格契约，失败即关闭。
+- 中断的运行可以恢复，且不会重放已经成功的工作。
+- 已完成的工作不会被无条件重放。
+- 检查类命令不会启动 runtime。
+
+```bash
+am status .agentmosaic/state.db
+am final .agentmosaic/state.db <root-task-id>
+am tui .agentmosaic/state.db
+```
+
+其余能力由 `am registry`、`am artifact`、`am binding`、`am recover`、`am recover-all`
+和 `am resume-team` 覆盖，见[恢复](docs/recovery.md)。
+
+## 文档
+
+- [快速开始](docs/getting-started.md)
+- [架构](docs/architecture.md)
+- [CLI 参考](docs/cli.md)
+- [恢复](docs/recovery.md)
+- [Codex runtime](docs/runtimes/codex.md)
+- [ACP runtime](docs/runtimes/acp.md)
+- [Qwen Code runtime](docs/runtimes/qwen-code.md)
+- [发行历史](docs/releases/v0.1.0.md) / [历史](docs/history.md)
+
+## 源码构建
 
 ```bash
 cargo build --release --workspace
 ```
 
-产物为 `target/release/am`，即唯一的产品二进制。Codex MCP bridge 是固定的隐藏内部
-命令，不单独配置或安装。
+产物为 `target/release/am`，即唯一随产品发布的二进制。它的 Codex 协作 bridge 是固定的
+隐藏内部命令，不单独安装或配置。
 
-## 快速开始 — 一个异构团队目标
-
-一个目标进，一个持久化的团队结果出。AgentMosaic 管理角色、机器协议和 LaunchSpec；
-外部 runtime 管理自己的登录、凭据、provider、模型和 launcher profile。
+提交改动前必须通过的检查：
 
 ```bash
-# 1. 初始化项目本地状态
-am init
-
-# 2. 注册外部 runtime 的不透明 argv
-am agent add lead --role reasoner --adapter codex-app-server -- codex
-am agent add worker --role worker --adapter acp -- qwen --acp
-am agent add utility --role utility --adapter acp -- aweswitch qw --acp
-
-# 3. 不管理认证地检查就绪状态
-am doctor
-
-# 4. 用一个目标跑完整的团队流程
-am run "生成 worker.txt 并总结"
-```
-
-`run-team` 与 `resume-team` 都接受：
-
-```text
---lead <agent-id>   注册了多个 reasoner 时指定 Lead
---max-rounds N      Lead 推理轮数上限
---max-tasks N       委派任务预算上限
---max-retries N     单 agent 在重新指派前的重试上限
-```
-
-高级兼容接口 `register` 的字段语法（尾部 8 到 10 个字段）：
-
-```text
-am register <database> <agent-id> <name> <tier> <driver-kind> <executable> <driver-args> <max-concurrency> <tags> [<runtime-version-or->] [<driver-config-json-or->]
-```
-
-- `tier` 为 `reasoner`、`worker` 或 `utility`。
-- `driver-kind` 为 `native`、`acp`、`cli`、`codex-app-server` 或 `-`。
-- `driver-args` 与 `tags` 用逗号分隔；无内容用 `-`。
-- `runtime-version` 是可选的第 9 个字段；无内容用 `-`。
-- 可选的第 10 个字段是一个非机密 JSON 对象，或 `-`。看起来像凭据的键
-  （`token`、`key`、`secret`、`password`、`endpoint`）会被拒绝，因此凭据不可能
-  经此写入。
-  - 旧 ACP `auth_method` 与旧 Codex `mcp_command` 仅为已有 v11 board 的兼容字段；
-    正常 onboarding 不写入它们。新产品路径自动使用内部 MCP bridge。
-
-`submit` 只创建一个 pending 看板任务，不是一次团队运行；`run-team` 才是团队入口。
-所有命令直接操作权威 SQLite board。
-
-### 本地/自定义 launcher 示例
-
-AgentMosaic 不解释 launcher 专有参数：它只保存并原样执行 `--` 之后的 argv。
-例如，本地 Codex shim 可以注册为 `codex -ds`；兼容 ACP 的 wrapper 也可保留自己的 argv。
-
-```bash
-am agent add lead-ds --role reasoner --adapter codex-app-server -- codex -ds
-am agent add utility --role utility --adapter acp -- aweswitch qw --acp
-```
-
-## 团队运行流程
-
-`am run-team` 打开/迁移 board，读取持久化 agent registry，构建经过校验的 registry，
-解析 Lead，构造真实 driver，创建一个持久化的根 `reasoning` 任务及其 Lead attempt，
-并通过 `Lead` + `Scheduler` 运行常驻的 Codex `CodexLeadBrain`。委派任务通过 ACP 在
-真实的 Qwen worker 上执行，最终可见的 Codex 答案与精确选中的 task/artifact 引用会
-持久化到根任务上。`am resume-team` 从持久化状态重建 driver/brain，关闭中断的后代任务
-而不重放它们，对已经成功的根任务是幂等的。
-
-Lead 的决策是严格 JSON，由产品校验；不符合契约的决策在至多一次有界纠正轮后
-fail-closed。决策 wire 契约见
-[`contracts/lead_decision.schema.json`](contracts/lead_decision.schema.json)。
-
-只读命令 `status`、`registry`、`artifact`、`binding`、`final` 以及 `tui` 面板都不会
-启动 driver 或改变 board 的 runtime 状态。
-
-## 文档
-
-- [架构](docs/architecture.md)
-- [快速开始](docs/getting-started.md)
-- [CLI 参考](docs/cli.md)
-- [恢复](docs/recovery.md)
-- [Runtime](docs/runtimes/acp.md)：[Codex](docs/runtimes/codex.md)、[Qwen Code](docs/runtimes/qwen-code.md)
-- [历史](docs/history.md)
-
-## Rust 开发
-
-```bash
+scripts/ci/check_identity.sh
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features

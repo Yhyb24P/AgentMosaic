@@ -2,138 +2,195 @@
 
 [简体中文](README.zh-CN.md)
 
-AgentMosaic (`AM`) is a **heterogeneous Agent coding/work team**. One objective goes in
-and one durable team result comes out.
+[![CI](https://github.com/Yhyb24P/AgentMosaic/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/Yhyb24P/AgentMosaic/actions/workflows/rust.yml)
+[![Latest release](https://img.shields.io/github/v/release/Yhyb24P/AgentMosaic)](https://github.com/Yhyb24P/AgentMosaic/releases/latest)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-The one job: connect Agents with different strengths to one project. High-intelligence
-Agents do planning, hard reasoning, architecture, synthesis and review. Local or cheap
-Agents and deterministic workers do repetitive, long-running, file-heavy, data-heavy and
-tool-heavy work. Results and artifacts flow back automatically to the Agent that
-continues the reasoning, with no manual copy/paste between Agents.
+**Run heterogeneous coding agents as one durable team.**
 
-Communication, scheduling, recovery and safety boundaries are supporting mechanics that
-let several Agents finish work. They are not the product.
+AgentMosaic connects a high-reasoning Lead with coding agents, local models and
+deterministic workers around one project. Give the team one objective: the Lead plans and
+delegates, workers execute, and their results and artifacts flow back automatically for
+review and synthesis.
 
-For the former product identity and the stable `v0.1.0` release, see
-[docs/history.md](docs/history.md).
+Local models are reached through ACP-compatible runtimes; AgentMosaic does not host or
+select models itself.
 
-## Architecture
+No manual copy/paste between Agents.
 
-```text
-User
-  |
-  v
-Team Session
-  |
-  v
-Lead / Reasoning Agent
-  | delegate
-  +------------------+-------------------+
-  v                  v                   v
-Reasoning Agent    Local Model Agent   Utility Worker
-  |                  |                   |
-  +----- result / files / messages ------+
-                       |
-                       v
-              Lead integrates result
-                       |
-                       v
-                    Deliver
+## Install
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://am.yhshyp.xyz/install.sh | sh
 ```
 
-Each native model-backed Agent runs the same internal loop:
-
-```text
-Init -> Observe -> Model Decision -> Tool Execution -> Observe -> ...
-     -> Verify -> Deliver / Rollback
+```bash
+am --version
 ```
 
-## Build
+Prebuilt releases currently target Linux x86_64. To build the binary yourself instead,
+see [Build from source](#build-from-source).
+
+## Quickstart
+
+```bash
+am init
+
+am agent add lead \
+  --role reasoner \
+  --adapter codex-app-server -- codex
+
+am agent add worker \
+  --role worker \
+  --adapter acp -- qwen --acp
+
+am doctor
+
+am run "implement the task, verify it, and summarize the result"
+```
+
+`am init` creates project-local durable state at `.agentmosaic/state.db` and keeps it out
+of version control. `am run` discovers that state from anywhere inside the project.
+
+Everything after `--` is opaque launch argv. AgentMosaic stores it and executes it
+exactly; it never interprets launcher-specific flags, and credentials never belong there.
+
+`am doctor` checks project, team and runtime readiness without authenticating anything,
+and reports `LEAD_SELECTION_AMBIGUOUS_OR_MISSING` unless exactly one `reasoner` is
+registered. `am run` needs that single Lead to start.
+
+### Optional: add a utility worker
+
+A utility Agent is registered the same way and is used for bounded tool-heavy work:
+
+```bash
+am agent add utility --role utility --adapter acp -- <program> --acp
+```
+
+A local launcher keeps its own argv, for example:
+
+```bash
+am agent add lead-ds --role reasoner --adapter codex-app-server -- codex -ds
+```
+
+## Why AgentMosaic?
+
+Driving two agents by hand looks like this:
+
+| Manual Agent workflow | AgentMosaic |
+|---|---|
+| Reasoning model plans | Give the team one objective |
+| You copy the instructions into another Agent | The Lead delegates the work |
+| The worker executes and you copy the result back | Workers execute and return results |
+| The reasoning model reviews, then you repeat | The Lead follows up, then persists one durable result |
+
+So the expensive reasoning model spends its budget on planning, hard reasoning and
+synthesis, while coding agents, local models and deterministic workers take the
+repetitive, long-running, file-heavy and tool-heavy work.
+
+You stop being the transport between Agents, and an interrupted run stays inspectable
+instead of being lost in a chat scroll.
+
+## How it works
+
+```text
+                    one objective
+                         |
+                         v
+                  Lead / Reasoner
+                 /      |       \
+                v       v        v
+             Agent    Agent    Worker
+                \       |       /
+                 +-- results ---+
+                         |
+                         v
+                 review / follow-up
+                         |
+                         v
+                  durable result
+```
+
+The Lead does planning, hard reasoning, synthesis and review. Workers complete the tasks
+it delegates to them. Every result and artifact lands on the durable board, so the Lead
+can follow up, ask for a correction, or close the objective with one final answer.
+
+## Runtime boundary
+
+### AgentMosaic owns
+
+```text
+roles
+delegation
+task state
+result / artifact flow
+bounded contracts
+recovery
+```
+
+### External runtimes own
+
+```text
+login
+credentials
+provider
+model
+launcher profile
+```
+
+ACP-compatible coding runtimes communicate with AgentMosaic over a bounded worker
+boundary. The ACP driver takes one scheduler task and returns a bounded structured result
+plus artifact hashes; the SQLite board remains the authoritative source of state.
+
+Codex is the current reference high-reasoning Lead through `codex-app-server`. Its thread
+stays resident across planning, follow-up and synthesis, and the external thread/turn
+binding is persisted. Any Agent or runtime that satisfies the same boundary can take that
+role.
+
+## Durability and recovery
+
+- Project-local SQLite state, not an in-memory session.
+- Delegated tasks, results and artifacts are persisted as they happen.
+- The Lead's decisions follow a strict, checked-in contract and fail closed.
+- An interrupted run can be resumed without replaying work that already succeeded.
+- Completed work is never unconditionally replayed.
+- Inspection commands never start a runtime.
+
+```bash
+am status .agentmosaic/state.db
+am final .agentmosaic/state.db <root-task-id>
+am tui .agentmosaic/state.db
+```
+
+`am registry`, `am artifact`, `am binding`, `am recover`, `am recover-all` and
+`am resume-team` cover the rest; see [Recovery](docs/recovery.md).
+
+## Documentation
+
+- [Getting started](docs/getting-started.md)
+- [Architecture](docs/architecture.md)
+- [CLI reference](docs/cli.md)
+- [Recovery](docs/recovery.md)
+- [Codex runtime](docs/runtimes/codex.md)
+- [ACP runtime](docs/runtimes/acp.md)
+- [Qwen Code runtime](docs/runtimes/qwen-code.md)
+- [Release history](docs/releases/v0.1.0.md) / [History](docs/history.md)
+
+## Build from source
 
 ```bash
 cargo build --release --workspace
 ```
 
-This produces `target/release/am`, the only shipped product binary. The Codex
-collaboration bridge is a fixed hidden internal command; it is not separately
-configured or installed.
+This produces `target/release/am`, the only shipped product binary. Its Codex
+collaboration bridge is a fixed hidden internal command; it is not separately installed
+or configured.
 
-## Quickstart — one heterogeneous team objective
-
-One objective in, one durable team result out. AgentMosaic owns roles,
-machine protocols and LaunchSpecs; each external runtime owns its login,
-credentials, provider, model and launcher profile.
+Required checks for a change:
 
 ```bash
-# 1. initialize project-local durable state
-am init
-
-# 2. register opaque external launch argv (do not put credentials here)
-am agent add lead --role reasoner --adapter codex-app-server -- codex
-am agent add worker --role worker --adapter acp -- qwen --acp
-am agent add utility --role utility --adapter acp -- aweswitch qw --acp
-
-# 3. check project and protocol preparation without managing authentication
-am doctor
-
-# 4. run one objective through the whole team
-am run "produce worker.txt and summarize it"
-```
-
-Flags accepted by both `run-team` and `resume-team`:
-
-```text
---lead <agent-id>   select the Lead when more than one reasoner is registered
---max-rounds N      bound the Lead's reasoning rounds
---max-tasks N       bound the delegated task budget
---max-retries N     bound per-agent retries before the scheduler reassigns
-```
-
-`submit` alone only creates a pending board task; `run-team` is the team entrypoint.
-Everything operates directly on the authoritative SQLite board.
-
-### Local/custom launcher examples
-
-AgentMosaic does not interpret launcher-specific flags: it stores the argv
-after `--` and executes it exactly. For example, a local Codex shim can be
-registered as `codex -ds`; an ACP-compatible wrapper can retain its own argv.
-
-```bash
-am agent add lead-ds --role reasoner --adapter codex-app-server -- codex -ds
-am agent add utility --role utility --adapter acp -- aweswitch qw --acp
-```
-
-## How a team run works
-
-`am run-team` opens/migrates the board, loads the persisted agent registry, builds the
-validated registry, resolves the Lead, constructs the real drivers, creates one durable
-root `reasoning` task plus its Lead attempt, and runs a resident Codex `CodexLeadBrain`
-through `Lead` + `Scheduler`. Delegated tasks execute on real Qwen workers over ACP, and
-the final visible Codex answer plus the exact selected task/artifact refs are persisted
-on the root. `am resume-team` rebuilds the drivers/brain from durable state, closes
-interrupted descendants without replaying them, and is idempotent on an already-succeeded
-root.
-
-The Lead's decisions are strict JSON validated by the product; a decision that does not
-match the contract fails closed after at most one bounded correction turn. The decision
-wire is checked in at
-[`contracts/lead_decision.schema.json`](contracts/lead_decision.schema.json).
-
-The read-only commands `status`, `registry`, `artifact`, `binding`, `final`, and the `tui`
-dashboard never start a driver or mutate runtime state.
-
-## Documentation
-
-- [Architecture](docs/architecture.md)
-- [Getting started](docs/getting-started.md)
-- [CLI reference](docs/cli.md)
-- [Recovery](docs/recovery.md)
-- [Runtimes](docs/runtimes/acp.md): [Codex](docs/runtimes/codex.md), [Qwen Code](docs/runtimes/qwen-code.md)
-- [History](docs/history.md)
-
-## Rust development
-
-```bash
+scripts/ci/check_identity.sh
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features

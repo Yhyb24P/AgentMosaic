@@ -9,8 +9,8 @@ If a run is interrupted while attempts are in flight, their attempts are left in
 `running` state in the database. Close them explicitly, then resume the root:
 
 ```bash
-am recover-all ./team.db
-am resume-team ./team.db /path/to/repo 1
+am recover-all .agentmosaic/state.db
+am resume-team .agentmosaic/state.db /path/to/repo 1
 ```
 
 - `am recover <database> <task-id>` closes one interrupted attempt.
@@ -25,9 +25,9 @@ with `am binding <database> <task-id>`.
 ## Reopening a task
 
 ```bash
-am resume ./team.db <task-id>      # schedule a task again
-am cancel ./team.db <task-id>      # cancel a task
-am override ./team.db <task-id> <agent-id>   # reassign to an explicit agent
+am resume .agentmosaic/state.db <task-id>      # schedule a task again
+am cancel .agentmosaic/state.db <task-id>      # cancel a task
+am override .agentmosaic/state.db <task-id> <agent-id>   # reassign to an explicit agent
 ```
 
 ## Guarantees

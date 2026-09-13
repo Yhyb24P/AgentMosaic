@@ -1,5 +1,6 @@
-<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentMosaic</title><link rel="stylesheet" href="/styles.css"><main><h1>AgentMosaic</h1><p>One objective. A heterogeneous Agent team.</p><h2>Install</h2><pre>curl --proto '=https' --tlsv1.2 -LsSf \
-  https://am.yhshyp.xyz/install.sh | sh</pre><p><a href="https://github.com/Yhyb24P/AgentMosaic">GitHub</a> · <a href="/release">Latest release</a></p><h2>Protocol + LaunchSpec</h2><p>AgentMosaic coordinates Agents through machine protocols. Each Agent retains control of its own model, provider, credentials and launcher.</p><h2>Quick start</h2><pre>am init
-am agent add worker --role worker --adapter acp -- your-agent --acp
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentMosaic</title><link rel="stylesheet" href="/styles.css"><main><h1>AgentMosaic</h1><p>Run heterogeneous coding agents as one durable team.</p><h2>Install</h2><pre>curl --proto '=https' --tlsv1.2 -LsSf \
+  https://am.yhshyp.xyz/install.sh | sh</pre><p>Prebuilt releases currently target Linux x86_64.</p><p><a href="https://github.com/Yhyb24P/AgentMosaic">GitHub</a> · <a href="/release">Latest release</a></p><h2>Protocol + LaunchSpec</h2><p>AgentMosaic coordinates Agents through machine protocols. Each Agent retains control of its own model, provider, credentials and launcher.</p><h2>Quick start</h2><pre>am init
+am agent add lead --role reasoner --adapter codex-app-server -- codex
+am agent add worker --role worker --adapter acp -- qwen --acp
 am doctor
 am run "complete the objective"</pre><p>Supported adapters: ACP and Codex app-server.</p></main></html>

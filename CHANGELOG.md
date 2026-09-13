@@ -5,6 +5,81 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-09-13
+
+First public release under the AgentMosaic identity. The workspace was renamed to one
+namespace and the onboarding surface was rebuilt around a single project-local team
+state, while durable data and wire formats stayed compatible.
+
+### Added
+
+- **Project-aware onboarding.** `am init` creates project-local durable state at
+  `.agentmosaic/state.db` under the Git root (and keeps it out of version control),
+  replacing the previous positional `<database>` invocation for normal use.
+- **`am agent add <id> --role <reasoner|worker|utility> --adapter <acp|codex-app-server>
+  -- <program> [arg ...]`.** An Agent identity, role, adapter and opaque LaunchSpec argv
+  are persisted in one step; everything after `--` is stored exactly as given and is
+  never interpreted by AgentMosaic. `am agent list` renders the discovered registry.
+- **`am doctor`.** Inspects project, team and runtime readiness without authentication:
+  it probes each configured adapter through its own protocol and reports a bounded
+  readiness classification, then reports `LEAD_SELECTION_AMBIGUOUS_OR_MISSING` unless
+  exactly one reasoner is registered. `doctor` never opens a login flow.
+- **`am run "<objective>"`.** Discovers the enclosing project state and delegates to the
+  existing `TeamRunner`, so the team entrypoint no longer needs a hand-written database
+  path or repository argument.
+- **Distribution contract (`dist-workspace.toml`).** cargo-dist builds a shell installer
+  and an archive for `x86_64-unknown-linux-gnu` only, and `release.yml` publishes them
+  to the GitHub Release for a pushed version tag.
+- **Checked-in documentation tree.** `docs/getting-started.md`, `docs/architecture.md`,
+  `docs/cli.md`, `docs/recovery.md`, `docs/runtimes/{acp,codex,qwen-code}.md`,
+  `docs/history.md` and `docs/releases/v0.1.0.md` now describe the shipped product.
+- **`scripts/ci/check_identity.sh`**, an identity gate that fails the build if a retired
+  identity reappears as an actively-shipped name, if retired working-history residue is
+  tracked again, or if any workspace package or the public `am` binary target drifts.
+- **Package/release tooling.** `scripts/release/package_release.sh` and
+  `scripts/release/third_party_licenses.py` produce the third-party license bundle
+  carried by release archives.
+
+### Changed
+
+- **One namespace for the whole workspace.** Cargo packages, Rust import paths, the
+  configuration namespace and the environment prefix were unified under `agentmosaic`;
+  the public binary is `am`. Old binaries, crate names, import prefixes, the old
+  repository URL and the old branch name are deliberately not kept as aliases.
+- **The Codex collaboration bridge is internal.** It is reachable only as the hidden
+  `am __internal codex-mcp` command, is absent from `am --help`, and is never installed
+  or configured separately. Existing boards that still reference a helper command
+  remain readable.
+- **`doctor` reports Lead selection explicitly** instead of leaving an ambiguous or
+  missing Lead to be discovered during a team run.
+
+### Removed
+
+- **Tracked development evidence and stale roadmaps.** `.acc-evidence/**`,
+  `implementation_report.md`, `product_self_audit.md`, `product_self_reaudit.md`,
+  `docs/v2/**` and the runtime probe notes were removed as history hygiene; the retired
+  Python control plane remains historical Git content only.
+
+### Compatibility
+
+- **SQLite schema stays v11.** No migration is required, and a board created by the
+  `v0.1.0` release remains readable.
+- **Persisted wire identifiers and semantics are unchanged**: `TaskKind` and
+  `DriverKind` strings, task/result/artifact/final-reference semantics, and the Lead
+  decision JSON fields all keep their `v0.1.0` meaning.
+- The previous positional CLI grammar remains available as the advanced compatibility
+  surface documented in `docs/cli.md`.
+
+### Verified
+
+- The full workspace gates pass: `scripts/ci/check_identity.sh`, `cargo fmt --all --
+  --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo test --workspace --all-features`, `cargo build --release --workspace` and
+  `git diff --check`.
+- `am init`, `am agent add`, `am doctor` and `am run` are covered by
+  `crates/agentmosaic-cli/tests/project_onboarding.rs` against the real project-local
+  state file.
+
 ## [0.1.0] - 2026-09-13
 
 First stable public release of the Rust heterogeneous-Agent product line.
