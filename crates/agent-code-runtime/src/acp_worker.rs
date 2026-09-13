@@ -1,6 +1,7 @@
 //! Bounded shared ACP worker driver for local coding-agent CLIs.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{
@@ -74,6 +75,12 @@ pub struct AcpTaskExecution {
     pub external_session_id: String,
     pub result: AgentTaskResult,
 }
+
+/// A narrowly scoped lifecycle callback invoked after ACP `session/new` has
+/// returned an external reference and before the first prompt is sent. The
+/// reference remains foreign runtime metadata; callers keep canonical state in
+/// their existing task board.
+pub type AcpSessionStartedObserver = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
 /// A caller-owned cancellation trigger for one ACP task execution.  It does
 /// not carry a session id: the live driver derives the foreign reference from
@@ -150,6 +157,16 @@ impl AcpWorkerDriver {
         task: &AgentTask,
         cancellation: &mut AcpCancellationListener,
     ) -> Result<(String, String), AcpWorkerError> {
+        self.run_with_cancellation_observed(task, cancellation, None)
+            .await
+    }
+
+    async fn run_with_cancellation_observed(
+        &self,
+        task: &AgentTask,
+        cancellation: &mut AcpCancellationListener,
+        session_started: Option<AcpSessionStartedObserver>,
+    ) -> Result<(String, String), AcpWorkerError> {
         let prompt = bounded_prompt(task, self.config.max_prompt_bytes);
         let agent =
             AcpAgent::new(AcpAgentConfig::new(&self.config.command).args(self.config.args.clone()));
@@ -167,6 +184,12 @@ impl AcpWorkerDriver {
                     .block_task()
                     .run_until(async |mut session| {
                         let session_id = session.session_id().to_string();
+                        if let Some(observer) = session_started {
+                            observer(&session_id).map_err(|error| {
+                                agent_client_protocol::Error::internal_error()
+                                    .data(format!("persist ACP session binding: {error}"))
+                            })?;
+                        }
                         session.send_prompt(&prompt)?;
                         let connection = session.connection().clone();
                         let native_session_id = session.session_id().clone();
@@ -295,6 +318,30 @@ impl AcpWorkerDriver {
         let (_cancellation, mut listener) = AcpCancellation::new();
         self.execute_task_with_cancellation(task, &mut listener)
             .await
+    }
+
+    /// Execute one task while allowing the caller to durably bind the exact
+    /// external ACP session before prompt side effects begin.
+    pub async fn execute_task_with_session_observer(
+        &self,
+        task: &AgentTask,
+        session_started: AcpSessionStartedObserver,
+    ) -> Result<AcpTaskExecution, AcpWorkerError> {
+        let (_cancellation, mut listener) = AcpCancellation::new();
+        let (external_session_id, response) = self
+            .run_with_cancellation_observed(task, &mut listener, Some(session_started))
+            .await?;
+        let summary = parse_peer_result(&response, self.config.max_result_bytes)?;
+        let artifacts = self.collect_artifacts()?;
+        Ok(AcpTaskExecution {
+            external_session_id,
+            result: AgentTaskResult {
+                task_id: task.id,
+                summary,
+                artifacts,
+                message: None,
+            },
+        })
     }
 
     /// Execute one task with an in-process cancellation handle.  Successful

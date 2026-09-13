@@ -5,6 +5,7 @@
 //! path, and a crash path.
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use agent_code_runtime::{AcpCancellation, AcpWorkerConfig, AcpWorkerDriver, AcpWorkerError};
@@ -109,6 +110,27 @@ async fn invalid_configs_are_rejected_before_spawn() {
         );
     }
 
+    let _ = std::fs::remove_dir_all(&cwd);
+}
+
+#[tokio::test]
+async fn session_binding_observer_runs_before_a_successful_prompt() {
+    let cwd = mock_cwd("session-observer");
+    let driver = AcpWorkerDriver::new(valid_config(&cwd, "sync")).expect("valid mock driver");
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let observer_seen = observed.clone();
+    let execution = driver
+        .execute_task_with_session_observer(
+            &task_for(17),
+            Arc::new(move |session_id| {
+                observer_seen.lock().unwrap().push(session_id.to_string());
+                Ok(())
+            }),
+        )
+        .await
+        .expect("mock task succeeds after session observer");
+    assert_eq!(observed.lock().unwrap().as_slice(), ["acp-m2-mock-session"]);
+    assert_eq!(execution.external_session_id, "acp-m2-mock-session");
     let _ = std::fs::remove_dir_all(&cwd);
 }
 

@@ -1,9 +1,10 @@
 //! Small Rust normal-path CLI for the durable team board.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
-use agent_code_runtime::{AcpWorkerConfig, AcpWorkerDriver};
+use agent_code_runtime::{AcpSessionStartedObserver, AcpWorkerConfig, AcpWorkerDriver};
 use agent_code_storage::{
     AgentRegistryRecord, ExternalRuntimeBinding, SqliteAgentRegistry, SqliteTaskBoard,
 };
@@ -249,12 +250,33 @@ fn run_acp(database: &str, fields: &[String]) -> Result<String, String> {
         .enable_time()
         .build()
         .map_err(|e| format!("run-acp: {e}"))?;
-    let execution = runtime.block_on(driver.execute_task(&AgentTask {
-        id: task_id,
-        objective: task.objective,
-        kind: task.kind,
-        context: Vec::new(),
-    }));
+    let binding_database = database.to_string();
+    let binding_agent = agent_id.clone();
+    let binding_runtime_kind = "acp".to_string();
+    let session_started: AcpSessionStartedObserver = Arc::new(move |session_id| {
+        let binding_board = open(&binding_database)
+            .map_err(|error| format!("open board for ACP binding: {error}"))?;
+        binding_board
+            .upsert_external_binding(&ExternalRuntimeBinding {
+                team_task_id: task_id,
+                attempt,
+                agent_id: binding_agent.clone(),
+                runtime_kind: binding_runtime_kind.clone(),
+                native_thread_id: Some(session_id.to_string()),
+                native_turn_id: None,
+                lifecycle_state: "running".into(),
+            })
+            .map_err(|error| format!("persist ACP binding: {error}"))
+    });
+    let execution = runtime.block_on(driver.execute_task_with_session_observer(
+        &AgentTask {
+            id: task_id,
+            objective: task.objective,
+            kind: task.kind,
+            context: Vec::new(),
+        },
+        session_started,
+    ));
     match execution {
         Ok(execution) => {
             board
