@@ -1520,3 +1520,16 @@ git diff --check                                                 exit 0
 
 This is a minimal R7 registry migration and does not alter M5–M9 or make an
 adapter/readiness claim.
+
+## 51. M5 scheduler live rerun receipt (2026-09-13)
+
+The existing real scheduler topology was rerun at source commit `05a8fbc`.
+Its terminal test result was `1 passed, 0 failed, 0 ignored, 3 filtered out`
+in `36.59s`; captured-output SHA-256 is
+`586f7c663877d57ca86bcf001ada486d492ffcd280264dc811a74a4ef0caf2dc`.
+The wrapper did not retain its separate exit-code file, so this report does
+not fabricate an exit code.  Sanitized receipt:
+`.acc-evidence/r6-m5-scheduler-live-20260913.md`.
+
+M5 remains unsealed pending the distinct live external-process
+crash/reconcile criterion and final candidate-bound evidence.
