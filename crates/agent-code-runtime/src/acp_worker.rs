@@ -687,6 +687,37 @@ mod tests {
         let _ = std::fs::remove_dir_all(cwd);
     }
 
+    #[tokio::test]
+    #[ignore = "requires locally configured Kimi Code ACP; sends one bounded no-tool prompt in an isolated directory"]
+    async fn kimi_acp_completes_a_bounded_no_tool_turn() {
+        let cwd = acp_m2_probe_cwd("kimi_bounded");
+        std::fs::create_dir_all(&cwd).expect("Kimi probe work directory");
+        let driver = AcpWorkerDriver::new(AcpWorkerConfig {
+            runtime_kind: "kimi-code".into(),
+            command: PathBuf::from("kimi"),
+            args: vec!["acp".into()],
+            auth_method: None,
+            working_directory: cwd.clone(),
+            timeout: Duration::from_secs(180),
+            max_prompt_bytes: 512,
+            max_result_bytes: 1024,
+            artifact_paths: Vec::new(),
+        })
+        .expect("valid local Kimi ACP profile");
+        let result = driver
+            .run(&AgentTask {
+                id: 9010,
+                objective: "Do not use tools, shell commands, network access, or filesystem writes. Return exactly this JSON peer result: {\"summary\":\"kimi bounded task complete\"}.".into(),
+                kind: TaskKind::Reasoning,
+                context: Vec::new(),
+            })
+            .await;
+        let _ = std::fs::remove_dir_all(&cwd);
+        let (session_id, response) = result.expect("Kimi bounded ACP turn completes");
+        assert!(!session_id.is_empty(), "Kimi returns a session reference");
+        assert!(!response.is_empty(), "Kimi returns a bounded turn response");
+    }
+
     const ACP_M2_PROBE_TARGET: &str = "qwen";
     const ACP_M2_INSPECT_SHA256: &str =
         "4f9cb58fb7462cbc9d82112069421c479b28fc8bd74a2abaa7fdd899ce63914b";

@@ -479,7 +479,7 @@ budget/contention on the shared local vLLM node, not a hung runtime; see
 ## 29. R6–R8 Source-Informed Productization
 
 ```json
-{"active_roadmap":"R6-R8","active_product":"heterogeneous-agent-coding-team","milestones":{"M1_CODEX_TEAM_READY":"IN_PROGRESS","M2_ACP_DRIVER_READY":"UNKNOWN","M3_QWEN_WORKER_READY":"IN_PROGRESS","M4_KIMI_PROFILE_CLASSIFIED":"KIMI_AUTH_REQUIRED","M5_R6_TEAM_READY":"NOT_RUN","M6_R6_SEALED":"NOT_RUN","M7_R7_NORMAL_PATH_READY":"NOT_PASSED","M8_R8_DEBLOATED":"NOT_RUN","M9_PRODUCT_RC_READY":"NOT_RUN"}}
+{"active_roadmap":"R6-R8","active_product":"heterogeneous-agent-coding-team","milestones":{"M1_CODEX_TEAM_READY":"IN_PROGRESS","M2_ACP_DRIVER_READY":"UNKNOWN","M3_QWEN_WORKER_READY":"IN_PROGRESS","M4_KIMI_PROFILE_CLASSIFIED":"KIMI_READY","M5_R6_TEAM_READY":"NOT_RUN","M6_R6_SEALED":"NOT_RUN","M7_R7_NORMAL_PATH_READY":"NOT_PASSED","M8_R8_DEBLOATED":"NOT_RUN","M9_PRODUCT_RC_READY":"NOT_RUN"}}
 ```
 
 Historical A–N/J/K/L/M/Q are `HISTORICAL_COMPATIBILITY_ONLY` for this R6–R8
@@ -498,7 +498,7 @@ execution.
 |---|---|---|---|---|
 | Codex | `codex-cli 0.154.0` | app-server stdio + allowlisted RAS MCP | thread/turn, same-turn bounded context, artifact, persisted binding/reopen, thread resume, real same-thread two-task plan and durable utility follow-up | M1 in progress: full Qwen topology/final selected refs still missing |
 | Qwen Code | `0.23.3` | `qwen --acp` via `agent-client-protocol 2.1.0` | authenticated session/follow-up/coding evidence; after 600 s budget calibration the live cross-runtime command passed in 136.09 s | `IN_PROGRESS`: live bounded worker/result-artifact-to-Lead evidence exists; real ACP continuation/cancel remains required before M3 can pass |
-| Kimi Code | `0.39.1` | `kimi acp` candidate | ACP initialize live; session/task blocked by local authentication readiness | `KIMI_AUTH_REQUIRED` |
+| Kimi Code | `0.42.0` | `kimi acp` candidate | real bounded ACP turn and external session reference; strict structured peer result rejected fail-closed | `KIMI_READY` for M4 classification only; no adapter readiness |
 
 Source references, protocol decisions, and licenses are recorded in
 `research-agent-system_R6_R8_source_informed_productization_delivery/SOURCE_RESEARCH.json`:
@@ -1091,6 +1091,58 @@ M3_QWEN_WORKER_READY      = IN_PROGRESS
 M7_R7_NORMAL_PATH_READY   = NOT_PASSED
 ```
 
+## 43A. Kimi Code 0.42.0 ACP classification refresh (2026-09-13)
+
+The old Phase 2.5A `KIMI_AUTH_REQUIRED` observation was specific to local
+Kimi Code 0.39.1 and is not retained as a claim about the currently installed
+0.42.0 runtime. A held-stdin, JSON-RPC-only ACP discovery probe observed a
+successful `initialize` / `initialized` / `session/new` sequence at 0.42.0.
+It advertised protocol version 1, a terminal login method, session
+list/resume/close/delete/fork capability, and MCP HTTP/SSE capability. The
+session reference, raw frames, credentials, endpoint, prompt, and transcript
+were not recorded.
+
+The ignored live Rust command below then completed one bounded no-tool turn
+through `AcpWorkerDriver` in an isolated directory:
+
+```text
+cargo test -p agent-code-runtime kimi_acp_completes_a_bounded_no_tool_turn -- --ignored --nocapture
+exit 0; 1 passed, 0 failed, 0 ignored, 22 filtered out; 1.79 seconds
+```
+
+The same runtime ended a paired turn whose response did not meet the existing
+single-strict-JSON peer-result contract; `parse_peer_result` rejected it.
+That negative observation is intentionally fail-closed: runtime completion is
+not a submitted or accepted team result. Consequently M4 is now classified
+`KIMI_READY` in its narrow roadmap sense (a real bounded task turn passed),
+but the only viable current candidate is a bounded-context non-interactive
+worker. A structured-message adapter, tool response loop, cancellation,
+recovery, retry, team integration, and every adapter/global readiness claim
+remain unproven.
+
+Evidence: `.acc-evidence/r6-kimi-acp-042-live.md`; complete capability wording
+is in `docs/kimi_code_runtime_probe.md`. The current milestone delta is:
+
+```text
+M4_KIMI_PROFILE_CLASSIFIED = KIMI_READY  (classification only)
+M1_CODEX_TEAM_READY        = IN_PROGRESS
+M2_ACP_DRIVER_READY        = UNKNOWN / NOT_PASSED
+M3_QWEN_WORKER_READY       = IN_PROGRESS
+M5_R6_TEAM_READY           = NOT_RUN
+M7_R7_NORMAL_PATH_READY    = NOT_PASSED
+M9_PRODUCT_RC_READY        = NOT_RUN
+```
+
+Full Rust regression after the focused test and documentation update:
+
+```text
+cargo fmt --all -- --check                                      exit 0
+cargo clippy --workspace --all-targets -- -D warnings           exit 0
+cargo test --workspace                                           exit 0
+  162 passed, 0 failed, 11 ignored
+git diff --check                                                 exit 0
+```
+
 ## 44. R6 final-result selections and v8 -> v9 migration (2026-09-13)
 
 The team board previously reconstructed a final result by collecting every
@@ -1117,8 +1169,10 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 git diff --check
-all exit 0; workspace execution reports 162 passed, 0 failed, 13 ignored
-(`cargo test --workspace -- --list`: 175 listed tests, including ignored tests).
+all exit 0; workspace execution at the later Kimi 0.42.0 requalification
+reports 162 passed, 0 failed, 11 ignored (173 listed tests including ignored
+tests). The previous 13-ignored / 175-listed count is historical and must not
+be read as the current count.
 ```
 
 The real Codex Lead plan/follow-up test was also executed at the current
