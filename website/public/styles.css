@@ -11,7 +11,9 @@
   --accent: #79c0ff;
   --focus: #f2cc60;
   --line: #223040;
-  --line-strong: #33475c;
+  /* Borders on interactive controls and the workflow connectors carry meaning, so this
+     token must clear the 3:1 non-text contrast bar on every surface it is drawn on. */
+  --line-strong: #566f8c;
 
   --font-body: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;

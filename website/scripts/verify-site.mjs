@@ -250,6 +250,50 @@ const sitemap = read("public/sitemap.xml");
 check(sitemap.includes("<loc>https://am.yhshyp.xyz/</loc>"), "sitemap lists /");
 check(sitemap.includes("<loc>https://am.yhshyp.xyz/zh/</loc>"), "sitemap lists /zh/");
 
+// -------------------------------------------------------- contrast contract
+
+section("contrast contract (WCAG 2.2 AA)");
+// Tokens are read back from the stylesheet so this gate cannot drift from the CSS.
+const tokenBlock = css.match(/:root\s*\{([\s\S]*?)\}/);
+const tokens = {};
+if (tokenBlock) {
+  for (const [, name, value] of tokenBlock[1].matchAll(/--([a-z0-9-]+)\s*:\s*(#[0-9a-fA-F]{6})\s*;/g)) {
+    tokens[name] = value.toLowerCase();
+  }
+}
+
+function luminance(hex) {
+  const linear = [1, 3, 5]
+    .map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+}
+
+function contrast(foreground, background) {
+  const a = luminance(foreground);
+  const b = luminance(background);
+  const [light, dark] = a > b ? [a, b] : [b, a];
+  return (light + 0.05) / (dark + 0.05);
+}
+
+const SURFACES = ["bg", "surface", "surface2"];
+check(Object.keys(tokens).length > 0, "parsed design tokens from styles.css");
+
+// Normal text needs 4.5:1. Borders on interactive controls and the workflow connectors
+// are non-text content that has to clear 3:1 on every surface it is drawn on.
+for (const surface of SURFACES) {
+  if (!tokens[surface]) continue;
+  check(contrast(tokens.text, tokens[surface]) >= 4.5, `text on ${surface} >= 4.5:1`);
+  check(contrast(tokens.muted, tokens[surface]) >= 4.5, `muted on ${surface} >= 4.5:1`);
+  check(contrast(tokens.accent, tokens[surface]) >= 4.5, `accent on ${surface} >= 4.5:1`);
+  check(
+    contrast(tokens["line-strong"], tokens[surface]) >= 3,
+    `line-strong on ${surface} >= 3:1 (non-text)`,
+  );
+}
+check(contrast(tokens.focus, tokens.bg) >= 3, "focus ring on bg >= 3:1");
+check(contrast(tokens.bg, tokens.accent) >= 4.5, "primary button label on accent >= 4.5:1");
+
 // ------------------------------------------------------------ size budget
 
 section("size budget");
