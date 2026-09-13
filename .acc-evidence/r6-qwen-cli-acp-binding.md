@@ -51,3 +51,26 @@ the exit-receipt SHA-256 is
 No session ID, prompt, response, frame, endpoint, or credential was retained.
 This requalifies the driver's same-session API, not a user-facing CLI
 continuation/recovery workflow.
+
+## Normal CLI continuation / session-resume evidence
+
+The same isolated board then created a separate pending task 2 and ran:
+
+```text
+agent-code-cli continue-acp <db> 2 qwen 1 <isolated-cwd> openai 600
+```
+
+Exit `0`; observed output: `continued task=2 agent=qwen source_task=1`.
+Authoritative inspection showed task 2 as succeeded with its own attempt-1
+binding: `runtime_kind=acp`, `lifecycle_state=completed`, and
+`external_reference_present=true`. Task 1 remained succeeded; it was not
+replayed. The task-2 summary, foreign session reference, model output, raw
+frames, credentials, and endpoint were not retained.
+
+Sanitized log hashes: submit
+`897e65c715bb3fcfe2e62fb9acdbd9c61c471b38e52ab445a1ba7d793b687ba3`;
+continuation `60e83f42c8cf30e3751d18b4ac7b147423b1324e69dc9cc8ba2cb965693ccdc3`;
+exit receipt `9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa`.
+
+This is user-facing Qwen session resume evidence. It does not prove active
+cross-process cancellation or full scheduler-driven M5 E2E.

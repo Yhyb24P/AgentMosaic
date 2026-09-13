@@ -12,7 +12,7 @@ use agent_code_team::{AgentTask, DriverKind, TaskAttempt, TaskBoard, TaskKind, T
 use rusqlite::Connection;
 
 fn usage() -> &'static str {
-    "usage: agent-code-cli <register|registry|run-acp|submit|status|cancel|override|resume|artifact|binding|final> <database> [fields]"
+    "usage: agent-code-cli <register|registry|run-acp|continue-acp|submit|status|cancel|override|resume|artifact|binding|final> <database> [fields]"
 }
 
 fn open(path: &str) -> Result<SqliteTaskBoard, String> {
@@ -323,6 +323,185 @@ fn run_acp(database: &str, fields: &[String]) -> Result<String, String> {
     }
 }
 
+/// Continue a *new* pending team task through the foreign ACP session recorded
+/// on a completed source task. The source task is never replayed and its
+/// foreign ID never becomes canonical task identity.
+fn continue_acp(database: &str, fields: &[String]) -> Result<String, String> {
+    if fields.len() != 6 {
+        return Err("continue-acp requires task-id agent-id source-task-id working-directory auth-method-or-- timeout-seconds".into());
+    }
+    let task_id = fields[0]
+        .parse::<u64>()
+        .map_err(|_| "invalid task id".to_string())?;
+    let agent_id = &fields[1];
+    let source_task = fields[2]
+        .parse::<u64>()
+        .map_err(|_| "invalid source task id".to_string())?;
+    let working_directory = PathBuf::from(&fields[3]);
+    let auth_method = parse_optional_field(&fields[4])?;
+    let timeout_seconds = fields[5]
+        .parse::<u64>()
+        .map_err(|_| "invalid timeout seconds".to_string())?;
+    if timeout_seconds == 0 {
+        return Err("timeout seconds must be greater than zero".into());
+    }
+    let registry = SqliteAgentRegistry::open(database).map_err(|e| format!("continue-acp: {e}"))?;
+    let agent = registry
+        .get_agent(agent_id)
+        .map_err(|e| format!("continue-acp: {e}"))?
+        .ok_or_else(|| format!("continue-acp: unknown registered agent {agent_id}"))?;
+    if agent.driver_kind.as_deref() != Some("acp") {
+        return Err("continue-acp requires an agent registered with driver-kind acp".into());
+    }
+    let executable = agent
+        .executable
+        .ok_or_else(|| "continue-acp: registered ACP agent has no executable".to_string())?;
+    let driver_args: Vec<String> = serde_json::from_str(
+        agent
+            .driver_args_json
+            .as_deref()
+            .ok_or_else(|| "continue-acp: registered ACP agent has no args".to_string())?,
+    )
+    .map_err(|_| "continue-acp: stored driver args are not a JSON string array".to_string())?;
+    let mut board = open(database)?;
+    let task = board
+        .task(task_id)
+        .map_err(|e| format!("continue-acp: {e:?}"))?
+        .ok_or_else(|| format!("continue-acp: missing task {task_id}"))?;
+    if !matches!(
+        task.status,
+        TaskStatus::Pending | TaskStatus::Assigned | TaskStatus::Failed | TaskStatus::Cancelled
+    ) {
+        return Err("continue-acp requires a non-running, non-succeeded task".into());
+    }
+    let source_attempt = board
+        .attempts(source_task)
+        .map_err(|e| format!("continue-acp: {e:?}"))?
+        .len() as u32;
+    let source_binding = board
+        .external_binding(source_task, source_attempt)
+        .map_err(|e| format!("continue-acp: {e}"))?
+        .ok_or_else(|| "continue-acp: source task has no external binding".to_string())?;
+    if source_binding.agent_id != *agent_id
+        || source_binding.runtime_kind != "acp"
+        || source_binding.lifecycle_state != "completed"
+    {
+        return Err(
+            "continue-acp: source binding is not a completed binding for this ACP agent".into(),
+        );
+    }
+    let session_id = source_binding.native_thread_id.ok_or_else(|| {
+        "continue-acp: source binding has no external session reference".to_string()
+    })?;
+    let attempt = board
+        .attempts(task_id)
+        .map_err(|e| format!("continue-acp: {e:?}"))?
+        .len() as u32
+        + 1;
+    board
+        .assign(task_id, agent_id)
+        .map_err(|e| format!("continue-acp: {e:?}"))?;
+    board
+        .record_attempt(&TaskAttempt {
+            task_id,
+            attempt,
+            agent_id: agent_id.clone(),
+            status: TaskStatus::Running,
+            result: None,
+            error: None,
+        })
+        .map_err(|e| format!("continue-acp: {e:?}"))?;
+    board
+        .set_status(task_id, TaskStatus::Running)
+        .map_err(|e| format!("continue-acp: {e:?}"))?;
+    board
+        .upsert_external_binding(&ExternalRuntimeBinding {
+            team_task_id: task_id,
+            attempt,
+            agent_id: agent_id.clone(),
+            runtime_kind: "acp".into(),
+            native_thread_id: Some(session_id.clone()),
+            native_turn_id: None,
+            lifecycle_state: "running".into(),
+        })
+        .map_err(|e| format!("continue-acp: {e}"))?;
+    let driver = AcpWorkerDriver::new(AcpWorkerConfig {
+        runtime_kind: format!("registered-acp:{agent_id}"),
+        command: PathBuf::from(executable),
+        args: driver_args,
+        auth_method,
+        working_directory,
+        timeout: Duration::from_secs(timeout_seconds),
+        max_prompt_bytes: 4096,
+        max_result_bytes: 4096,
+        artifact_paths: Vec::new(),
+    })
+    .map_err(|e| format!("continue-acp: {e}"))?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .map_err(|e| format!("continue-acp: {e}"))?;
+    let outcome = runtime.block_on(driver.resume_with_follow_up(&session_id, &task.objective));
+    match outcome {
+        Ok(summary) => {
+            let result = AgentTask {
+                id: task_id,
+                objective: String::new(),
+                kind: task.kind,
+                context: Vec::new(),
+            };
+            let team_result = agent_code_team::AgentTaskResult {
+                task_id: result.id,
+                summary: summary.clone(),
+                artifacts: Vec::new(),
+                message: None,
+            };
+            board
+                .upsert_external_binding(&ExternalRuntimeBinding {
+                    team_task_id: task_id,
+                    attempt,
+                    agent_id: agent_id.clone(),
+                    runtime_kind: "acp".into(),
+                    native_thread_id: Some(session_id),
+                    native_turn_id: None,
+                    lifecycle_state: "completed".into(),
+                })
+                .map_err(|e| format!("continue-acp: {e}"))?;
+            board
+                .commit_successful_result(
+                    &TaskAttempt {
+                        task_id,
+                        attempt,
+                        agent_id: agent_id.clone(),
+                        status: TaskStatus::Succeeded,
+                        result: Some(summary),
+                        error: None,
+                    },
+                    &team_result,
+                )
+                .map_err(|e| format!("continue-acp: {e:?}"))?;
+            Ok(format!(
+                "continued task={task_id} agent={agent_id} source_task={source_task}"
+            ))
+        }
+        Err(error) => {
+            let text = error.to_string();
+            board
+                .complete_attempt(&TaskAttempt {
+                    task_id,
+                    attempt,
+                    agent_id: agent_id.clone(),
+                    status: TaskStatus::Failed,
+                    result: None,
+                    error: Some(text.clone()),
+                })
+                .and_then(|_| board.set_status(task_id, TaskStatus::Failed))
+                .map_err(|e| format!("continue-acp: {e:?}"))?;
+            Err(format!("continue-acp: {text}"))
+        }
+    }
+}
+
 fn run(args: &[String]) -> Result<String, String> {
     let command = args
         .first()
@@ -455,6 +634,7 @@ fn run(args: &[String]) -> Result<String, String> {
         "register" => register_agent(database, &args[2..]),
         "registry" => registry_list(database, args.get(2).map(String::as_str)),
         "run-acp" => run_acp(database, &args[2..]),
+        "continue-acp" => continue_acp(database, &args[2..]),
         _ => Err(usage().into()),
     }
 }
@@ -537,6 +717,51 @@ mod tests {
         assert!(result.is_err());
         let status = run(&["status".into(), db]).unwrap();
         assert!(status.contains("status=failed"));
+        let _ = std::fs::remove_file(database);
+    }
+
+    #[test]
+    fn continue_acp_rejects_source_without_a_completed_binding() {
+        let database = std::env::temp_dir().join(format!(
+            "agent_code_cli_continue_reject_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let db = database.to_string_lossy().into_owned();
+        run(&[
+            "register".into(),
+            db.clone(),
+            "worker".into(),
+            "worker".into(),
+            "worker".into(),
+            "acp".into(),
+            "qwen".into(),
+            "--acp".into(),
+            "1".into(),
+            "-".into(),
+        ])
+        .unwrap();
+        let source = run(&["submit".into(), db.clone(), "bulk".into(), "source".into()]).unwrap();
+        let next = run(&["submit".into(), db.clone(), "bulk".into(), "next".into()]).unwrap();
+        let source_id = source.strip_prefix("submitted task=").unwrap();
+        let next_id = next.strip_prefix("submitted task=").unwrap();
+        let result = run(&[
+            "continue-acp".into(),
+            db.clone(),
+            next_id.into(),
+            "worker".into(),
+            source_id.into(),
+            std::env::temp_dir().to_string_lossy().into_owned(),
+            "-".into(),
+            "30".into(),
+        ]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("no external binding"));
+        let status = run(&["status".into(), db]).unwrap();
+        assert!(status.contains(&format!("task={next_id} status=pending")));
         let _ = std::fs::remove_file(database);
     }
 }
