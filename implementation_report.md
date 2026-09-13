@@ -479,7 +479,7 @@ budget/contention on the shared local vLLM node, not a hung runtime; see
 ## 29. R6–R8 Source-Informed Productization
 
 ```json
-{"active_roadmap":"R6-R8","active_product":"heterogeneous-agent-coding-team","milestones":{"M1_CODEX_TEAM_READY":"PASSED","M2_ACP_DRIVER_READY":"PASSED","M3_QWEN_WORKER_READY":"PASSED","M4_KIMI_PROFILE_CLASSIFIED":"KIMI_READY","M5_R6_TEAM_READY":"PASSED","M6_R6_SEALED":"PASSED","M7_R7_NORMAL_PATH_READY":"PASSED","M8_R8_DEBLOATED":"PASSED","M9_PRODUCT_RC_READY":"NOT_RUN"}}
+{"active_roadmap":"R6-R8","active_product":"heterogeneous-agent-coding-team","milestones":{"M1_CODEX_TEAM_READY":"PASSED","M2_ACP_DRIVER_READY":"PASSED","M3_QWEN_WORKER_READY":"PASSED","M4_KIMI_PROFILE_CLASSIFIED":"KIMI_READY","M5_R6_TEAM_READY":"PASSED","M6_R6_SEALED":"PASSED","M7_R7_NORMAL_PATH_READY":"PASSED","M8_R8_DEBLOATED":"PASSED","M9_PRODUCT_RC_READY":"PASSED"}}
 ```
 
 Historical A–N/J/K/L/M/Q are `HISTORICAL_COMPATIBILITY_ONLY` for this R6–R8
@@ -1708,3 +1708,16 @@ passed, 0 failed, 16 intentionally ignored live tests).
 Therefore `M8_R8_DEBLOATED = PASSED`. M9 remains `NOT_RUN` until release
 build, clean-install smoke, upgrade-migration smoke, candidate-bound release
 artifacts, and final product RC evidence are complete.
+
+## 57. M9 local product RC candidate (2026-09-13)
+
+Candidate executable source is `687093630af9ac811574b3de58e6e983f0e23d6f`.
+All Rust CI and release build commands passed; the workspace test result was
+175 passed, 0 failed, 16 explicitly ignored live tests. A copied release
+`agent-code-cli` binary completed help, version, submit and status outside the
+source-tree invocation. The same binary opened a generated minimal v8 SQLite
+fixture and read its preserved task after migration. Release artifact hashes
+and exact commands are recorded in `.acc-evidence/m9-rc-6870936.md`.
+
+No tag, push, publication, remote CI claim, or external release action was
+performed. On the local Linux reference profile, `PRODUCT_RC_READY = PASSED`.
