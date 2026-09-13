@@ -61,7 +61,7 @@ any public release decision.
 ```text
 LOCAL_PRODUCT_RC_READY        = true  (exact-candidate gates + real Codex/Qwen E2E + copied release binary)
 REMOTE_DETERMINISTIC_CI_READY = true  (rust.yml 34759201679 + rust-candidate 34759220090, both green)
-PUBLIC_RELEASE_READY          = false (no tag or GitHub Release; not authorized)
+PUBLIC_RELEASE_READY          = true  (v0.1.0 published as a GitHub Release, Latest, non-prerelease)
 ```
 
 ### Current blockers
@@ -70,8 +70,14 @@ PUBLIC_RELEASE_READY          = false (no tag or GitHub Release; not authorized)
 - `product_self_reaudit.md` exists; it is a self re-audit, not an independent
   third-party one.
 - Deterministic remote CI is green on the frozen candidate: `rust.yml` run `34759201679`
-  and `rust-candidate` run `34759220090` (see `.acc-evidence/rc-repair-fbc80bf/remote-ci.md`).
-- No tag or public release is authorized.
+  and `rust-candidate` run `34759220090`; the exact release commit was additionally
+  qualified by `rust-candidate` run `34761651463`.
+- `v0.1.0` is published: annotated tag `v0.1.0` -> `f2c8af9060395252ec06d6e71d6dc54f65c2e2fc`,
+  GitHub Release (Latest, non-prerelease) with the Linux x86_64 tarball, `SHA256SUMS.txt`
+  and `release-manifest.json`. There is no remaining release blocker.
+- Remaining non-blocking gaps: the tag is annotated but not GPG-signed (no signing key in
+  the release environment); re-audit is a self re-audit, not a third-party one; and only
+  Linux x86_64 is binary-qualified.
 
 ### Verified real production E2E (2026-09-13)
 

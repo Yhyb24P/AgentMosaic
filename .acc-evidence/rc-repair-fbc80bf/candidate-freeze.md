@@ -74,7 +74,7 @@ See `release-binary-smoke.md`.
 ```text
 LOCAL_PRODUCT_RC_READY        = true   (see product_self_reaudit.md)
 REMOTE_DETERMINISTIC_CI_READY = true   (rust.yml 34759201679 + rust-candidate 34759220090)
-PUBLIC_RELEASE_READY          = false  (no tag, no GitHub Release, not authorized)
+PUBLIC_RELEASE_READY          = true   (v0.1.0 GitHub Release published; see public-release.md)
 ```
 
 No git tag and no GitHub Release was created or pushed by this repair.

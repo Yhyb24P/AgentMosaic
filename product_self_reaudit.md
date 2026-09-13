@@ -173,7 +173,7 @@ verify.
 ```text
 LOCAL_PRODUCT_RC_READY        = true
 REMOTE_DETERMINISTIC_CI_READY = true    (rust.yml + rust-candidate green on the frozen candidate)
-PUBLIC_RELEASE_READY          = false   (no tag, no GitHub Release, not authorized)
+PUBLIC_RELEASE_READY          = true    (v0.1.0 GitHub Release published, Latest, non-prerelease)
 ```
 
 `REMOTE_DETERMINISTIC_CI_READY` is supported by run `34759201679` (`rust.yml`, push) and
