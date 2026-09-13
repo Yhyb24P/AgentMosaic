@@ -479,7 +479,7 @@ budget/contention on the shared local vLLM node, not a hung runtime; see
 ## 29. R6–R8 Source-Informed Productization
 
 ```json
-{"active_roadmap":"R6-R8","active_product":"heterogeneous-agent-coding-team","milestones":{"M1_CODEX_TEAM_READY":"PASSED","M2_ACP_DRIVER_READY":"UNKNOWN","M3_QWEN_WORKER_READY":"IN_PROGRESS","M4_KIMI_PROFILE_CLASSIFIED":"KIMI_READY","M5_R6_TEAM_READY":"NOT_RUN","M6_R6_SEALED":"NOT_RUN","M7_R7_NORMAL_PATH_READY":"NOT_PASSED","M8_R8_DEBLOATED":"NOT_RUN","M9_PRODUCT_RC_READY":"NOT_RUN"}}
+{"active_roadmap":"R6-R8","active_product":"heterogeneous-agent-coding-team","milestones":{"M1_CODEX_TEAM_READY":"PASSED","M2_ACP_DRIVER_READY":"PASSED","M3_QWEN_WORKER_READY":"IN_PROGRESS","M4_KIMI_PROFILE_CLASSIFIED":"KIMI_READY","M5_R6_TEAM_READY":"NOT_RUN","M6_R6_SEALED":"NOT_RUN","M7_R7_NORMAL_PATH_READY":"NOT_PASSED","M8_R8_DEBLOATED":"NOT_RUN","M9_PRODUCT_RC_READY":"NOT_RUN"}}
 ```
 
 Historical A–N/J/K/L/M/Q are `HISTORICAL_COMPATIBILITY_ONLY` for this R6–R8

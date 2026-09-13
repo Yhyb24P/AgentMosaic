@@ -74,3 +74,21 @@ exit receipt `9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa`.
 
 This is user-facing Qwen session resume evidence. It does not prove active
 cross-process cancellation or full scheduler-driven M5 E2E.
+
+## Peer-confirmed active cancellation requalification
+
+At source `ed0235a9ae5a0a3f715fad792264552c6775a4ad`, the focused live command
+below issued the typed stable-v1 ACP cancellation notification against the
+driver-created active session and accepted cancellation only after the peer's
+terminal `StopReason::Cancelled`:
+
+```text
+cargo test -p agent-code-runtime acp_m2_probe_cancel_active_session -- --ignored --nocapture
+```
+
+Exit `0`; 1 passed, 0 failed, 0 ignored, 22 filtered out; 1.13 seconds.
+Sanitized log SHA-256:
+`a2b6765a3100a39a25ba0b606ffac8ddc747cdd1799add32f606d47259bd5b0c`;
+exit receipt SHA-256:
+`9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa`.
+The session ID, prompt, response, endpoint, and credentials were not retained.
