@@ -59,12 +59,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "agent-code-cli"
-version = "0.1.0"
+name = "agentmosaic-cli"
+version = "0.2.0-dev"
 dependencies = [
- "agent-code-runtime",
- "agent-code-storage",
- "agent-code-team",
+ "agentmosaic-runtime",
+ "agentmosaic-storage",
+ "agentmosaic-team",
+ "agentmosaic-tui",
  "rusqlite",
  "serde",
  "serde_json",
@@ -72,22 +73,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "agent-code-context"
-version = "0.1.0"
+name = "agentmosaic-context"
+version = "0.2.0-dev"
 dependencies = [
- "agent-code-core",
- "agent-code-model",
+ "agentmosaic-core",
+ "agentmosaic-model",
 ]
 
 [[package]]
-name = "agent-code-core"
-version = "0.1.0"
+name = "agentmosaic-core"
+version = "0.2.0-dev"
 
 [[package]]
-name = "agent-code-model"
-version = "0.1.0"
+name = "agentmosaic-model"
+version = "0.2.0-dev"
 dependencies = [
- "agent-code-tools",
+ "agentmosaic-tools",
  "async-trait",
  "serde",
  "serde_json",
@@ -96,17 +97,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "agent-code-runtime"
-version = "0.1.0"
+name = "agentmosaic-runtime"
+version = "0.2.0-dev"
 dependencies = [
  "agent-client-protocol",
- "agent-code-context",
- "agent-code-core",
- "agent-code-model",
- "agent-code-storage",
- "agent-code-team",
- "agent-code-tools",
- "agent-code-workspace",
+ "agentmosaic-context",
+ "agentmosaic-core",
+ "agentmosaic-model",
+ "agentmosaic-storage",
+ "agentmosaic-team",
+ "agentmosaic-tools",
+ "agentmosaic-workspace",
  "async-trait",
  "libc",
  "rusqlite",
@@ -117,13 +118,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "agent-code-storage"
-version = "0.1.0"
+name = "agentmosaic-storage"
+version = "0.2.0-dev"
 dependencies = [
- "agent-code-context",
- "agent-code-core",
- "agent-code-model",
- "agent-code-team",
+ "agentmosaic-context",
+ "agentmosaic-core",
+ "agentmosaic-model",
+ "agentmosaic-team",
  "async-trait",
  "rusqlite",
  "serde_json",
@@ -131,8 +132,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "agent-code-team"
-version = "0.1.0"
+name = "agentmosaic-team"
+version = "0.2.0-dev"
 dependencies = [
  "async-trait",
  "schemars 0.8.22",
@@ -143,28 +144,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "agent-code-tools"
-version = "0.1.0"
+name = "agentmosaic-tools"
+version = "0.2.0-dev"
 dependencies = [
  "serde",
 ]
 
 [[package]]
-name = "agent-code-tui"
-version = "0.1.0"
+name = "agentmosaic-tui"
+version = "0.2.0-dev"
 dependencies = [
- "agent-code-storage",
- "agent-code-team",
+ "agentmosaic-storage",
+ "agentmosaic-team",
  "crossterm",
  "ratatui",
  "rusqlite",
 ]
 
 [[package]]
-name = "agent-code-workspace"
-version = "0.1.0"
+name = "agentmosaic-workspace"
+version = "0.2.0-dev"
 dependencies = [
- "agent-code-tools",
+ "agentmosaic-tools",
  "glob",
  "ignore",
  "libc",

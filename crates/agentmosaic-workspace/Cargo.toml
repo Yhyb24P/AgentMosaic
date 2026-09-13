@@ -1,0 +1,18 @@
+[package]
+name = "agentmosaic-workspace"
+description = "Workspace containment, bounded file/search tools, and Git checkpoints/rollback"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+agentmosaic-tools = { path = "../agentmosaic-tools" }
+sha2.workspace = true
+ignore.workspace = true
+glob.workspace = true
+regex.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+agentmosaic-tools = { path = "../agentmosaic-tools" }

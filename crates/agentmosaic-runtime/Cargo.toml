@@ -1,0 +1,28 @@
+[package]
+name = "agentmosaic-runtime"
+description = "Native Coding Agent loop: model decisions, tool dispatch, durable history"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+agentmosaic-core = { path = "../agentmosaic-core" }
+agentmosaic-model = { path = "../agentmosaic-model" }
+agentmosaic-tools = { path = "../agentmosaic-tools" }
+agentmosaic-workspace = { path = "../agentmosaic-workspace" }
+agentmosaic-context = { path = "../agentmosaic-context" }
+agentmosaic-storage = { path = "../agentmosaic-storage" }
+agentmosaic-team = { path = "../agentmosaic-team" }
+async-trait.workspace = true
+agent-client-protocol.workspace = true
+sha2.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+agentmosaic-storage = { path = "../agentmosaic-storage" }
+libc.workspace = true
+rusqlite.workspace = true

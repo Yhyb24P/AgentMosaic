@@ -1,20 +1,20 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/agent-code-core",
-    "crates/agent-code-model",
-    "crates/agent-code-tools",
-    "crates/agent-code-workspace",
-    "crates/agent-code-context",
-    "crates/agent-code-storage",
-    "crates/agent-code-runtime",
-    "crates/agent-code-team",
-    "crates/agent-code-tui",
-    "crates/agent-code-cli",
+    "crates/agentmosaic-core",
+    "crates/agentmosaic-model",
+    "crates/agentmosaic-tools",
+    "crates/agentmosaic-workspace",
+    "crates/agentmosaic-context",
+    "crates/agentmosaic-storage",
+    "crates/agentmosaic-runtime",
+    "crates/agentmosaic-team",
+    "crates/agentmosaic-tui",
+    "crates/agentmosaic-cli",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0-dev"
 edition = "2021"
 license = "Apache-2.0"
 publish = false
