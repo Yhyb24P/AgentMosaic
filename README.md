@@ -146,9 +146,10 @@ cargo run -p agent-code-cli -- registry ./team.db
 cargo run -p agent-code-tui -- ./team.db
 ```
 
-The CLI/TUI surface is usable for local board inspection and control, but the
-full R7 product milestone is not sealed until the real-team R6 evidence and
-normal-path recovery qualification are complete. See `implementation_report.md`.
+The CLI/TUI surface is the documented Rust normal path for local board
+inspection and control.  It operates directly on the authoritative SQLite
+board and does not launch legacy Python.  Live Qwen ACP submit/run/continue
+and cancel/recovery evidence is recorded in `implementation_report.md`.
 
 ## Legacy Python (frozen reference)
 

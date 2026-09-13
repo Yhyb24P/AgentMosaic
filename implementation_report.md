@@ -479,7 +479,7 @@ budget/contention on the shared local vLLM node, not a hung runtime; see
 ## 29. R6–R8 Source-Informed Productization
 
 ```json
-{"active_roadmap":"R6-R8","active_product":"heterogeneous-agent-coding-team","milestones":{"M1_CODEX_TEAM_READY":"PASSED","M2_ACP_DRIVER_READY":"PASSED","M3_QWEN_WORKER_READY":"PASSED","M4_KIMI_PROFILE_CLASSIFIED":"KIMI_READY","M5_R6_TEAM_READY":"PASSED","M6_R6_SEALED":"PASSED","M7_R7_NORMAL_PATH_READY":"NOT_PASSED","M8_R8_DEBLOATED":"NOT_RUN","M9_PRODUCT_RC_READY":"NOT_RUN"}}
+{"active_roadmap":"R6-R8","active_product":"heterogeneous-agent-coding-team","milestones":{"M1_CODEX_TEAM_READY":"PASSED","M2_ACP_DRIVER_READY":"PASSED","M3_QWEN_WORKER_READY":"PASSED","M4_KIMI_PROFILE_CLASSIFIED":"KIMI_READY","M5_R6_TEAM_READY":"PASSED","M6_R6_SEALED":"PASSED","M7_R7_NORMAL_PATH_READY":"PASSED","M8_R8_DEBLOATED":"NOT_RUN","M9_PRODUCT_RC_READY":"NOT_RUN"}}
 ```
 
 Historical A–N/J/K/L/M/Q are `HISTORICAL_COMPATIBILITY_ONLY` for this R6–R8
@@ -1664,3 +1664,26 @@ workspace tests, and `git diff --check`, all exit `0`; 175 passed, 0 failed,
 16 ignored).  M7 remains `NOT_PASSED` pending candidate-bound normal-path
 coverage of submit/observe/control/resume through the real runtime and a
 final CLI/TUI documentation/release audit.
+
+## 55. R7 normal-path candidate closure (2026-09-13)
+
+The exact M7 executable code remains candidate
+`8b73657de52c4a342e85c0fa0893aafbb676c0e9`; subsequent commits are evidence
+and documentation only.  The paired live receipts cover the complete normal
+path without legacy Python:
+
+- `.acc-evidence/r7-cli-live-resume-20260913.md`: register, submit, real Qwen
+  `run-acp`, submit, persisted-binding `continue-acp`, status, and binding
+  inspection.  Every command exited `0`; both tasks became succeeded.
+- `.acc-evidence/r7-cli-live-cancel-20260913.md`: independently invoked
+  `cancel` reaches the running live ACP session, closes task/attempt/binding
+  as cancelled, and leaves no child process.
+
+The existing Rust CLI integration tests cover submit/status/override/resume/
+artifact/final/recover/recover-all against the same authoritative board, while
+the TUI tests prove its projection comes from that board and registry rather
+than a parallel memory state.  README now names Rust CLI/TUI as the normal
+path and explicitly states it does not launch legacy Python.
+
+Therefore `M7_R7_NORMAL_PATH_READY = PASSED`.  This is not a release claim:
+M8 de-bloating, release build/install/upgrade smoke, and M9 remain outstanding.
