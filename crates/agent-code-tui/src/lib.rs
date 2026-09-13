@@ -92,11 +92,12 @@ pub fn dashboard_text_with_agents(
                 .map(String::as_str)
                 .unwrap_or("idle");
             lines.push(format!(
-                "agent={} name={} tier={} driver={} active={active}/{capacity} runtime_state={} tags={}",
+                "agent={} name={} tier={} driver={} version={} active={active}/{capacity} runtime_state={} tags={}",
                 agent.id,
                 agent.name,
                 agent.tier,
                 agent.driver_kind.as_deref().unwrap_or("-"),
+                agent.runtime_version.as_deref().unwrap_or("-"),
                 runtime_state,
                 agent.tags_json.as_deref().unwrap_or("[]"),
             ));
@@ -204,6 +205,7 @@ mod tests {
             tier: "worker".into(),
             driver_kind: Some("acp".into()),
             executable: Some("qwen".into()),
+            runtime_version: Some("0.23.3".into()),
             driver_args_json: Some(r#"["-qw","--acp"]"#.into()),
             max_concurrency: Some(2),
             tags_json: Some(r#"["qwen"]"#.into()),

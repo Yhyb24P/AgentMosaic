@@ -3,8 +3,9 @@
 /// extends the team tables for the durable task board: task parent/kind/
 /// target/assignee, run attempt/result/error, and task-keyed artifacts.
 /// Version 8 adds the durable runtime agent registry (agent_registry). Version
-/// 9 adds explicit Lead-selected final task/artifact references.
-pub const SCHEMA_VERSION: i32 = 9;
+/// 9 adds explicit Lead-selected final task/artifact references. Version 10
+/// adds non-secret runtime version metadata to the durable agent registry.
+pub const SCHEMA_VERSION: i32 = 10;
 
 /// The durable journal schema. Deliberately small; it does not reproduce the
 /// legacy qualification/audit schema.
@@ -133,6 +134,7 @@ CREATE TABLE IF NOT EXISTS agent_registry (
     tier TEXT NOT NULL,
     driver_kind TEXT,
     executable TEXT,
+    runtime_version TEXT,
     driver_args_json TEXT,
     max_concurrency INTEGER NOT NULL,
     tags_json TEXT
@@ -222,11 +224,15 @@ pub fn migrate(conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error> {
             tier TEXT NOT NULL,
             driver_kind TEXT,
             executable TEXT,
+            runtime_version TEXT,
             driver_args_json TEXT,
             max_concurrency INTEGER NOT NULL,
             tags_json TEXT
          );",
     )?;
+    // R9 -> R10: public runtime version metadata makes the configured runtime
+    // visible without persisting an endpoint, credential, or transcript.
+    ensure_column(&tx, "agent_registry", "runtime_version", "TEXT")?;
     // `artifacts` gains a nullable `task_id` and a nullable `session_id`, so a
     // team task's artifacts and a single-agent session's coexist. SQLite cannot
     // relax a NOT NULL constraint in place, so the table is rebuilt.

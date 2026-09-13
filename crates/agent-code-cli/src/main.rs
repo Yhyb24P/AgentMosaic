@@ -39,9 +39,9 @@ fn parse_kind(value: Option<&String>) -> Result<TaskKind, String> {
 }
 
 fn register_agent(database: &str, fields: &[String]) -> Result<String, String> {
-    if fields.len() != 8 {
+    if !(8..=9).contains(&fields.len()) {
         return Err(
-            "register requires exactly 8 fields: agent-id name tier driver-kind executable driver-args max-concurrency tags"
+            "register requires 8 or 9 fields: agent-id name tier driver-kind executable driver-args max-concurrency tags [runtime-version-or--]"
                 .to_string(),
         );
     }
@@ -64,6 +64,11 @@ fn register_agent(database: &str, fields: &[String]) -> Result<String, String> {
         driver_args_json: Some(csv_json(driver_args)?),
         max_concurrency: Some(concurrency),
         tags_json: Some(csv_json(tags)?),
+        runtime_version: fields
+            .get(8)
+            .map(|value| parse_optional_field(value))
+            .transpose()?
+            .flatten(),
     };
     let registry = SqliteAgentRegistry::open(database).map_err(|e| format!("register: {e}"))?;
     registry
@@ -134,12 +139,13 @@ fn registry_list(database: &str, limit: Option<&str>) -> Result<String, String> 
             .take(cap)
             .map(|agent| {
                 format!(
-                "id={} name={} tier={} driver_kind={} executable={} args={} concurrency={} tags={}",
+                    "id={} name={} tier={} driver_kind={} executable={} version={} args={} concurrency={} tags={}",
                 agent.id,
                 agent.name,
                 agent.tier,
                 agent.driver_kind.as_deref().unwrap_or("-"),
                 agent.executable.as_deref().unwrap_or("-"),
+                agent.runtime_version.as_deref().unwrap_or("-"),
                 agent.driver_args_json.as_deref().unwrap_or("-"),
                 agent.max_concurrency.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
                 agent.tags_json.as_deref().unwrap_or("-"),

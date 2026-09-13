@@ -15,6 +15,8 @@ pub struct AgentRegistryRecord {
     pub driver_kind: Option<String>,
     /// The executable the driver starts, or None for built-in drivers.
     pub executable: Option<String>,
+    /// Public runtime version observed by a probe, never a credential or endpoint.
+    pub runtime_version: Option<String>,
     /// The driver argv as a JSON array string.
     pub driver_args_json: Option<String>,
     /// The per-agent concurrency limit; 0 means unlimited.
@@ -47,14 +49,15 @@ impl SqliteAgentRegistry {
     pub fn upsert_agent(&self, record: &AgentRegistryRecord) -> Result<(), rusqlite::Error> {
         self.conn.execute(
             "INSERT INTO agent_registry (
-                     id, name, tier, driver_kind, executable,
+                     id, name, tier, driver_kind, executable, runtime_version,
                      driver_args_json, max_concurrency, tags_json
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  ON CONFLICT(id) DO UPDATE SET
                      name = excluded.name,
                      tier = excluded.tier,
                      driver_kind = excluded.driver_kind,
                      executable = excluded.executable,
+                     runtime_version = excluded.runtime_version,
                      driver_args_json = excluded.driver_args_json,
                      max_concurrency = excluded.max_concurrency,
                      tags_json = excluded.tags_json",
@@ -64,6 +67,7 @@ impl SqliteAgentRegistry {
                 record.tier,
                 record.driver_kind,
                 record.executable,
+                record.runtime_version,
                 record.driver_args_json,
                 record.max_concurrency,
                 record.tags_json
@@ -75,7 +79,7 @@ impl SqliteAgentRegistry {
     /// Read one registration by agent id.
     pub fn get_agent(&self, id: &str) -> Result<Option<AgentRegistryRecord>, rusqlite::Error> {
         let row = self.conn.query_row(
-            "SELECT id, name, tier, driver_kind, executable, driver_args_json,
+            "SELECT id, name, tier, driver_kind, executable, runtime_version, driver_args_json,
                     max_concurrency, tags_json
              FROM agent_registry WHERE id = ?1",
             params![id],
@@ -91,7 +95,7 @@ impl SqliteAgentRegistry {
     /// List all registrations in id order.
     pub fn list_agents(&self) -> Result<Vec<AgentRegistryRecord>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, tier, driver_kind, executable,
+            "SELECT id, name, tier, driver_kind, executable, runtime_version,
                         driver_args_json, max_concurrency, tags_json
                  FROM agent_registry ORDER BY id",
         )?;
@@ -114,14 +118,17 @@ fn from_row(row: &Row) -> rusqlite::Result<AgentRegistryRecord> {
         tier: row.get(2)?,
         driver_kind: row.get(3)?,
         executable: row.get(4)?,
-        driver_args_json: row.get(5)?,
-        max_concurrency: row.get(6)?,
-        tags_json: row.get(7)?,
+        runtime_version: row.get(5)?,
+        driver_args_json: row.get(6)?,
+        max_concurrency: row.get(7)?,
+        tags_json: row.get(8)?,
     })
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::SCHEMA_VERSION;
+
     use super::*;
 
     fn temp_db(name: &str) -> std::path::PathBuf {
@@ -138,6 +145,7 @@ mod tests {
             tier: "worker".into(),
             driver_kind: Some("acp".into()),
             executable: Some("codex".into()),
+            runtime_version: Some("0.154.0".into()),
             driver_args_json: Some(r#"["-w", "--acp"]"#.into()),
             max_concurrency: Some(2),
             tags_json: Some(r#"["qwen"]"#.into()),
@@ -183,6 +191,7 @@ mod tests {
             .expect("exists");
         assert_eq!(read.driver_args_json.as_deref(), Some(r#"["a", "b"]"#));
         assert_eq!(read.tags_json.as_deref(), None);
+        assert_eq!(read.runtime_version.as_deref(), Some("0.154.0"));
         let _ = std::fs::remove_file(&path);
     }
 
@@ -214,6 +223,41 @@ mod tests {
             )
             .expect("registry table exists");
         assert!(columns > 0);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn v9_registry_migrates_preserving_existing_agent() {
+        let path = temp_db("v9-version");
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = Connection::open(&path).expect("open db");
+            conn.execute_batch(SCHEMA).expect("apply current schema");
+            conn.execute_batch(
+                "ALTER TABLE agent_registry RENAME TO agent_registry_v9;
+                 CREATE TABLE agent_registry (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, tier TEXT NOT NULL,
+                    driver_kind TEXT, executable TEXT, driver_args_json TEXT,
+                    max_concurrency INTEGER NOT NULL, tags_json TEXT
+                  );
+                 INSERT INTO agent_registry
+                   (id,name,tier,driver_kind,executable,driver_args_json,max_concurrency,tags_json)
+                   SELECT id,name,tier,driver_kind,executable,driver_args_json,max_concurrency,tags_json
+                   FROM agent_registry_v9;
+                 DROP TABLE agent_registry_v9;",
+            )
+            .expect("create v9 registry shape");
+            conn.execute(
+                "INSERT INTO agent_registry (id,name,tier,max_concurrency) VALUES ('old','old','worker',1)",
+                [],
+            )
+            .expect("seed existing v9 row");
+            conn.pragma_update(None, "user_version", 9).expect("set v9");
+        }
+        let registry = SqliteAgentRegistry::open(&path).expect("migrate v9");
+        let old = registry.get_agent("old").expect("get").expect("preserved");
+        assert_eq!(old.runtime_version, None);
+        assert_eq!(registry.schema_version().expect("version"), SCHEMA_VERSION);
         let _ = std::fs::remove_file(&path);
     }
 

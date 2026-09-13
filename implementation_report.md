@@ -1492,3 +1492,31 @@ git diff --check                                                 exit 0
 ```
 
 `M7_R7_NORMAL_PATH_READY` remains `NOT_PASSED`; M5–M9 remain unchanged.
+
+## 50. R7 durable runtime-version registry metadata (2026-09-13)
+
+SQLite schema version 10 adds nullable `agent_registry.runtime_version`.  It
+holds only a public runtime version observed by the user or a probe; it does
+not hold an endpoint, token, environment value, session reference, or
+transcript.  The CLI remains backward-compatible with its eight-field
+`register` form and accepts an optional ninth version field.  Registry listing
+and the read-only TUI now display `version=<value|->` alongside driver,
+authoritative occupancy, and lifecycle state.
+
+The v9 migration fixture reconstructs the prior registry table shape with a
+real existing row, migrates through normal `SqliteAgentRegistry::open`,
+reopens it, and verifies that the old agent survives with a null version at
+schema v10.  New registrations round-trip their version via the same table.
+
+```text
+cargo test -p agent-code-storage v9_registry_migrates_preserving_existing_agent -- --nocapture
+  exit 0; 1 passed
+cargo fmt --all -- --check                                      exit 0
+cargo clippy --workspace --all-targets --all-features -- -D warnings  exit 0
+cargo test --workspace --all-features                            exit 0
+  174 passed, 0 failed, 11 ignored
+git diff --check                                                 exit 0
+```
+
+This is a minimal R7 registry migration and does not alter M5–M9 or make an
+adapter/readiness claim.
