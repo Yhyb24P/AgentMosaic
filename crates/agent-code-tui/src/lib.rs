@@ -40,6 +40,7 @@ pub fn dashboard_text_with_agents(
             );
         }
     }
+    let mut final_lines = Vec::new();
     for id in board.task_ids().map_err(|e| format!("tasks: {e:?}"))? {
         let task = board
             .task(id)
@@ -66,6 +67,22 @@ pub fn dashboard_text_with_agents(
                 artifact.path, artifact.sha256
             ));
         }
+        let (task_refs, artifact_refs) = board
+            .final_refs(id)
+            .map_err(|e| format!("final refs: {e:?}"))?;
+        if !task_refs.is_empty() || !artifact_refs.is_empty() {
+            final_lines.push(format!(
+                "root_task={id} task_refs={task_refs:?} artifact_refs={}",
+                artifact_refs
+                    .iter()
+                    .map(|reference| format!(
+                        "{}:{}#{}",
+                        reference.task_id, reference.artifact.path, reference.artifact.sha256
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+        }
     }
     lines.push("\nActivity (durable directed summaries)".into());
     for message in board.messages().map_err(|e| format!("messages: {e:?}"))? {
@@ -74,7 +91,12 @@ pub fn dashboard_text_with_agents(
             message.from_agent, message.to_agent, message.body
         ));
     }
-    lines.push("\nFinal result: use agent-code-cli final <database> <task-id>.".into());
+    lines.push("\nFinal result".into());
+    if final_lines.is_empty() {
+        lines.push("no selected final references".into());
+    } else {
+        lines.extend(final_lines);
+    }
     lines.push(
         "Press q to exit. Controls: agent-code-cli submit/cancel/override/resume/artifact/final."
             .into(),
@@ -85,7 +107,7 @@ pub fn dashboard_text_with_agents(
 #[cfg(test)]
 mod tests {
     use agent_code_storage::SqliteTaskBoard;
-    use agent_code_team::{TaskBoard, TaskKind};
+    use agent_code_team::{ArtifactMeta, SelectedArtifactRef, TaskBoard, TaskKind};
 
     use super::dashboard_text;
 
@@ -98,5 +120,30 @@ mod tests {
         let text = dashboard_text(&board).unwrap();
         assert!(text.contains("#1 parent=- kind=reasoning state=pending"));
         assert!(text.contains("inspect dashboard"));
+    }
+
+    #[test]
+    fn dashboard_projects_persisted_final_selection() {
+        let mut board = SqliteTaskBoard::in_memory().unwrap();
+        let root = board
+            .create_task("select final result", None, TaskKind::Reasoning, None)
+            .unwrap();
+        board
+            .record_final_refs(
+                root,
+                &[root],
+                &[SelectedArtifactRef {
+                    task_id: root,
+                    artifact: ArtifactMeta {
+                        path: "final.txt".into(),
+                        sha256: "abc123".into(),
+                    },
+                }],
+            )
+            .unwrap();
+
+        let text = dashboard_text(&board).unwrap();
+        assert!(text.contains("Final result"));
+        assert!(text.contains("root_task=1 task_refs=[1] artifact_refs=1:final.txt#abc123"));
     }
 }

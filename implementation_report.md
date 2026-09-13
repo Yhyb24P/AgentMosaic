@@ -1373,3 +1373,46 @@ M2_ACP_DRIVER_READY       = UNKNOWN / NOT_PASSED
 M3_QWEN_WORKER_READY      = IN_PROGRESS
 M7_R7_NORMAL_PATH_READY   = NOT_PASSED
 ```
+
+## 47. R7 authoritative terminal final-result projection (2026-09-13)
+
+The read-only Rust terminal dashboard now projects the exact persisted final
+selection from the existing SQLite team board.  For every root with recorded
+final references it displays the selected task IDs and exact selected artifact
+`task:path#sha256` values.  It does not infer a final answer from all successful
+descendants and does not introduce a parallel TUI state store.  The empty-board
+case explicitly reports that no selected final references exist.
+
+The projection is guarded by
+`dashboard_projects_persisted_final_selection`, which creates a task,
+persists a selected artifact through `TaskBoard::record_final_refs`, and
+asserts that the dashboard displays that authoritative reference.  The normal
+path README also now documents the existing explicit `recover` control.
+
+Local self-built runtime entrypoint flags `-ds` and `-qw` are treated as
+site-local profile parameters only.  Their semantics are not inferred from
+upstream Codex, Qwen, ACP, or CLI documentation; any future live driver run
+must record its exact command and establish capability facts from its actual
+handshake/output.
+
+Verification on the changed source:
+
+```text
+cargo fmt --all -- --check                                      exit 0
+cargo clippy --workspace --all-targets --all-features -- -D warnings  exit 0
+cargo test --workspace --all-features                            exit 0
+  173 passed, 0 failed, 11 ignored
+git diff --check                                                 exit 0
+```
+
+This is an R7 inspection-surface increment only.  It does not start an
+external driver, change active-runtime evidence, or alter any gate/readiness
+claim:
+
+```text
+M2_ACP_DRIVER_READY       = UNKNOWN / NOT_PASSED
+M3_QWEN_WORKER_READY      = IN_PROGRESS
+M5_R6_TEAM_READY          = NOT_RUN
+M7_R7_NORMAL_PATH_READY   = NOT_PASSED
+M9_PRODUCT_RC_READY       = NOT_RUN
+```
