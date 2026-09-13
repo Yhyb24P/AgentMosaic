@@ -2,9 +2,11 @@
 
 - date: 2026-09-13
 - branch: `v2/rust-agent-team`
-- frozen candidate (executable source): `295c96a075cdf3987d8e66fa75fce14d15611b3a`
-- audited tree: HEAD `4330af1` (report/evidence commit; no executable or Cargo-source
-  change relative to the candidate)
+- frozen candidate (executable source): `89ac979d333fe3fc2e311fb566f3ab0056bec4c5`
+  (supersedes `295c96a075cdf3987d8e66fa75fce14d15611b3a`, which the frozen candidate
+  equals except for the bounded-search determinism fix recorded below)
+- audited tree: HEAD at the freeze docs commit (report/evidence only; no executable or
+  Cargo-source change relative to the frozen candidate)
 - falsification baseline: `product_self_audit.md` (unchanged, sha256
   `f6df35e5225b52a9d28431378f5f2ce0a28afc30347a4880de6fc0564e53295d`)
 
@@ -176,9 +178,15 @@ PUBLIC_RELEASE_READY          = false   (no tag, no GitHub Release, not authoriz
 
 `LOCAL_PRODUCT_RC_READY` is supported by: exact-candidate `fmt`/`clippy`/test/release-build/
 `git diff --check` all exit 0 with a clean worktree (257 passed / 0 failed / 17 ignored), a
-real Codex+Qwen E2E through the public CLI on that candidate (89.57s, exit 0), DB reopen in
+real Codex+Qwen E2E through the public CLI on that candidate (47.16s, exit 0), DB reopen in
 separate processes reproducing the answer and refs, a product-path failure case leaving the
 root non-succeeded, and a copied-release-binary run outside the source tree.
+
+One further defect was found and repaired *because* remote CI was run: `search_dir` depended
+on directory enumeration order, so a bounded search was not reproducible across filesystems
+(the remote `ubuntu-22.04` runner returned `b.rs` where other environments returned `a.rs`).
+`crates/agent-code-workspace/src/tools.rs` now sorts walked paths, and the n07 test asserts
+order-independence. This is why the frozen candidate is `89ac979` rather than `295c96a`.
 
 ## Residual risks and things this pass did NOT prove
 

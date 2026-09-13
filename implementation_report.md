@@ -7,7 +7,7 @@ as historical evidence; sections marked `SUPERSEDED_BY_PRODUCT_SELF_AUDIT` were
 disproved by the independent `product_self_audit.md` (2026-09-13).
 
 - Source candidate: branch `v2/rust-agent-team`, commit
-  `295c96a075cdf3987d8e66fa75fce14d15611b3a` (frozen). The frozen candidate's
+  `89ac979d333fe3fc2e311fb566f3ab0056bec4c5` (frozen). The frozen candidate's
   executable source is unchanged by every later evidence/report commit; the
   exact-candidate gates are rerun on the final HEAD and the recorded hashes live
   in `.acc-evidence/rc-repair-fbc80bf/`.
@@ -59,7 +59,7 @@ PUBLIC_RELEASE_READY          = false (no tag or GitHub Release; not authorized)
 
 ### Current blockers
 
-- Exact-candidate freeze commit is set: `295c96a075cdf3987d8e66fa75fce14d15611b3a`.
+- Exact-candidate freeze commit is set: `89ac979d333fe3fc2e311fb566f3ab0056bec4c5`.
 - `product_self_reaudit.md` exists; it is a self re-audit, not an independent
   third-party one.
 - Deterministic remote CI has not run on the frozen candidate.
