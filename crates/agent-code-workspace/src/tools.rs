@@ -93,9 +93,14 @@ impl Workspace {
             .map(Pattern::new)
             .transpose()
             .map_err(|e| ToolError::Io(format!("invalid glob: {e}")))?;
+        // Deterministic traversal: `ignore` does not order directory entries, so
+        // an unbounded walk could return a different first match for the same
+        // repository. Sorting file paths keeps the bounded early return stable
+        // across filesystems and processes.
         let walker = WalkBuilder::new(self.root())
             .git_ignore(true)
             .hidden(true)
+            .sort_by_file_path(|a, b| a.cmp(b))
             .build();
         let mut matches = Vec::new();
         for entry in walker {

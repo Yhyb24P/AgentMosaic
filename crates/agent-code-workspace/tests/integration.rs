@@ -228,9 +228,12 @@ fn n06_write_guards() {
 #[test]
 fn n07_search_bounded() {
     let (ws, _) = temp_ws();
+    // Written in reverse lexicographic order on purpose: a bounded search must
+    // not depend on directory enumeration or creation order. `search_dir` sorts
+    // walked paths, so the first bounded match is stable.
+    ws.atomic_write("b.rs", "fn foo() {}\n").unwrap();
     ws.atomic_write("a.rs", "fn foo() {}\nfn bar() {}\n")
         .unwrap();
-    ws.atomic_write("b.rs", "fn foo() {}\n").unwrap();
     let out = ws
         .search_dir(&SearchDir {
             pattern: "fn foo".into(),
