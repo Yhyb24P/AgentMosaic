@@ -497,7 +497,7 @@ execution.
 | Runtime | Exact local version | Driver/transport | Current live facts | State |
 |---|---|---|---|---|
 | Codex | `codex-cli 0.154.0` | app-server stdio + allowlisted RAS MCP | thread/turn, same-turn bounded context, artifact, persisted binding/reopen, thread resume, real same-thread two-task plan and durable utility follow-up | `M1_CODEX_TEAM_READY = PASSED`; full topology remains M5 work |
-| Qwen Code | `0.23.3` | `qwen --acp` via `agent-client-protocol 2.1.0` | normal Rust CLI submit/run-acp, exact artifact, durable binding inspection, real `continue-acp` resume, typed peer-confirmed cancel, and durable board-to-Codex context evidence | `M3_QWEN_WORKER_READY = PASSED`; scheduler topology remains M5 work |
+| Qwen Code | `0.23.3` | `qwen --acp` via `agent-client-protocol 2.1.0` | normal Rust CLI submit/run-acp, exact artifact, durable binding inspection, real `continue-acp` resume, typed peer-confirmed cancel, board-to-Codex context, and scheduler-managed Qwen + utility execution | `M3_QWEN_WORKER_READY = PASSED`; complete Codex Lead/retry/reassign/recovery topology remains M5 work |
 | Kimi Code | `0.42.0` | `kimi acp` candidate | real bounded ACP turn and external session reference; strict structured peer result rejected fail-closed | `KIMI_READY` for M4 classification only; no adapter readiness |
 
 Source references, protocol decisions, and licenses are recorded in

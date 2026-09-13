@@ -92,3 +92,28 @@ Sanitized log SHA-256:
 exit receipt SHA-256:
 `9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa`.
 The session ID, prompt, response, endpoint, and credentials were not retained.
+
+## Scheduler-managed Qwen worker plus deterministic utility
+
+At source `2011347ca49263124c610d5ddb6f6a776fd2b3c4` plus the focused live
+harness addition, the command below passed against the real local Qwen
+runtime:
+
+```text
+cargo test -p agent-code-runtime --test codex_live real_scheduler_runs_qwen_worker_and_utility_on_one_board -- --ignored --nocapture
+```
+
+Exit `0`; 1 passed, 0 failed, 0 ignored, 3 filtered out; 19.69 seconds.
+Sanitized log SHA-256:
+`0974724bd3393719fe0360a91644a4e15dd63c7c2391c59b4eae05cf7577c54a`;
+exit receipt SHA-256:
+`9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa`.
+
+The scheduler created both tasks on one SQLite board: Qwen executed the
+bounded isolated repair/check and returned an artifact; the deterministic
+utility returned a directed message addressed to Codex. The test asserts the
+Qwen task succeeded, its artifact is durable, and the scheduler-created
+attempt has a completed foreign ACP binding. No session ID, prompt, model text,
+credentials, raw frame, or temporary path is retained. This is M5 partial
+evidence only; it does not yet include live Codex Lead follow-up, retry,
+reassignment, user override, or reopen recovery in the same topology.

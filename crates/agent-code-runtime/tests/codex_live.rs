@@ -1,11 +1,18 @@
 //! Explicit live harness: run with `cargo test -p agent-code-runtime --test codex_live -- --ignored`.
 
-use agent_code_runtime::{AcpWorkerConfig, AcpWorkerDriver, CodexAppServer, CodexBridgeEvent};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use agent_code_runtime::{
+    AcpWorkerConfig, AcpWorkerDriver, CodexAppServer, CodexBridgeEvent, PersistedAcpWorkerDriver,
+};
 use agent_code_storage::{ExternalRuntimeBinding, SqliteTaskBoard};
 use agent_code_team::{
-    reconstruct_team_result, AgentMessage, AgentTaskResult, ArtifactMeta, SelectedArtifactRef,
-    TaskAttempt, TaskBoard, TaskKind, TaskStatus,
+    reconstruct_team_result, AgentConfig, AgentDriver, AgentMessage, AgentRegistry,
+    AgentTaskResult, AgentTier, ArtifactMeta, Scheduler, SelectedArtifactRef, TaskAttempt,
+    TaskBoard, TaskKind, TaskSpec, TaskStatus,
 };
+use async_trait::async_trait;
 use rusqlite::Connection;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -658,6 +665,120 @@ async fn real_codex_lead_plans_and_follows_up_on_durable_team_result() {
     assert_eq!(reopened.artifacts(lead_task).unwrap().len(), 1);
     eprintln!("sanitized Codex lead plan and durable utility follow-up completed");
     let _ = (first_turn, second_turn);
+    let _ = std::fs::remove_file(db);
+    let _ = std::fs::remove_dir_all(cwd);
+}
+
+struct LiveUtility;
+
+#[async_trait]
+impl AgentDriver for LiveUtility {
+    async fn run_task(&self, task: agent_code_team::AgentTask) -> Result<AgentTaskResult, String> {
+        Ok(AgentTaskResult {
+            task_id: task.id,
+            summary: "deterministic utility complete".into(),
+            artifacts: Vec::new(),
+            message: Some(AgentMessage {
+                from_agent: "utility".into(),
+                to_agent: "codex".into(),
+                body: "deterministic utility result available".into(),
+            }),
+        })
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires authenticated local Qwen Code; runs one bounded scheduler-managed ACP task"]
+async fn real_scheduler_runs_qwen_worker_and_utility_on_one_board() {
+    let db = std::env::temp_dir().join(format!("ras_scheduler_qwen_{}.db", std::process::id()));
+    let cwd = std::env::temp_dir().join(format!("ras_scheduler_qwen_cwd_{}", std::process::id()));
+    let _ = std::fs::remove_file(&db);
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(&cwd)
+        .status()
+        .unwrap();
+    std::fs::write(cwd.join("worker.txt"), "worker=unfinished\n").unwrap();
+    std::fs::write(
+        cwd.join("check.sh"),
+        "#!/bin/sh\ntest \"$(cat worker.txt)\" = \"worker=complete\"\n",
+    )
+    .unwrap();
+    let registry = AgentRegistry::new(vec![
+        AgentConfig {
+            id: "codex".into(),
+            name: "codex".into(),
+            tier: AgentTier::Reasoner,
+            tags: Vec::new(),
+            max_concurrency: 1,
+            driver_kind: None,
+            executable: None,
+            driver_args: Vec::new(),
+        },
+        AgentConfig {
+            id: "qwen".into(),
+            name: "qwen".into(),
+            tier: AgentTier::Worker,
+            tags: Vec::new(),
+            max_concurrency: 1,
+            driver_kind: None,
+            executable: None,
+            driver_args: Vec::new(),
+        },
+        AgentConfig {
+            id: "utility".into(),
+            name: "utility".into(),
+            tier: AgentTier::Utility,
+            tags: Vec::new(),
+            max_concurrency: 1,
+            driver_kind: None,
+            executable: None,
+            driver_args: Vec::new(),
+        },
+    ])
+    .unwrap();
+    let qwen = PersistedAcpWorkerDriver::new(
+        AcpWorkerConfig {
+            runtime_kind: "qwen-code".into(),
+            command: "qwen".into(),
+            args: vec!["--acp".into()],
+            auth_method: Some("openai".into()),
+            working_directory: cwd.clone(),
+            timeout: std::time::Duration::from_secs(600),
+            max_prompt_bytes: 2048,
+            max_result_bytes: 4096,
+            artifact_paths: vec!["worker.txt".into()],
+        },
+        db.clone(),
+        "qwen",
+    )
+    .unwrap();
+    let mut drivers: BTreeMap<String, Arc<dyn AgentDriver>> = BTreeMap::new();
+    drivers.insert("qwen".into(), Arc::new(qwen));
+    drivers.insert("utility".into(), Arc::new(LiveUtility));
+    let board = SqliteTaskBoard::open(Connection::open(&db).unwrap()).unwrap();
+    let mut scheduler = Scheduler::new(registry, drivers, board, 1);
+    let results = scheduler.schedule(&[
+        TaskSpec { objective: "In this isolated Git repository, replace worker.txt with exactly worker=complete followed by one newline, run sh check.sh, then return exactly this JSON peer result: {\"summary\":\"scheduler Qwen worker complete\"}. Do not modify any other file.".into(), kind: TaskKind::Bulk, target: Some("qwen".into()), parent: None, context: Vec::new() },
+        TaskSpec { objective: "produce deterministic utility result".into(), kind: TaskKind::Utility, target: Some("utility".into()), parent: None, context: Vec::new() },
+    ]).await.unwrap();
+    assert!(results.iter().all(|result| result.result.is_ok()));
+    assert_eq!(
+        std::fs::read(cwd.join("worker.txt")).unwrap(),
+        b"worker=complete\n"
+    );
+    let board = scheduler.board().lock().unwrap();
+    let qwen_task = results[0].task_id;
+    assert_eq!(
+        board.task(qwen_task).unwrap().unwrap().status,
+        TaskStatus::Succeeded
+    );
+    assert_eq!(board.artifacts(qwen_task).unwrap().len(), 1);
+    let binding = board.external_binding(qwen_task, 1).unwrap().unwrap();
+    assert_eq!(binding.lifecycle_state, "completed");
+    assert_eq!(board.messages_to("codex").unwrap().len(), 1);
+    drop(board);
     let _ = std::fs::remove_file(db);
     let _ = std::fs::remove_dir_all(cwd);
 }
