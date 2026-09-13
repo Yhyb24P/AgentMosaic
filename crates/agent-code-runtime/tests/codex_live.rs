@@ -475,10 +475,35 @@ async fn real_codex_lead_plans_and_follows_up_on_durable_team_result() {
         })
         .unwrap();
     board.set_status(lead_task, TaskStatus::Running).unwrap();
-    let mut client =
-        CodexAppServer::spawn_with_overrides("codex", &low_cost_codex_overrides()).unwrap();
+    let bridge_log =
+        std::env::temp_dir().join(format!("ras_codex_lead_bridge_{}.log", std::process::id()));
+    let _ = std::fs::remove_file(&bridge_log);
+    let mcp = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("ras_codex_mcp");
+    let mut overrides = low_cost_codex_overrides();
+    overrides.extend([
+        format!("mcp_servers.ras.command={:?}", mcp.display().to_string()),
+        format!("mcp_servers.ras.env.RAS_DB={:?}", db.display().to_string()),
+        format!(
+            "mcp_servers.ras.env.RAS_BRIDGE_LOG={:?}",
+            bridge_log.display().to_string()
+        ),
+        format!("mcp_servers.ras.env.RAS_TASK_ID=\"{lead_task}\""),
+        "mcp_servers.ras.env.RAS_ATTEMPT=\"1\"".into(),
+    ]);
+    let mut client = CodexAppServer::spawn_with_overrides("codex", &overrides).unwrap();
     client.initialize("ras-r6-lead", "0.1").unwrap();
-    let thread = client.start_thread(cwd.to_str().unwrap()).unwrap();
+    let thread = client
+        .start_thread_with_developer_instructions(
+            cwd.to_str().unwrap(),
+            Some("For this R6 team integration thread, invoke ras_request_context exactly once before responding to the follow-up user turn. The bounded MCP tool is the only source of teammate results."),
+        )
+        .unwrap();
     let first_turn = client
         .start_turn(
             &thread,
@@ -496,7 +521,12 @@ async fn real_codex_lead_plans_and_follows_up_on_durable_team_result() {
             }
             CodexBridgeEvent::Notification(_) => plan_notifications += 1,
             CodexBridgeEvent::ToolCall { .. } => plan_tool_calls += 1,
-            CodexBridgeEvent::McpElicitation { .. } => panic!("lead plan has no RAS MCP bridge"),
+            CodexBridgeEvent::McpElicitation {
+                request_id,
+                server_name,
+            } => client
+                .respond_ras_elicitation(request_id, &server_name)
+                .unwrap(),
         }
     }
     eprintln!(
@@ -559,15 +589,11 @@ async fn real_codex_lead_plans_and_follows_up_on_durable_team_result() {
             },
         )
         .unwrap();
-    let messages = board.messages_to("codex").unwrap();
-    assert_eq!(messages.len(), 1);
+    assert_eq!(board.messages_to("codex").unwrap().len(), 1);
     let second_turn = client
         .start_turn(
             &thread,
-            &format!(
-                "The persisted team-board result is: {}. In this same Lead thread, create lead-final.txt containing exactly lead integrated utility fact followed by one newline. Then respond exactly: lead complete.",
-                messages[0].body
-            ),
+            "This is the required R6 follow-up. Before producing any answer, invoke ras_request_context exactly once with JSON arguments {\"purpose\":\"utility-follow-up\"}. Do not use any teammate result from this user message; the tool result is the only source. After receiving it, create lead-final.txt containing exactly lead integrated utility fact followed by one newline. Then respond exactly: lead complete.",
         )
         .unwrap();
     let mut follow_up_completed = false;
@@ -581,15 +607,22 @@ async fn real_codex_lead_plans_and_follows_up_on_durable_team_result() {
             }
             CodexBridgeEvent::Notification(_) => follow_up_notifications += 1,
             CodexBridgeEvent::ToolCall { .. } => follow_up_tool_calls += 1,
-            CodexBridgeEvent::McpElicitation { .. } => {
-                panic!("lead follow-up has no RAS MCP bridge")
-            }
+            CodexBridgeEvent::McpElicitation {
+                request_id,
+                server_name,
+            } => client
+                .respond_ras_elicitation(request_id, &server_name)
+                .unwrap(),
         }
     }
     eprintln!(
         "sanitized Codex follow-up events notifications={follow_up_notifications} tool_calls={follow_up_tool_calls}"
     );
     assert!(follow_up_completed, "Codex completes same-thread follow-up");
+    // The developer instruction applies to the planning turn as well as the
+    // follow-up. Both bounded MCP calls are durable; the second one reads the
+    // utility result that was committed between turns.
+    assert_eq!(board.runtime_collaboration(lead_task, 1).unwrap().len(), 2);
     assert_eq!(
         std::fs::read(cwd.join("lead-final.txt")).unwrap(),
         b"lead integrated utility fact\n"

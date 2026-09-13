@@ -479,7 +479,7 @@ budget/contention on the shared local vLLM node, not a hung runtime; see
 ## 29. R6–R8 Source-Informed Productization
 
 ```json
-{"active_roadmap":"R6-R8","active_product":"heterogeneous-agent-coding-team","milestones":{"M1_CODEX_TEAM_READY":"IN_PROGRESS","M2_ACP_DRIVER_READY":"UNKNOWN","M3_QWEN_WORKER_READY":"IN_PROGRESS","M4_KIMI_PROFILE_CLASSIFIED":"KIMI_READY","M5_R6_TEAM_READY":"NOT_RUN","M6_R6_SEALED":"NOT_RUN","M7_R7_NORMAL_PATH_READY":"NOT_PASSED","M8_R8_DEBLOATED":"NOT_RUN","M9_PRODUCT_RC_READY":"NOT_RUN"}}
+{"active_roadmap":"R6-R8","active_product":"heterogeneous-agent-coding-team","milestones":{"M1_CODEX_TEAM_READY":"PASSED","M2_ACP_DRIVER_READY":"UNKNOWN","M3_QWEN_WORKER_READY":"IN_PROGRESS","M4_KIMI_PROFILE_CLASSIFIED":"KIMI_READY","M5_R6_TEAM_READY":"NOT_RUN","M6_R6_SEALED":"NOT_RUN","M7_R7_NORMAL_PATH_READY":"NOT_PASSED","M8_R8_DEBLOATED":"NOT_RUN","M9_PRODUCT_RC_READY":"NOT_RUN"}}
 ```
 
 Historical A–N/J/K/L/M/Q are `HISTORICAL_COMPATIBILITY_ONLY` for this R6–R8
@@ -496,7 +496,7 @@ execution.
 
 | Runtime | Exact local version | Driver/transport | Current live facts | State |
 |---|---|---|---|---|
-| Codex | `codex-cli 0.154.0` | app-server stdio + allowlisted RAS MCP | thread/turn, same-turn bounded context, artifact, persisted binding/reopen, thread resume, real same-thread two-task plan and durable utility follow-up | M1 in progress: full Qwen topology/final selected refs still missing |
+| Codex | `codex-cli 0.154.0` | app-server stdio + allowlisted RAS MCP | thread/turn, same-turn bounded context, artifact, persisted binding/reopen, thread resume, real same-thread two-task plan and durable utility follow-up | `M1_CODEX_TEAM_READY = PASSED`; Qwen topology remains M3/M5 work |
 | Qwen Code | `0.23.3` | `qwen --acp` via `agent-client-protocol 2.1.0` | authenticated session/follow-up/coding evidence; after 600 s budget calibration the live cross-runtime command passed in 136.09 s | `IN_PROGRESS`: live bounded worker/result-artifact-to-Lead evidence exists; real ACP continuation/cancel remains required before M3 can pass |
 | Kimi Code | `0.42.0` | `kimi acp` candidate | real bounded ACP turn and external session reference; strict structured peer result rejected fail-closed | `KIMI_READY` for M4 classification only; no adapter readiness |
 
@@ -1090,6 +1090,27 @@ M2_ACP_DRIVER_READY       = UNKNOWN / NOT_PASSED
 M3_QWEN_WORKER_READY      = IN_PROGRESS
 M7_R7_NORMAL_PATH_READY   = NOT_PASSED
 ```
+
+## 46. Codex Lead follow-up from persisted board context (2026-09-13)
+
+The real Codex Lead harness no longer inserts a teammate result into the
+follow-up user prompt. After the deterministic utility commits its result,
+directed message, and artifact to the SQLite team board, the same live Codex
+thread invokes the allowlisted `ras_request_context` MCP tool. The harness
+asserts two durable collaboration records (one planning-context request and
+one post-utility follow-up request), the bounded Codex final artifact, and a
+reopened board result. It ran with `gpt-5.5` / `low` only.
+
+```text
+cargo test -p agent-code-runtime --test codex_live real_codex_lead_plans_and_follows_up_on_durable_team_result -- --ignored --nocapture
+exit 0; 1 passed, 0 failed, 0 ignored, 2 filtered out; 23.20 seconds
+```
+
+Sanitized evidence is `.acc-evidence/r6-codex-lead-board-followup.md`.
+This closes the test-harness text-injection defect and adds live M1 evidence,
+Complete Rust CI passed for this changed source; M1 is `PASSED` on the
+subsequent source/evidence binding. M5 remains `NOT_RUN`: this is not the
+required real Codex + Qwen + concurrent utility/retry/reassign E2E.
 
 ## 43A. Kimi Code 0.42.0 ACP classification refresh (2026-09-13)
 
