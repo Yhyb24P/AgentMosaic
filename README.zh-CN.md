@@ -64,8 +64,8 @@ cargo build --release --workspace
 am init
 
 # 2. 注册外部 runtime 的不透明 argv
-am agent add lead --role reasoner --adapter codex-app-server -- codex -ds
-am agent add worker --role worker --adapter acp -- qwen -ds --acp
+am agent add lead --role reasoner --adapter codex-app-server -- codex
+am agent add worker --role worker --adapter acp -- qwen --acp
 am agent add utility --role utility --adapter acp -- aweswitch qw --acp
 
 # 3. 不管理认证地检查就绪状态
@@ -102,6 +102,16 @@ am register <database> <agent-id> <name> <tier> <driver-kind> <executable> <driv
 
 `submit` 只创建一个 pending 看板任务，不是一次团队运行；`run-team` 才是团队入口。
 所有命令直接操作权威 SQLite board。
+
+### 本地/自定义 launcher 示例
+
+AgentMosaic 不解释 launcher 专有参数：它只保存并原样执行 `--` 之后的 argv。
+例如，本地 Codex shim 可以注册为 `codex -ds`；兼容 ACP 的 wrapper 也可保留自己的 argv。
+
+```bash
+am agent add lead-ds --role reasoner --adapter codex-app-server -- codex -ds
+am agent add utility --role utility --adapter acp -- aweswitch qw --acp
+```
 
 ## 团队运行流程
 

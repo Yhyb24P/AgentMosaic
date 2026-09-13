@@ -19,13 +19,15 @@ its own login, credentials, provider, model and launcher profile.
 
 ```bash
 am init
-am agent add lead --role reasoner --adapter codex-app-server -- codex -ds
-am agent add worker --role worker --adapter acp -- qwen -ds --acp
+am agent add lead --role reasoner --adapter codex-app-server -- codex
+am agent add worker --role worker --adapter acp -- qwen --acp
 am agent add utility --role utility --adapter acp -- aweswitch qw --acp
 am doctor
 ```
 
 Everything after `--` is persisted opaque argv. Do not put credentials in it.
+For a local custom launcher, preserve its exact argv, for example
+`codex -ds` or `aweswitch qw --acp`.
 
 ## Run one objective
 

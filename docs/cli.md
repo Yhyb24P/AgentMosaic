@@ -48,8 +48,8 @@ usage: am <init|agent|doctor|run|register|registry|run-acp|continue-acp|run-team
 
 ```bash
 am init
-am agent add lead --role reasoner --adapter codex-app-server -- codex -ds
-am agent add worker --role worker --adapter acp -- qwen -ds --acp
+am agent add lead --role reasoner --adapter codex-app-server -- codex
+am agent add worker --role worker --adapter acp -- qwen --acp
 am doctor
 am run "complete the objective"
 ```
@@ -59,6 +59,13 @@ by the external runtime. Everything after `--` is stored as opaque argv; do
 not put credentials in it.
 `doctor` initializes each configured adapter and opens only its smallest safe
 readiness session; it sends no task prompt and never opens a login flow.
+
+Local launcher flags remain opaque LaunchSpec argv. For example:
+
+```bash
+am agent add lead-ds --role reasoner --adapter codex-app-server -- codex -ds
+am agent add utility --role utility --adapter acp -- aweswitch qw --acp
+```
 
 ## Advanced compatibility: register grammar
 

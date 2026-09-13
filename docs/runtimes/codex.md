@@ -9,7 +9,7 @@ An Agent is registered with the project-aware command and its opaque external
 launch argv:
 
 ```bash
-am agent add lead --role reasoner --adapter codex-app-server -- codex -ds
+am agent add lead --role reasoner --adapter codex-app-server -- codex
 ```
 
 AgentMosaic does not select a Codex model, account, provider, credentials or

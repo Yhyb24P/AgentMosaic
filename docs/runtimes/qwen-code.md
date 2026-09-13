@@ -9,7 +9,7 @@ Register the runtime as opaque executable argv; its local login, provider,
 model, endpoint and launcher profile stay owned by Qwen Code.
 
 ```bash
-am agent add worker --role worker --adapter acp -- qwen -ds --acp
+am agent add worker --role worker --adapter acp -- qwen --acp
 ```
 
 Optional artifact paths are relative to the task working directory; the driver
@@ -18,7 +18,7 @@ store credentials or authentication choices in AgentMosaic.
 
 ## What the driver does
 
-- Starts the executable with the registered driver args (for example `qwen -ds --acp`).
+- Starts the executable with the registered driver args (for example `qwen --acp`).
 - Establishes one ACP session and, for a follow-up, reuses that session rather than
   opening a second one.
 - Returns a single bounded structured peer result. A response that is not the expected

@@ -69,8 +69,8 @@ credentials, provider, model and launcher profile.
 am init
 
 # 2. register opaque external launch argv (do not put credentials here)
-am agent add lead --role reasoner --adapter codex-app-server -- codex -ds
-am agent add worker --role worker --adapter acp -- qwen -ds --acp
+am agent add lead --role reasoner --adapter codex-app-server -- codex
+am agent add worker --role worker --adapter acp -- qwen --acp
 am agent add utility --role utility --adapter acp -- aweswitch qw --acp
 
 # 3. check project and protocol preparation without managing authentication
@@ -91,6 +91,17 @@ Flags accepted by both `run-team` and `resume-team`:
 
 `submit` alone only creates a pending board task; `run-team` is the team entrypoint.
 Everything operates directly on the authoritative SQLite board.
+
+### Local/custom launcher examples
+
+AgentMosaic does not interpret launcher-specific flags: it stores the argv
+after `--` and executes it exactly. For example, a local Codex shim can be
+registered as `codex -ds`; an ACP-compatible wrapper can retain its own argv.
+
+```bash
+am agent add lead-ds --role reasoner --adapter codex-app-server -- codex -ds
+am agent add utility --role utility --adapter acp -- aweswitch qw --acp
+```
 
 ## How a team run works
 
