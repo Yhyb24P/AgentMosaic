@@ -1416,3 +1416,47 @@ M5_R6_TEAM_READY          = NOT_RUN
 M7_R7_NORMAL_PATH_READY   = NOT_PASSED
 M9_PRODUCT_RC_READY       = NOT_RUN
 ```
+
+## 48. R7 runtime occupancy projection and local entrypoint facts (2026-09-13)
+
+The read-only terminal dashboard now derives each registered agent's active
+occupancy and latest external-runtime lifecycle state directly from the
+authoritative SQLite task board.  It displays `active=<running>/<configured
+capacity>` and `runtime_state=<binding state|idle>` beside the persisted agent
+registry data.  Native session/thread identifiers remain opaque recovery
+references and are deliberately not rendered.  The test
+`dashboard_projects_authoritative_agent_occupancy_and_runtime_state` proves a
+persisted running attempt and running external binding appear as `active=1/2`
+and `runtime_state=running`, while the opaque session value is absent.
+
+The local launch profile facts were rechecked without starting a model turn or
+reading authentication material:
+
+```text
+codex -ds --version    exit 0; codex-cli 0.154.0
+qwen -qw --version     exit 0; 0.23.3
+kimi -ds --version     exit 0; 0.42.0
+codex -ds --help       exit 0
+qwen -qw --help        exit 0; documents --acp
+kimi -ds --help        exit 0
+```
+
+`-ds` and `-qw` are site-local profile entrypoint parameters, not inferred
+upstream protocol flags.  README's Qwen registration example now persists the
+user-supplied local argument pair `-qw,--acp`; it stores no credential.
+Protocol support remains established only by source-informed handshake and
+bounded live evidence, not by this help output.
+
+Verification on this source state:
+
+```text
+cargo fmt --all -- --check                                      exit 0
+cargo clippy --workspace --all-targets --all-features -- -D warnings  exit 0
+cargo test --workspace --all-features                            exit 0
+  173 passed, 0 failed, 11 ignored
+git diff --check                                                 exit 0
+```
+
+This is an R7 visibility/configuration increment.  It does not launch a team
+driver or alter the outstanding R6 topology/recovery proof; M5–M9 remain
+unchanged and `M7_R7_NORMAL_PATH_READY` remains `NOT_PASSED`.
