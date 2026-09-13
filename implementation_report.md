@@ -1091,6 +1091,33 @@ M3_QWEN_WORKER_READY      = IN_PROGRESS
 M7_R7_NORMAL_PATH_READY   = NOT_PASSED
 ```
 
+## 46. M5 scheduler-owned Codex Lead follow-up (2026-09-13)
+
+The ignored live test below was executed from the current working source after
+the scheduler-driver persistence change:
+
+```text
+cargo test -p agent-code-runtime --test codex_live real_scheduler_runs_qwen_worker_and_utility_on_one_board -- --ignored --nocapture
+```
+
+It exited `0`: 1 passed, 0 failed, 0 ignored, 3 filtered out; 37.99 seconds.
+The sanitized log SHA-256 is
+`780064fb2cc836a38c7e12bcddbd8bf39025f82510ab33a614aca488d724e676`; its
+durable evidence record is `.acc-evidence/r6-qwen-cli-acp-binding.md`.
+
+The real Qwen ACP worker and deterministic utility executed concurrently under
+the scheduler on one SQLite board. A Codex Lead task, assigned and recorded on
+that same board, made exactly one allowlisted `ras_request_context` call in
+the same live app-server turn. The lead received bounded persisted context;
+the user turn contained no teammate result. The harness then committed the
+exact Lead artifact/result and Codex binding, selected the exact Qwen artifact
+as a final reference, and reopened the board to verify the succeeded Lead task
+and final references. Codex used the explicit `gpt-5.5` / `low` test overrides.
+
+This is real partial M5 evidence, not a readiness claim. The topology has not
+yet exercised retry, reassignment, user override, and recovery together, so
+`M5_R6_TEAM_READY` remains `NOT_RUN`; M6–M9 remain unchanged.
+
 ## 46. Codex Lead follow-up from persisted board context (2026-09-13)
 
 The real Codex Lead harness no longer inserts a teammate result into the

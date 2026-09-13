@@ -117,3 +117,31 @@ attempt has a completed foreign ACP binding. No session ID, prompt, model text,
 credentials, raw frame, or temporary path is retained. This is M5 partial
 evidence only; it does not yet include live Codex Lead follow-up, retry,
 reassignment, user override, or reopen recovery in the same topology.
+
+## Scheduler Qwen + utility + live Codex Lead follow-up
+
+At the working source following `47e25c1e96a61a1ce1d411dbb07f9d837b3d925f`,
+the same ignored harness was extended and re-run:
+
+```text
+cargo test -p agent-code-runtime --test codex_live real_scheduler_runs_qwen_worker_and_utility_on_one_board -- --ignored --nocapture
+```
+
+Exit `0`; 1 passed, 0 failed, 0 ignored, 3 filtered out; 37.99 seconds.
+The sanitized command-log SHA-256 is
+`780064fb2cc836a38c7e12bcddbd8bf39025f82510ab33a614aca488d724e676`.
+
+The scheduler ran the real Qwen ACP worker and deterministic utility on its
+SQLite board. A separately created, assigned Codex Lead task then made one
+allowlisted `ras_request_context` call during the same real Codex app-server
+turn. That call received bounded persisted board context only; no teammate
+result appeared in the Codex user prompt. The test asserted the exact Lead
+artifact, committed the Lead result and Codex external binding, selected the
+Qwen artifact as a final reference, and reopened the board to inspect the
+persisted succeeded task and final references. It retained no foreign ID,
+prompt, model response, endpoint, credential, or raw frame.
+
+This adds the missing live Codex Lead follow-up to this narrow topology. It is
+still partial M5 evidence: retry, reassignment, user override, and recovery
+must be exercised in the same scheduler-owned topology before M5 can be
+marked passed.
