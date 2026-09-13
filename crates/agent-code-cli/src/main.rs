@@ -770,6 +770,14 @@ fn run(args: &[String]) -> Result<String, String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if matches!(args.as_slice(), [flag] if flag == "--help" || flag == "-h") {
+        println!("{}", usage());
+        return;
+    }
+    if matches!(args.as_slice(), [flag] if flag == "--version" || flag == "-V") {
+        println!("agent-code-cli {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     match run(&args) {
         Ok(output) => println!("{output}"),
         Err(error) => {
