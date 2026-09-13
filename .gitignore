@@ -4,16 +4,8 @@
 __pycache__/
 # Rust build output.
 /target/
-# Tracked documentation trees: docs/qualification/ (frozen legacy), docs/v2/
-# (active Rust v2 roadmap) and docs/releases/ (public release notes). Other local
-# notes under docs/ remain ignored unless governance is changed explicitly.
-docs/*
-!docs/qualification/
-!docs/qualification/**
-!docs/v2/
-!docs/v2/**
-!docs/releases/
-!docs/releases/**
+# Documentation trees are tracked: docs/ (current product docs), including
+# docs/runtimes/ and docs/releases/ (public release notes).
 *.py[cod]
 release-manifest.json
 *-evidence.json

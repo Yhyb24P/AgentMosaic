@@ -2,7 +2,7 @@
 
 ## Positioning
 
-`research-agent-system` is a heterogeneous Agent coding/work team.
+`AgentMosaic` (short name `AM`) is a heterogeneous Agent coding/work team.
 
 The one job: connect Agents with different strengths to one project. High-intelligence
 Agents do planning, hard reasoning, architecture, synthesis and review. Local or cheap
@@ -14,25 +14,26 @@ Communication, scheduling, recovery and safety boundaries are supporting mechani
 let several Agents finish work. They are not the product.
 
 The native Rust Coding Agent is the execution engine for model-backed Agents. External
-Agents (Codex/Claude-style CLIs) plug in through adapters.
+Agents (Codex/Claude-style CLIs) plug in through drivers.
 
-## Direction
+## Identity
 
-The previous "Trusted Control Plane / qualification / verification" product direction is
-retired. Do not extend it. The active work is the Rust v2 strangler rewrite on branch
-`v2/rust-agent-team` (baseline `8cf27dc2a9e03ffbc1fbd091a576e0fb0f16bb93`).
+```text
+Brand              AgentMosaic / AM
+Public CLI         am
+Cargo prefix       agentmosaic-
+Rust import prefix agentmosaic_
+Codex helper       am-codex-mcp
+Config namespace   agentmosaic
+Env prefix         AGENTMOSAIC_
+Development       0.2.0-dev
+SQLite schema      11
+```
 
-- The former Python `researchd` control plane and qualification framework were
-  removed in R8. They are historical Git content, not a product path.
-- The active roadmap is `R0 -> R8`, documented in `docs/v2/ROADMAP.md`.
-- The product normal path now exists as
-  `agent-code-cli run-team <db> <repo> "<objective>"` (with `resume-team` for
-  recovery). One objective produces one durable root `reasoning` task whose
-  result is the final visible Codex answer plus the exact selected task/artifact
-  refs. Codex is the reference high-intelligence Lead; Qwen Code is the
-  reference Worker.
-- Storage schema is v11; the Lead's strict decision wire is checked in at
-  `contracts/lead_decision.schema.json`.
+The only first-class user command is `am`. Do not reintroduce retired names or aliases
+(former brand, repository, branch, former crate and import prefixes, former executables,
+or the former Codex helper name). Historical identity belongs only in `docs/history.md`,
+`CHANGELOG.md` and `docs/releases/v0.1.0.md`.
 
 ## Do not recreate as core
 
@@ -46,7 +47,7 @@ Do not build these back into the product:
 - trust-zone / capability / audit systems as product identity
 
 Narrow runtime mechanics that genuinely help an Agent finish work may survive, but they
-are not the product and not the roadmap.
+are not the product.
 
 ## Engineering guards that remain
 
@@ -54,23 +55,23 @@ Path containment, command timeout, process-group termination, output truncation,
 writes, file hashes, Git checkpoints and crash recovery stay. They make a Coding Agent
 reliable. They are runtime mechanics, not a control-plane product.
 
-## Rust target
+## Rust workspace
 
 A Cargo workspace of small crates:
 
 ```text
 Cargo.toml
 crates/
-  agent-code-core/       # session state machine, Agent loop, events, recovery
-  agent-code-model/      # async model client (OpenAI-compatible HTTP first)
-  agent-code-tools/      # the five atomic tools
-  agent-code-workspace/  # project rules, Git worktree/checkpoint, path handling, diff/rollback
-  agent-code-context/    # context budget, truncation, compaction, repository map
-  agent-code-storage/    # small SQLite journal
-  agent-code-runtime/    # native Agent loop, external drivers (Codex app-server/ACP), product TeamRunner
-  agent-code-team/       # Agent registry, lead, task board, scheduling, result flow
-  agent-code-tui/        # ratatui/crossterm
-  agent-code-cli/        # clap
+  agentmosaic-core/       # session state machine, Agent loop, events, recovery
+  agentmosaic-model/      # async model client (OpenAI-compatible HTTP first)
+  agentmosaic-tools/      # the five atomic tools
+  agentmosaic-workspace/  # project rules, Git worktree/checkpoint, path handling, diff/rollback
+  agentmosaic-context/    # context budget, truncation, compaction, repository map
+  agentmosaic-storage/    # small SQLite journal
+  agentmosaic-runtime/    # native Agent loop, external drivers (Codex app-server/ACP), product TeamRunner
+  agentmosaic-team/       # Agent registry, lead, task board, scheduling, result flow
+  agentmosaic-tui/        # ratatui/crossterm read-only board view
+  agentmosaic-cli/        # the public `am` command
 ```
 
 Five atomic tools: `view_file`, `edit_file`, `write_file`, `search_dir`,
@@ -78,15 +79,25 @@ Five atomic tools: `view_file`, `edit_file`, `write_file`, `search_dir`,
 env` by default. `edit_file` uses exact unique matching, an expected file hash, and only
 limited line-ending/trailing-whitespace normalization.
 
+Do not rename persisted data or protocol identifiers: SQLite schema stays v11, and
+task/result/artifact/final-reference semantics, `TaskKind` and `DriverKind` wire strings,
+and Lead decision JSON fields are stable.
+
 Required Rust CI:
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
+cargo build --release --workspace
+git diff --check
 ```
+
+Also required: `scripts/ci/check_identity.sh` (retired-identity gate).
 
 ## Structure
 
-- `crates/`: the Rust v2 workspace (active).
-- `docs/v2/`: the active Rust v2 roadmap and contracts.
+- `crates/`: the Rust workspace.
+- `contracts/`: checked-in protocol contracts (Lead decision schema).
+- `docs/`: current product documentation.
+- `scripts/`: release tooling and qualification helpers.
