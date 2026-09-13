@@ -73,6 +73,7 @@ fn normal_path_reads_and_controls_the_authoritative_board() {
     let status = cli().args(["status", &db]).output().unwrap();
     assert!(status.status.success());
     assert!(String::from_utf8_lossy(&status.stdout).contains("status=succeeded"));
+    assert!(String::from_utf8_lossy(&status.stdout).contains("attempts=1"));
     let artifact = cli().args(["artifact", &db, "1"]).output().unwrap();
     assert!(artifact.status.success());
     assert!(String::from_utf8_lossy(&artifact.stdout).contains("sha256=hash"));

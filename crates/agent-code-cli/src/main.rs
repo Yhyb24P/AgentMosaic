@@ -526,19 +526,21 @@ fn run(args: &[String]) -> Result<String, String> {
             .map_err(|e| format!("status: {e:?}"))?
             .into_iter()
             .map(|id| {
-                board
+                let task = board
                     .task(id)
                     .map_err(|e| format!("status: {e:?}"))?
-                    .map(|task| {
-                        format!(
-                            "task={} status={} assignee={} objective={}",
-                            task.id,
-                            task.status.as_str(),
-                            task.assignee.unwrap_or_else(|| "-".into()),
-                            task.objective
-                        )
-                    })
-                    .ok_or_else(|| format!("status: missing task {id}"))
+                    .ok_or_else(|| format!("status: missing task {id}"))?;
+                let attempts = board
+                    .attempts(task.id)
+                    .map_err(|e| format!("status: {e:?}"))?;
+                Ok(format!(
+                    "task={} status={} assignee={} attempts={} objective={}",
+                    task.id,
+                    task.status.as_str(),
+                    task.assignee.unwrap_or_else(|| "-".into()),
+                    attempts.len(),
+                    task.objective
+                ))
             })
             .collect::<Result<Vec<_>, _>>()
             .map(|lines| lines.join("\n")),
