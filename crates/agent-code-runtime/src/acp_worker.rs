@@ -8,7 +8,8 @@ use agent_client_protocol::schema::v1::{
     AuthMethodId, AuthenticateRequest, CancelNotification, StopReason,
 };
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Client, SessionMessage};
-use agent_code_team::{AgentDriver, AgentTask, AgentTaskResult, ArtifactMeta};
+use agent_code_storage::{ExternalRuntimeBinding, SqliteTaskBoard};
+use agent_code_team::{AgentDriver, AgentTask, AgentTaskResult, ArtifactMeta, TaskBoard};
 use async_trait::async_trait;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -56,6 +57,16 @@ impl std::error::Error for AcpWorkerError {}
 #[derive(Debug, Clone)]
 pub struct AcpWorkerDriver {
     config: AcpWorkerConfig,
+}
+
+/// Scheduler-facing ACP driver that persists only the foreign session binding
+/// into the existing SQLite team board. The scheduler remains the sole owner
+/// of task/attempt lifecycle and result commits.
+#[derive(Debug, Clone)]
+pub struct PersistedAcpWorkerDriver {
+    worker: AcpWorkerDriver,
+    database: PathBuf,
+    agent_id: String,
 }
 
 /// A bounded, same-session ACP exchange. The native session id is an external
@@ -385,6 +396,76 @@ impl AcpWorkerDriver {
                 })
             })
             .collect()
+    }
+}
+
+impl PersistedAcpWorkerDriver {
+    pub fn new(
+        config: AcpWorkerConfig,
+        database: PathBuf,
+        agent_id: impl Into<String>,
+    ) -> Result<Self, AcpWorkerError> {
+        Ok(Self {
+            worker: AcpWorkerDriver::new(config)?,
+            database,
+            agent_id: agent_id.into(),
+        })
+    }
+}
+
+#[async_trait]
+impl AgentDriver for PersistedAcpWorkerDriver {
+    async fn run_task(&self, task: AgentTask) -> Result<AgentTaskResult, String> {
+        let database = self.database.clone();
+        let agent_id = self.agent_id.clone();
+        let attempt = SqliteTaskBoard::open(
+            rusqlite::Connection::open(&database).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?
+        .attempts(task.id)
+        .map_err(|error| format!("read scheduler attempt: {error:?}"))?
+        .len() as u32;
+        if attempt == 0 {
+            return Err("scheduler ACP driver requires a persisted running attempt".into());
+        }
+        let observer: AcpSessionStartedObserver = Arc::new(move |session_id| {
+            let board = SqliteTaskBoard::open(
+                rusqlite::Connection::open(&database).map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?;
+            board
+                .upsert_external_binding(&ExternalRuntimeBinding {
+                    team_task_id: task.id,
+                    attempt,
+                    agent_id: agent_id.clone(),
+                    runtime_kind: "acp".into(),
+                    native_thread_id: Some(session_id.to_string()),
+                    native_turn_id: None,
+                    lifecycle_state: "running".into(),
+                })
+                .map_err(|error| error.to_string())
+        });
+        let execution = self
+            .worker
+            .execute_task_with_session_observer(&task, observer)
+            .await
+            .map_err(|error| error.to_string())?;
+        let board = SqliteTaskBoard::open(
+            rusqlite::Connection::open(&self.database).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+        board
+            .upsert_external_binding(&ExternalRuntimeBinding {
+                team_task_id: task.id,
+                attempt,
+                agent_id: self.agent_id.clone(),
+                runtime_kind: "acp".into(),
+                native_thread_id: Some(execution.external_session_id),
+                native_turn_id: None,
+                lifecycle_state: "completed".into(),
+            })
+            .map_err(|error| error.to_string())?;
+        Ok(execution.result)
     }
 }
 

@@ -8,8 +8,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use agent_code_runtime::{AcpCancellation, AcpWorkerConfig, AcpWorkerDriver, AcpWorkerError};
-use agent_code_team::{AgentDriver, AgentTask, TaskKind};
+use agent_code_runtime::{
+    AcpCancellation, AcpWorkerConfig, AcpWorkerDriver, AcpWorkerError, PersistedAcpWorkerDriver,
+};
+use agent_code_storage::SqliteTaskBoard;
+use agent_code_team::{AgentDriver, AgentTask, TaskAttempt, TaskBoard, TaskKind, TaskStatus};
+use rusqlite::Connection;
 
 const MOCK: &str = env!("CARGO_BIN_EXE_acp_m2_mock");
 
@@ -131,6 +135,46 @@ async fn session_binding_observer_runs_before_a_successful_prompt() {
         .expect("mock task succeeds after session observer");
     assert_eq!(observed.lock().unwrap().as_slice(), ["acp-m2-mock-session"]);
     assert_eq!(execution.external_session_id, "acp-m2-mock-session");
+    let _ = std::fs::remove_dir_all(&cwd);
+}
+
+#[tokio::test]
+async fn persisted_scheduler_driver_binds_foreign_session_before_returning_result() {
+    let cwd = mock_cwd("persisted-driver");
+    let database = cwd.join("team.db");
+    let mut board = SqliteTaskBoard::open(Connection::open(&database).unwrap()).unwrap();
+    let task_id = board
+        .create_task(
+            "mock scheduled task",
+            None,
+            TaskKind::Tool,
+            Some("worker".into()),
+        )
+        .unwrap();
+    board.assign(task_id, "worker").unwrap();
+    board
+        .record_attempt(&TaskAttempt {
+            task_id,
+            attempt: 1,
+            agent_id: "worker".into(),
+            status: TaskStatus::Running,
+            result: None,
+            error: None,
+        })
+        .unwrap();
+    board.set_status(task_id, TaskStatus::Running).unwrap();
+    drop(board);
+    let driver =
+        PersistedAcpWorkerDriver::new(valid_config(&cwd, "sync"), database.clone(), "worker")
+            .unwrap();
+    let result = driver.run_task(task_for(task_id)).await.unwrap();
+    assert_eq!(result.task_id, task_id);
+    let reopened = SqliteTaskBoard::open(Connection::open(&database).unwrap()).unwrap();
+    let binding = reopened.external_binding(task_id, 1).unwrap().unwrap();
+    assert_eq!(binding.agent_id, "worker");
+    assert_eq!(binding.runtime_kind, "acp");
+    assert_eq!(binding.lifecycle_state, "completed");
+    assert!(binding.native_thread_id.is_some());
     let _ = std::fs::remove_dir_all(&cwd);
 }
 
