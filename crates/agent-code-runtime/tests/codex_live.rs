@@ -1,7 +1,9 @@
 //! Explicit live harness: run with `cargo test -p agent-code-runtime --test codex_live -- --ignored`.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use agent_code_runtime::{
     AcpWorkerConfig, AcpWorkerDriver, CodexAppServer, CodexBridgeEvent, CodexTeamDriverConfig,
@@ -35,6 +37,195 @@ fn low_cost_codex_overrides() -> Vec<String> {
         "model=\"gpt-5.5\"".into(),
         "model_reasoning_effort=\"low\"".into(),
     ]
+}
+
+#[cfg(unix)]
+fn terminate_verified_qwen_process(pid_file: &Path) {
+    let pid: i32 = std::fs::read_to_string(pid_file)
+        .expect("ACP wrapper wrote its child pid")
+        .trim()
+        .parse()
+        .expect("ACP wrapper pid is numeric");
+    assert!(pid > 1, "refuse to signal a non-child/system pid");
+
+    // The temporary wrapper `exec`s `qwen --acp`, so the recorded pid is the
+    // exact process created for this test. Verify Linux's authoritative
+    // command line before sending SIGKILL; this test never discovers or
+    // targets an arbitrary process by name.
+    let command_line = std::fs::read(format!("/proc/{pid}/cmdline"))
+        .expect("recorded Qwen ACP child remains inspectable before crash");
+    assert!(command_line
+        .windows(b"qwen".len())
+        .any(|part| part == b"qwen"));
+    assert!(command_line
+        .windows(b"--acp".len())
+        .any(|part| part == b"--acp"));
+    // SAFETY: `pid` was created by this test's isolated wrapper and was
+    // verified against /proc immediately above.
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
+}
+
+#[cfg(unix)]
+async fn wait_for_qwen_binding(
+    database: &Path,
+    task: u64,
+    pid_file: &Path,
+) -> ExternalRuntimeBinding {
+    for _ in 0..120 {
+        if pid_file.is_file() {
+            let board = SqliteTaskBoard::open(Connection::open(database).unwrap()).unwrap();
+            if let Some(binding) = board.external_binding(task, 1).unwrap() {
+                if binding.lifecycle_state == "running" {
+                    return binding;
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    panic!("timed out waiting for a durable running Qwen ACP binding");
+}
+
+/// A real Qwen ACP process crash must leave a durable, non-successful attempt
+/// that a fresh board instance can recover without replaying. This is an
+/// ignored live harness: authentication and the local Qwen runtime are
+/// required, and no raw protocol transcript is retained.
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "requires authenticated local Qwen Code; kills only an isolated qwen --acp child"]
+async fn real_qwen_acp_process_crash_recovers_without_replay() {
+    let unique = format!("{}_{}", std::process::id(), chrono_free_unique_suffix());
+    let root = std::env::temp_dir().join(format!("ras_qwen_crash_{unique}"));
+    let database = root.join("board.db");
+    let working_directory = root.join("repo");
+    let pid_file = root.join("qwen.pid");
+    let wrapper = root.join("start-qwen-acp.sh");
+    std::fs::create_dir_all(&working_directory).unwrap();
+    std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(&working_directory)
+        .status()
+        .expect("git available for isolated live fixture");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$$\" > '{}'\nexec qwen --acp\n",
+            pid_file.display()
+        ),
+    )
+    .unwrap();
+
+    let task = {
+        let mut board = SqliteTaskBoard::open(Connection::open(&database).unwrap()).unwrap();
+        let task = board
+            .create_task(
+                "real ACP crash recovery",
+                None,
+                TaskKind::Bulk,
+                Some("qwen".into()),
+            )
+            .unwrap();
+        board.assign(task, "qwen").unwrap();
+        board
+            .record_attempt(&TaskAttempt {
+                task_id: task,
+                attempt: 1,
+                agent_id: "qwen".into(),
+                status: TaskStatus::Running,
+                result: None,
+                error: None,
+            })
+            .unwrap();
+        board.set_status(task, TaskStatus::Running).unwrap();
+        task
+    };
+    let driver = Arc::new(
+        PersistedAcpWorkerDriver::new(
+            AcpWorkerConfig {
+                runtime_kind: "qwen-code".into(),
+                command: "sh".into(),
+                args: vec![wrapper.to_string_lossy().into_owned()],
+                auth_method: Some("openai".into()),
+                working_directory: working_directory.clone(),
+                timeout: Duration::from_secs(120),
+                max_prompt_bytes: 1024,
+                max_result_bytes: 4096,
+                artifact_paths: Vec::new(),
+            },
+            database.clone(),
+            "qwen",
+        )
+        .unwrap(),
+    );
+    let run_task = agent_code_team::AgentTask {
+        id: task,
+        objective: "Return exactly one JSON object with only a non-empty summary field.".into(),
+        kind: TaskKind::Bulk,
+        context: Vec::new(),
+    };
+    let running = tokio::spawn({
+        let driver = Arc::clone(&driver);
+        async move { driver.run_task(run_task).await }
+    });
+
+    let binding = wait_for_qwen_binding(&database, task, &pid_file).await;
+    assert_eq!(binding.runtime_kind, "acp");
+    assert_eq!(binding.agent_id, "qwen");
+    assert!(binding.native_thread_id.is_some());
+
+    terminate_verified_qwen_process(&pid_file);
+    // Model the controller disappearing after durable binding but before it
+    // can settle a terminal driver result. No scheduler callback is invoked,
+    // so recovery must use only the persisted board state.
+    running.abort();
+    assert!(running.await.unwrap_err().is_cancelled());
+
+    let mut reopened = SqliteTaskBoard::open(Connection::open(&database).unwrap()).unwrap();
+    assert_eq!(
+        reopened.task(task).unwrap().unwrap().status,
+        TaskStatus::Running
+    );
+    assert_eq!(
+        reopened.attempts(task).unwrap()[0].status,
+        TaskStatus::Running
+    );
+    assert_eq!(
+        reopened
+            .external_binding(task, 1)
+            .unwrap()
+            .unwrap()
+            .lifecycle_state,
+        "running"
+    );
+    assert!(reopened.artifacts(task).unwrap().is_empty());
+    let recovered = reopened.recover_interrupted_attempt(task).unwrap().unwrap();
+    assert_eq!(recovered.status, TaskStatus::Failed);
+    assert_eq!(
+        recovered.error.as_deref(),
+        Some("interrupted before terminal driver result; explicit resume required")
+    );
+    assert_eq!(
+        reopened
+            .external_binding(task, 1)
+            .unwrap()
+            .unwrap()
+            .lifecycle_state,
+        "interrupted"
+    );
+    assert!(reopened
+        .recover_interrupted_attempt(task)
+        .unwrap()
+        .is_none());
+    assert_eq!(reopened.attempts(task).unwrap().len(), 1);
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+fn chrono_free_unique_suffix() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock after unix epoch")
+        .as_nanos()
 }
 
 #[tokio::test]

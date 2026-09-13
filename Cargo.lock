@@ -108,6 +108,7 @@ dependencies = [
  "agent-code-tools",
  "agent-code-workspace",
  "async-trait",
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",

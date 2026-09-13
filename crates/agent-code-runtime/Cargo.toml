@@ -24,4 +24,5 @@ tokio.workspace = true
 
 [dev-dependencies]
 agent-code-storage = { path = "../agent-code-storage" }
+libc.workspace = true
 rusqlite.workspace = true
