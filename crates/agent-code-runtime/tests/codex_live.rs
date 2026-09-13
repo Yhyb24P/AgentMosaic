@@ -762,6 +762,9 @@ async fn real_scheduler_runs_qwen_worker_and_utility_on_one_board() {
         AcpWorkerConfig {
             runtime_kind: "qwen-code".into(),
             command: "qwen".into(),
+            // The driver talks directly to Qwen Code's native stdio ACP
+            // transport.  Site-local launcher aliases are not ACP argv unless
+            // an explicit runtime probe validates that composition.
             args: vec!["--acp".into()],
             auth_method: Some("openai".into()),
             working_directory: cwd.clone(),

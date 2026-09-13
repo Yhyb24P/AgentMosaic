@@ -136,10 +136,9 @@ cargo run -p agent-code-cli -- artifact ./team.db 1
 cargo run -p agent-code-cli -- final ./team.db 1
 
 # record and list agent registrations in the durable runtime registry
-# `-qw` is this installation's local Qwen profile entrypoint; `--acp` selects
-# Qwen Code's documented stdio protocol mode.  Keep provider credentials out
-# of this database and normal shell history.
-cargo run -p agent-code-cli -- register ./team.db qwen-worker qwen-worker worker acp qwen "-qw,--acp" 2 "qwen,local-model"
+# The ACP driver speaks directly to Qwen Code's documented stdio mode.  Keep
+# provider credentials and site-local launcher aliases out of this database.
+cargo run -p agent-code-cli -- register ./team.db qwen-worker qwen-worker worker acp qwen "--acp" 2 "qwen,local-model"
 cargo run -p agent-code-cli -- registry ./team.db
 
 # read-only interactive board view; q exits

@@ -1441,11 +1441,16 @@ qwen -qw --help        exit 0; documents --acp
 kimi -ds --help        exit 0
 ```
 
-`-ds` and `-qw` are site-local profile entrypoint parameters, not inferred
-upstream protocol flags.  README's Qwen registration example now persists the
-user-supplied local argument pair `-qw,--acp`; it stores no credential.
-Protocol support remains established only by source-informed handshake and
-bounded live evidence, not by this help output.
+`-ds` and `-qw` are site-local launcher entrypoints, not inferred upstream
+protocol flags.  A bounded closed-stdin probe of `qwen -qw --acp` subsequently
+returned exit 1 and classified its sanitized stderr as option rejection; the
+stdout/stderr hashes were recorded only during diagnosis and then moved to
+local trash.  The failed scheduler launch using that pair also exited before a
+model turn and retained only an error hash.  Therefore the Rust ACP driver and
+README use the source-confirmed direct transport `qwen --acp`; no site-local
+launcher alias is persisted as ACP argv.  Protocol support remains established
+only by source-informed handshake and bounded live evidence, not by help
+output or launcher notation.
 
 Verification on this source state:
 
