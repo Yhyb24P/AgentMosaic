@@ -619,4 +619,25 @@ mod tests {
         assert_eq!(result.final_message, "done");
         assert_eq!(events.len(), 2);
     }
+
+    #[test]
+    #[cfg(unix)]
+    fn supervised_invocation_enforces_an_absolute_deadline() {
+        let invocation = CodexExecInvocation {
+            launch: LaunchSpec::new("sh", Vec::new()).unwrap(),
+            args: vec!["-c".into(), "sleep 5".into()],
+        };
+        let started = std::time::Instant::now();
+        let error = run_invocation(
+            &invocation,
+            std::path::Path::new("."),
+            "ignored",
+            Duration::from_millis(50),
+            32,
+            |_| Ok(()),
+        )
+        .unwrap_err();
+        assert_eq!(error, RuntimeError::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
 }
