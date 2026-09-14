@@ -21,10 +21,13 @@ regression evidence and was not reused.
 
 **Evidence class: pre-release candidate.** This record is bound to the candidate commit
 and a locally built binary whose version string is still the pre-bump workspace version
-(`am 0.2.1`), because the version bump and tag belong to the release task. The canonical
-public v0.3.0 record is a separate, post-publication run of the same workflow using a
-fresh install, and supersedes this one for release purposes. Nothing here was re-enacted
-or spliced.
+(`am 0.2.1`), because the version bump and tag belong to the release task. It is kept as
+the pre-release record of the same workflow.
+
+The **canonical released record** now lives in [`fresh-install/`](fresh-install/): the
+same workflow executed with `am 0.3.0` installed from the public installer into a clean
+`CARGO_HOME`, against the exact `v0.3.0` release. For release purposes that record
+supersedes this one. Nothing in either record was re-enacted or spliced.
 
 **Path sanitisation.** Machine-specific absolute paths in this evidence set were replaced
 with the semantic placeholders `$HOME` and `<demo-temp>`; the digests, versions, run id

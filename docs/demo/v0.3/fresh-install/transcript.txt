@@ -1,0 +1,187 @@
+# Canonical v0.3.0 released record — fresh install, real Codex Lead + real ACP/Qwen worker
+#
+# This is the released-version record: the binary was installed from the public
+# installer at https://am.yhshyp.xyz/install.sh into a clean CARGO_HOME, and the
+# run below is the only run in this record. Command outputs are verbatim from the
+# capture files; nothing was retyped, re-entered or spliced.
+#
+# Sanitisation disclosure (the only edits applied to the captured text): two
+# normalisations, and nothing else —
+#   1. the absolute path of the local candidate checkout was replaced, because
+#      that directory name is a retired product identity the repository's
+#      identity gate forbids in tracked files;
+#   2. machine-specific absolute paths became semantic placeholders: `$HOME` for
+#      the user home directory and `<demo-temp>` for the scratch run directory.
+# No command, argument, model output or exit code was altered.
+#
+# Note: in the `git status --short` capture the `captures/` directory shows as
+# untracked because it lives inside the run repository.
+
+- - - [1] fresh install from the public installer into a clean CARGO_HOME
+$ CARGO_HOME=<demo-temp>/cargo-home  curl --proto "=https" --tlsv1.2 -LsSf https://am.yhshyp.xyz/install.sh | sh
+downloading agentmosaic-cli 0.3.0 x86_64-unknown-linux-gnu
+installing to <demo-temp>/cargo-home/bin
+  am
+everything's installed!
+
+To add <demo-temp>/cargo-home/bin to your PATH, either restart your shell or run:
+
+    source <demo-temp>/cargo-home/env (sh, bash, zsh)
+    source <demo-temp>/cargo-home/env.fish (fish)
+WARN: The following commands are shadowed by other commands in your PATH: am
+exit=0
+
+- - - [2] the installed binary's version
+$ <demo-temp>/cargo-home/bin/am --version
+am 0.3.0
+exit=0
+
+- - - [3] the installed binary's digest
+$ sha256sum <demo-temp>/cargo-home/bin/am
+f8a683bb9eb00bd8d1f932cc27808192e45ff223afc613aab37e0eaf01c7bbf0  <demo-temp>/cargo-home/bin/am
+
+- - - [4] am init
+$ <demo-temp>/cargo-home/bin/am init .
+initialized AgentMosaic
+project  <demo-temp>
+updated .gitignore
+
+Next: add a Lead and a Worker.
+
+Lead
+  am agent add lead --role reasoner --adapter codex-app-server -- codex
+
+Worker
+  am agent add worker --role worker --adapter acp -- qwen --acp
+
+Then
+  am doctor
+exit=0
+
+- - - [5] Lead registration — the normal first-class path
+$ <demo-temp>/cargo-home/bin/am agent add lead --role reasoner --adapter codex-app-server --max-events 4000 -- codex-am-qw
+registered agent `lead`
+role     reasoner
+adapter  codex-app-server
+launch   codex-am-qw
+
+Next: am doctor
+exit=0
+
+- - - [6] worker registration — the normal first-class path
+$ <demo-temp>/cargo-home/bin/am agent add worker --role worker --adapter acp --artifact result.txt -- qwen --acp
+registered agent `worker`
+role     worker
+adapter  acp
+launch   qwen --acp
+
+Next: am doctor
+exit=0
+
+- - - [7] am agent list
+$ <demo-temp>/cargo-home/bin/am agent list
+ID      ROLE      ADAPTER             LAUNCH
+lead    reasoner  codex-app-server    codex-am-qw
+worker  worker    acp                 qwen --acp
+
+- - - [8] am doctor
+$ <demo-temp>/cargo-home/bin/am doctor
+project   ready
+lead      ready  codex-am-qw
+worker    ready  qwen --acp
+team      ready  1 lead · 1 worker
+
+Ready to run.
+  am run "<objective>"
+exit=0
+
+- - - [9] the real run — stderr (progress, lifecycle, next)
+$ <demo-temp>/cargo-home/bin/am run "<objective>"   # stderr: progress and lifecycle
+run     starting  Read input.txt and create result.txt containing the count of each token,...
+run #1  started   lead=lead
+lead    planning  round=1
+task #2 delegated bulk -> worker
+worker  running   task #2 · attempt 1
+        artifact  result.txt
+worker  completed task #2
+lead    reviewing round=2
+run #1  complete  1m11s
+
+artifacts
+  result.txt  task #2  sha256 4297addc…
+
+next
+  am status 1
+  am final 1
+  am tui
+
+- - - [10] the real run — stdout (the final answer) and its exit code
+$ <demo-temp>/cargo-home/bin/am run "<objective>"   # stdout: the final answer
+result.txt was created in <demo-temp> containing the per-token counts of input.txt, one line per token in the form '<token> <count>', sorted alphabetically: 'alpha 1', 'beta 2', 'gamma 1'. Verification: all 3 lines match the required format, alphabetical order confirmed (sort -c), counts sum to 4 which equals the input word count (wc -w = 4), and input.txt was not modified (md5 bdd20266adbc78ad2ba4873a2771bc5b before and after). Summary: 3 distinct tokens, 4 total tokens; most frequent: beta (2), then alpha (1) and gamma (1).
+exit=0
+
+- - - [11] git status --short after the run
+$ git status --short
+?? .gitignore
+?? captures/03-init.txt
+?? captures/04-add-lead.txt
+?? captures/05-add-worker.txt
+?? captures/06-agent-list.txt
+?? captures/07-doctor.txt
+?? captures/08-run.exit
+?? captures/08-run.stderr
+?? captures/08-run.stderr.txt
+?? captures/08-run.stdout
+?? captures/08-run.stdout.txt
+?? captures/09-git-status.txt
+?? result.txt
+
+- - - [12] result.txt
+$ cat result.txt
+alpha 1
+beta 2
+gamma 1
+
+- - - [13] sha256sum result.txt input.txt (input unchanged)
+$ sha256sum result.txt input.txt
+4297addc01e4f608b07fc9e71c6e8bb9ba836a12019da73bc219d97dd44a95d6  result.txt
+b884d3d51e68ee1906c5fd54c8ab3c3acd5b327aefdc5589f8dc1f1096629391  input.txt
+
+- - - [14] am status (no database path)
+$ <demo-temp>/cargo-home/bin/am status
+run #1  succeeded
+objective  Read input.txt and create result.txt containing the count of each token,...
+lead       lead
+
+tasks
+  #1  lead  succeeded  Read input.txt and create result.txt containing the count of each token,...
+  #2  worker  succeeded  In <demo-temp>: read input.txt without modifying it, split it ...
+
+artifacts
+  #2  result.txt
+
+- - - [15] am final (no database path)
+$ <demo-temp>/cargo-home/bin/am final
+result.txt was created in <demo-temp> containing the per-token counts of input.txt, one line per token in the form '<token> <count>', sorted alphabetically: 'alpha 1', 'beta 2', 'gamma 1'. Verification: all 3 lines match the required format, alphabetical order confirmed (sort -c), counts sum to 4 which equals the input word count (wc -w = 4), and input.txt was not modified (md5 bdd20266adbc78ad2ba4873a2771bc5b before and after). Summary: 3 distinct tokens, 4 total tokens; most frequent: beta (2), then alpha (1) and gamma (1).
+
+- - - [16] am artifact (no database path)
+$ <demo-temp>/cargo-home/bin/am artifact
+task=2 path=result.txt sha256=4297addc01e4f608b07fc9e71c6e8bb9ba836a12019da73bc219d97dd44a95d6
+
+- - - [17] facts
+am_version=am 0.3.0
+am_binary_sha256=f8a683bb9eb00bd8d1f932cc27808192e45ff223afc613aab37e0eaf01c7bbf0
+install_source=https://am.yhshyp.xyz/install.sh (clean CARGO_HOME)
+release_tag=v0.3.0
+release_sha=fb8cc9080584ed2687576fba406a4cff6dbbce2c
+codex_wrapper=codex-am-qw (expands to app-server-compatible -c overrides; no credential)
+worker=qwen --acp
+utility=0
+run_id=1
+run_exit=0
+result_sha256=4297addc01e4f608b07fc9e71c6e8bb9ba836a12019da73bc219d97dd44a95d6
+input_sha256=b884d3d51e68ee1906c5fd54c8ab3c3acd5b327aefdc5589f8dc1f1096629391
+utc_timestamp=2026-09-14T13:41:27Z
+
+- - - [18] recording timestamp
+2026-09-14T13:41:38Z

@@ -1,0 +1,50 @@
+# AgentMosaic v0.3.0 — released record manifest
+# Facts recorded from the one released-version run; raw captures in transcript.txt.
+# This supersedes the pre-release candidate record in the parent directory as the
+# authoritative public v0.3.0 evidence.
+
+evidence_class=released
+agentmosaic_repo=Yhyb24P/AgentMosaic
+release_tag=v0.3.0
+release_sha=fb8cc9080584ed2687576fba406a4cff6dbbce2c
+release_sha_note=the canonical main merge commit the annotated tag v0.3.0 points at
+release_url=https://github.com/Yhyb24P/AgentMosaic/releases/tag/v0.3.0
+install_source=https://am.yhshyp.xyz/install.sh (clean CARGO_HOME)
+installed_binary_version=am 0.3.0
+installed_binary_sha256=f8a683bb9eb00bd8d1f932cc27808192e45ff223afc613aab37e0eaf01c7bbf0
+published_archive=agentmosaic-cli-x86_64-unknown-linux-gnu.tar.xz
+published_archive_sha256=73385032f61e6a9290bf45b6bfbf5120edb27b571bb7e33ef73c752d3ce1b031
+published_archive_checksum_verified=yes (downloaded from the GitHub Release and verified against the published .sha256)
+installer_pins=APP_VERSION="0.3.0"
+codex_version=codex-cli 0.154.0
+qwen_version=0.23.3
+lead_registration=am agent add lead --role reasoner --adapter codex-app-server --max-events 4000 -- codex-am-qw
+lead_note=the normal first-class path; the wrapper expands to app-server-compatible -c overrides and contains no credential
+worker_registration=am agent add worker --role worker --adapter acp --artifact result.txt -- qwen --acp
+team=reasoner=1 worker=1 utility=0
+objective=Read input.txt and create result.txt containing the count of each token, sorted alphabetically, one line per token in exactly this form: <token> <count>. Verify the file, do not modify input.txt, and summarize the result.
+objective_note=this objective SPECIFIES the representation, so the artifact is byte-reproducible; contrast the pre-release candidate record, whose semantic objective admitted a variant
+doctor=ready (exit 0)
+run_id=1
+run_exit=0
+result_path=result.txt
+result_content="alpha 1 / beta 2 / gamma 1 (3 lines, no other lines or whitespace)"
+result_sha256=4297addc01e4f608b07fc9e71c6e8bb9ba836a12019da73bc219d97dd44a95d6
+result_sha256_note=identical to the v0.2.1 reference demo artifact and to the pre-release candidate record
+input_sha256=b884d3d51e68ee1906c5fd54c8ab3c3acd5b327aefdc5589f8dc1f1096629391
+input_note=input.txt unchanged for the whole run
+durable_final=root task 1 final result persisted in .agentmosaic/state.db (retrieved via "am final" with no path)
+state_db=.agentmosaic/state.db (deliberately NOT committed here)
+run_completed=2026-09-14T13:41:27Z
+evidence_source_directory=<demo-temp>/captures (per-command capture files)
+
+# Release gates satisfied on this exact released binary and this exact deploy:
+gate_fresh_install=curl https://am.yhshyp.xyz/install.sh | sh into a clean CARGO_HOME -> exit 0
+gate_binary=am --version -> am 0.3.0
+gate_runtime=real Lead + real worker run -> exit 0, visible lifecycle, durable final, correct artifact
+gate_website=https://am.yhshyp.xyz/ homepage and /zh/ report v0.3.0; /release and /install.sh redirect correctly; remote smoke passed
+gate_history=v0.1.0 / v0.2.0 / v0.2.1 tags and releases unchanged
+secrets=none present in the run repository, its state, or this evidence set
+video=none (no terminal recording was produced; a video was optional for v0.3.0)
+
+RELEASED_RECORD=READY
