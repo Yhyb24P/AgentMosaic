@@ -51,10 +51,10 @@ pub fn dispatch(command: Command) -> Result<Option<String>, String> {
         },
         Command::Doctor => doctor::run()?,
         Command::Run { objective } => run::run(&objective)?,
-        Command::Status { database } => inspect::status(&database)?,
-        Command::Final { database, root } => inspect::final_result(&database, &root)?,
-        Command::Artifact { database, task } => inspect::artifact(&database, &task)?,
-        Command::Tui { database } => run::tui(&database)?,
+        Command::Status { target, all } => inspect::status(target, all)?,
+        Command::Final { target, root } => inspect::final_result(target, root)?,
+        Command::Artifact { target, task } => inspect::artifact(target, task)?,
+        Command::Tui { database } => run::tui(database)?,
         Command::Advanced => advanced::text().to_string(),
 
         // The compatibility commands keep their established field grammar.

@@ -32,7 +32,34 @@ pub fn project_database() -> Result<(PathBuf, PathBuf), String> {
     discover_project(&std::env::current_dir().map_err(|e| e.to_string())?)
 }
 
+/// The project the current directory belongs to.
+///
+/// The project root and its durable database always travel together: a command
+/// that inspects the project must never name a database path itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectContext {
+    pub root: PathBuf,
+    pub database: PathBuf,
+}
+
+impl ProjectContext {
+    /// Discover the project from the current directory, walking ancestors.
+    pub fn discover() -> Result<Self, String> {
+        let (root, database) = project_database()?;
+        Ok(Self { root, database })
+    }
+
+    /// Open the project's durable board.
+    pub fn open_board(&self) -> Result<SqliteTaskBoard, String> {
+        open_path(&self.database)
+    }
+}
+
 pub fn open(path: &str) -> Result<SqliteTaskBoard, String> {
-    SqliteTaskBoard::open(Connection::open(Path::new(path)).map_err(|e| e.to_string())?)
+    open_path(Path::new(path))
+}
+
+pub fn open_path(path: &Path) -> Result<SqliteTaskBoard, String> {
+    SqliteTaskBoard::open(Connection::open(path).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())
 }

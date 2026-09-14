@@ -53,27 +53,36 @@ pub enum Command {
     },
     /// Show run status for this project
     Status {
-        /// Project state database
-        database: String,
+        /// Run id, or a state database path for the legacy whole-board listing
+        #[arg(value_name = "RUN_OR_DATABASE")]
+        target: Option<String>,
+        /// List every run of this project, newest first
+        #[arg(long)]
+        all: bool,
     },
     /// Show a durable final result
     Final {
-        /// Project state database
-        database: String,
-        /// Root task
-        root: String,
+        /// Run id, or a state database path for the legacy `<database> <root>`
+        #[arg(value_name = "RUN_OR_DATABASE")]
+        target: Option<String>,
+        /// Root task, for the legacy `<database> <root>` form
+        #[arg(value_name = "ROOT")]
+        root: Option<String>,
     },
     /// Show recorded artifacts
     Artifact {
-        /// Project state database
-        database: String,
-        /// Task
-        task: String,
+        /// Task id, or a state database path for the legacy `<database> <task>`
+        #[arg(value_name = "TASK_OR_DATABASE")]
+        target: Option<String>,
+        /// Task, for the legacy `<database> <task>` form
+        #[arg(value_name = "TASK")]
+        task: Option<String>,
     },
     /// Open the live read-only team board
     Tui {
-        /// Project state database
-        database: String,
+        /// State database path (defaults to this project's database)
+        #[arg(value_name = "DATABASE")]
+        database: Option<String>,
     },
     /// Show compatibility/low-level commands
     Advanced,

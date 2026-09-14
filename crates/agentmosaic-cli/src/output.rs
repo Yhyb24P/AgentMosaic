@@ -3,7 +3,11 @@
 
 use agentmosaic_runtime::TeamRunOutcome;
 use agentmosaic_storage::{SqliteAgentRegistry, SqliteTaskBoard};
-use agentmosaic_team::TaskBoard;
+use agentmosaic_team::{TaskBoard, TaskRecord};
+
+/// The longest objective a run rendering prints; longer text is cut on a
+/// character boundary and marked.
+const MAX_OBJECTIVE_BYTES: usize = 72;
 
 /// The bounded, human-readable summary of one team run.
 pub fn render_team_outcome(outcome: &TeamRunOutcome) -> String {
@@ -37,6 +41,9 @@ pub fn render_team_outcome(outcome: &TeamRunOutcome) -> String {
 }
 
 /// One line per task: the durable board as the operator sees it.
+///
+/// This is the legacy `status <database>` renderer, kept byte-for-byte: every
+/// line is a `task=...` record and nothing else is printed.
 pub fn render_status(board: &SqliteTaskBoard) -> Result<String, String> {
     board
         .task_ids()
@@ -64,6 +71,86 @@ pub fn render_status(board: &SqliteTaskBoard) -> Result<String, String> {
         })
         .collect::<Result<Vec<_>, _>>()
         .map(|lines| lines.join("\n"))
+}
+
+/// One run, as the operator sees it: the root task, the tasks below it, and
+/// the artifacts recorded anywhere in that subtree.
+///
+/// Only board data is printed, never a storage path.
+pub fn render_run_status(board: &SqliteTaskBoard, run: &TaskRecord) -> Result<String, String> {
+    let ids = subtree_ids(board, run)?;
+    let mut lines = vec![
+        format!("run #{}  {}", run.id, run.status.as_str()),
+        format!("objective  {}", bounded_objective(&run.objective)),
+        format!("lead       {}", run.assignee.as_deref().unwrap_or("-")),
+        String::new(),
+        "tasks".to_string(),
+    ];
+    for id in &ids {
+        let task = task_at(board, *id)?;
+        lines.push(format!(
+            "  #{}  {}  {}  {}",
+            task.id,
+            task.assignee.as_deref().unwrap_or("-"),
+            task.status.as_str(),
+            bounded_objective(&task.objective)
+        ));
+    }
+    lines.push(String::new());
+    lines.push("artifacts".to_string());
+    for id in &ids {
+        for artifact in board.artifacts(*id).map_err(|e| format!("{e:?}"))? {
+            lines.push(format!("  #{}  {}", id, artifact.path));
+        }
+    }
+    Ok(lines.join("\n"))
+}
+
+/// One concise line per run, newest first.
+pub fn render_run_list(board: &SqliteTaskBoard) -> Result<String, String> {
+    let mut runs = board.root_tasks().map_err(|e| format!("{e:?}"))?;
+    runs.reverse();
+    Ok(runs
+        .iter()
+        .map(|run| {
+            format!(
+                "run #{}  {}  {}",
+                run.id,
+                run.status.as_str(),
+                bounded_objective(&run.objective)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+/// The root task and every task below it, in id order.
+fn subtree_ids(board: &SqliteTaskBoard, run: &TaskRecord) -> Result<Vec<u64>, String> {
+    let mut ids = vec![run.id];
+    ids.extend(board.descendants_of(run.id).map_err(|e| format!("{e:?}"))?);
+    ids.sort_unstable();
+    ids.dedup();
+    Ok(ids)
+}
+
+fn task_at(board: &SqliteTaskBoard, id: u64) -> Result<TaskRecord, String> {
+    board
+        .task(id)
+        .map_err(|e| format!("{e:?}"))?
+        .ok_or_else(|| format!("missing task {id}"))
+}
+
+/// A single-line, bounded objective.
+fn bounded_objective(objective: &str) -> String {
+    let one_line = objective.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.len() <= MAX_OBJECTIVE_BYTES {
+        return one_line;
+    }
+    let mut end = MAX_OBJECTIVE_BYTES;
+    while end > 0 && !one_line.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &one_line[..end])
 }
 
 pub fn registry_list(database: &str, limit: Option<&str>) -> Result<String, String> {

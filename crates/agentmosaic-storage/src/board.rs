@@ -109,12 +109,68 @@ impl SqliteTaskBoard {
         rows.collect()
     }
 
+    /// Every user-visible run: a root `reasoning` task, ordered by id.
+    ///
+    /// These are inherent methods, not `TaskBoard` members: they read the
+    /// durable row shapes the SQLite board actually stores, and adding them to
+    /// the trait would force every in-memory board to reproduce them.
+    pub fn root_tasks(&self) -> Result<Vec<TaskRecord>, BoardError> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT id, objective, parent_task, kind, target, assignee, status
+                 FROM team_tasks WHERE parent_task IS NULL AND kind = ?1 ORDER BY id",
+            )
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        let rows = statement
+            .query_map(params![TaskKind::Reasoning.as_str()], row_to_task)
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        rows.map(|row| row.map_err(|e| BoardError::Storage(e.to_string())))
+            .collect()
+    }
+
+    /// The newest run, or `None` when this board has none.
+    pub fn latest_root_task(&self) -> Result<Option<TaskRecord>, BoardError> {
+        Ok(self.root_tasks()?.pop())
+    }
+
+    /// Every task whose `parent_task` chain reaches `root`, excluding `root`.
+    ///
+    /// The walk is bounded, so a malformed chain cannot spin forever: after
+    /// [`MAX_DESCENDANT_HOPS`] the candidate is dropped.
+    pub fn descendants_of(&self, root: u64) -> Result<Vec<u64>, BoardError> {
+        let mut found = Vec::new();
+        for id in self.task_ids()? {
+            if id == root {
+                continue;
+            }
+            let mut current = id;
+            for _ in 0..MAX_DESCENDANT_HOPS {
+                let Some(record) = self.task(current)? else {
+                    break;
+                };
+                match record.parent_task {
+                    Some(parent) if parent == root => {
+                        found.push(id);
+                        break;
+                    }
+                    Some(parent) => current = parent,
+                    None => break,
+                }
+            }
+        }
+        Ok(found)
+    }
+
     /// The underlying connection, for direct queries in tests.
     #[cfg(test)]
     pub(crate) fn conn(&self) -> &Connection {
         &self.conn
     }
 }
+
+/// The bounded number of `parent_task` hops the descendant walk follows.
+pub const MAX_DESCENDANT_HOPS: usize = 1024;
 
 impl TaskBoard for SqliteTaskBoard {
     fn create_task(
