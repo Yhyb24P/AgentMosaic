@@ -7,7 +7,7 @@ commands keep their established spellings; `am advanced` lists them.
 ```text
 usage: am <init|agent|doctor|run|status|final|artifact|tui|advanced> [fields]
        am init [PATH]
-       am agent add <id> --role <reasoner|worker|utility> --adapter <acp|codex-app-server> [--name NAME] [--concurrency N] [--tag TAG] [--artifact RELPATH] -- <program> [arg ...]
+       am agent add <id> --role <reasoner|worker|utility> --adapter <acp|codex-app-server> [--name NAME] [--concurrency N] [--tag TAG] [--artifact RELPATH] [--max-events N] -- <program> [arg ...]
        am agent list [--json]
        am agent remove <id>
        am doctor [--verbose] [--json]
@@ -76,6 +76,19 @@ one Agent, and local launcher flags remain opaque LaunchSpec argv:
 ```bash
 am agent add lead-ds --role reasoner --adapter codex-app-server -- codex -ds
 am agent add utility --role utility --adapter acp -- aweswitch qw --acp
+```
+
+### Tuning the Codex event budget
+
+`--max-events N` is an advanced tuning option for high-event Codex backends. It sets how
+many lifecycle events one Codex turn may spend before the turn is abandoned — the same
+budget the Lead brain and the Codex team driver read from the persisted Agent
+configuration. It is meaningful only for `--adapter codex-app-server`; `am agent add`
+refuses it for `acp`, and refuses `0`. The default is unchanged, so register it only when
+a real run has hit the bound:
+
+```bash
+am agent add lead --role reasoner --adapter codex-app-server --max-events 4000 -- codex
 ```
 
 ## Output streams

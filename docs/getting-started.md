@@ -44,6 +44,9 @@ custom launcher keeps its exact argv, for example `codex -ds` or `aweswitch qw -
 way with `--role utility`. `am agent list` prints the registry as a role-first table
 (`--json` for one object), and `am agent remove <id>` removes one Agent.
 
+`--max-events N` is an advanced tuning option for high-event Codex backends: it is
+accepted by `--adapter codex-app-server` only, and the default is unchanged.
+
 ## Doctor
 
 ```bash

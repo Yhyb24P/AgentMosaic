@@ -81,6 +81,7 @@ pub fn dispatch_status(command: Command) -> Result<Dispatch, String> {
                 concurrency,
                 tags,
                 artifacts,
+                max_events,
                 launch,
             } => Dispatch::stdout(agent::add(agent::AgentAdd {
                 id,
@@ -90,6 +91,7 @@ pub fn dispatch_status(command: Command) -> Result<Dispatch, String> {
                 concurrency,
                 tags,
                 artifacts,
+                max_events,
                 launch,
             })?),
             AgentCommand::List { json } => Dispatch::stdout(agent::list(json)?),

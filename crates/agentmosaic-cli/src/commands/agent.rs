@@ -1,6 +1,7 @@
 //! `am agent add`, `am agent list` and `am agent remove`.
 
 use agentmosaic_storage::{AgentRegistryRecord, SqliteAgentRegistry};
+use serde::Serialize;
 
 use crate::json::{self, AgentJson, AgentListJson};
 use crate::{output, project};
@@ -13,7 +14,38 @@ pub struct AgentAdd {
     pub concurrency: i64,
     pub tags: Vec<String>,
     pub artifacts: Vec<String>,
+    pub max_events: Option<u64>,
     pub launch: Vec<String>,
+}
+
+/// The `driver_config_json` object this surface writes.
+///
+/// It is a typed struct rather than a JSON literal so the key order and the
+/// byte shape are fixed, and a key the user did not ask for is absent instead
+/// of null: the runtime reads absent options as their documented defaults.
+#[derive(Serialize)]
+struct DriverConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    artifact_paths: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_events: Option<u64>,
+}
+
+/// The persisted config body, or `None` when the Agent configures nothing at
+/// all.
+fn driver_config_json(
+    artifacts: &[String],
+    max_events: Option<u64>,
+) -> Result<Option<String>, String> {
+    if artifacts.is_empty() && max_events.is_none() {
+        return Ok(None);
+    }
+    serde_json::to_string(&DriverConfig {
+        artifact_paths: (!artifacts.is_empty()).then(|| artifacts.to_vec()),
+        max_events,
+    })
+    .map(Some)
+    .map_err(|e| e.to_string())
 }
 
 pub fn add(spec: AgentAdd) -> Result<String, String> {
@@ -26,15 +58,23 @@ pub fn add(spec: AgentAdd) -> Result<String, String> {
     if spec.concurrency <= 0 {
         return Err("max-concurrency must be greater than zero".into());
     }
+    if spec.max_events == Some(0) {
+        return Err("max-events must be greater than zero".into());
+    }
+    // The key is only read by the codex-app-server drivers: the Lead brain and
+    // the Codex team driver. Persisting it for any other adapter would describe
+    // a configuration the runtime never honours.
+    if spec.max_events.is_some() && spec.adapter != "codex-app-server" {
+        return Err(format!(
+            "--max-events applies to the codex-app-server adapter, not {}",
+            spec.adapter
+        ));
+    }
     let (program, args) = spec
         .launch
         .split_first()
         .ok_or("agent add requires a launch command after --")?;
-    let config = if spec.artifacts.is_empty() {
-        None
-    } else {
-        Some(serde_json::json!({"artifact_paths": spec.artifacts}).to_string())
-    };
+    let config = driver_config_json(&spec.artifacts, spec.max_events)?;
     let record = AgentRegistryRecord {
         id: spec.id.clone(),
         name: spec.name.unwrap_or_else(|| spec.id.clone()),
@@ -135,4 +175,39 @@ pub fn remove(id: &str) -> Result<String, String> {
         id,
         reasoners == 1 && workers >= 1,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The four shapes the persisted config can take. The two without
+    /// `--max-events` are the shapes `am agent add` wrote before the option
+    /// existed and must stay byte-identical.
+    #[test]
+    fn driver_config_json_covers_every_option_combination() {
+        assert_eq!(driver_config_json(&[], None).unwrap(), None);
+        assert_eq!(
+            driver_config_json(&["out/result.txt".to_string()], None).unwrap(),
+            Some(r#"{"artifact_paths":["out/result.txt"]}"#.to_string())
+        );
+        assert_eq!(
+            driver_config_json(&[], Some(4000)).unwrap(),
+            Some(r#"{"max_events":4000}"#.to_string())
+        );
+        assert_eq!(
+            driver_config_json(
+                &[
+                    "out/result.txt".to_string(),
+                    "nested/second.txt".to_string(),
+                ],
+                Some(4000),
+            )
+            .unwrap(),
+            Some(
+                r#"{"artifact_paths":["out/result.txt","nested/second.txt"],"max_events":4000}"#
+                    .to_string()
+            )
+        );
+    }
 }

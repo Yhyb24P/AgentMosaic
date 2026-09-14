@@ -250,6 +250,9 @@ pub enum AgentCommand {
         /// Artifact path relative to the workspace (repeatable)
         #[arg(long = "artifact", value_name = "RELPATH")]
         artifacts: Vec<String>,
+        /// Maximum lifecycle events per Codex turn (advanced tuning; codex-app-server only)
+        #[arg(long, value_name = "N")]
+        max_events: Option<u64>,
         /// Launch command and its argv, after `--`
         #[arg(last = true, value_name = "PROGRAM")]
         launch: Vec<String>,
