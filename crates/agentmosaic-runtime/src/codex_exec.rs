@@ -7,7 +7,59 @@
 use agentmosaic_team::{RuntimeEvent, RuntimeFileChangeKind, RuntimePlanItem};
 use serde_json::Value;
 
-use crate::RuntimeError;
+use crate::{LaunchSpec, RuntimeError};
+
+/// Shell-free argv for the stable `codex exec --json` machine interface.
+///
+/// A prompt is supplied on stdin by the supervising driver. Keeping it out of
+/// argv prevents it leaking into process listings and makes the verified
+/// `exec resume [OPTIONS] SESSION_ID [PROMPT]` ordering explicit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexExecInvocation {
+    pub launch: LaunchSpec,
+    pub args: Vec<String>,
+}
+
+impl CodexExecInvocation {
+    /// Start a fresh Codex thread. Isolation is opt-in because it suppresses
+    /// user configuration that can be necessary for the user's authentication
+    /// and model provider.
+    pub fn start(launch: LaunchSpec, output_schema: Option<&str>, isolate: bool) -> Self {
+        let mut args = launch.args.clone();
+        args.extend(["exec".into(), "--json".into()]);
+        append_options(&mut args, output_schema, isolate);
+        Self { launch, args }
+    }
+
+    /// Resume an existing Codex thread using the argument order accepted by
+    /// the locally verified 0.154 CLI: `exec resume [OPTIONS] SESSION_ID`.
+    pub fn resume(
+        launch: LaunchSpec,
+        thread_id: &str,
+        output_schema: Option<&str>,
+        isolate: bool,
+    ) -> Result<Self, RuntimeError> {
+        if thread_id.trim().is_empty() {
+            return Err(RuntimeError::Protocol(
+                "Codex exec resume requires a non-empty thread id".into(),
+            ));
+        }
+        let mut args = launch.args.clone();
+        args.extend(["exec".into(), "resume".into(), "--json".into()]);
+        append_options(&mut args, output_schema, isolate);
+        args.push(thread_id.into());
+        Ok(Self { launch, args })
+    }
+}
+
+fn append_options(args: &mut Vec<String>, output_schema: Option<&str>, isolate: bool) {
+    if isolate {
+        args.extend(["--ignore-user-config".into(), "--ignore-rules".into()]);
+    }
+    if let Some(schema) = output_schema.filter(|schema| !schema.trim().is_empty()) {
+        args.extend(["--output-schema".into(), schema.into()]);
+    }
+}
 
 /// Decode one JSONL event without retaining raw command input/output.
 pub fn normalize_event(value: &Value) -> Result<Vec<RuntimeEvent>, RuntimeError> {
@@ -312,5 +364,43 @@ mod tests {
         assert!(
             matches!(error, Err(RuntimeError::Protocol(message)) if message == "provider failed")
         );
+    }
+
+    #[test]
+    fn constructs_verified_exec_and_resume_argv_without_prompt() {
+        let launch = LaunchSpec::new("codex", vec!["-p".into(), "brain".into()]).unwrap();
+        let fresh = CodexExecInvocation::start(launch.clone(), Some("/tmp/schema.json"), false);
+        assert_eq!(
+            fresh.args,
+            [
+                "-p",
+                "brain",
+                "exec",
+                "--json",
+                "--output-schema",
+                "/tmp/schema.json"
+            ]
+        );
+        let resumed = CodexExecInvocation::resume(launch, "thread-1", None, true).unwrap();
+        assert_eq!(
+            resumed.args,
+            [
+                "-p",
+                "brain",
+                "exec",
+                "resume",
+                "--json",
+                "--ignore-user-config",
+                "--ignore-rules",
+                "thread-1"
+            ]
+        );
+        assert!(CodexExecInvocation::resume(
+            LaunchSpec::new("codex", Vec::new()).unwrap(),
+            " ",
+            None,
+            false
+        )
+        .is_err());
     }
 }
