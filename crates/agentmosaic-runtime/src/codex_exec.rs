@@ -4,6 +4,13 @@
 //! summaries.  In particular, JSONL command arguments and tool output are not
 //! copied into AgentMosaic's durable runtime-event log.
 
+use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+
 use agentmosaic_team::{RuntimeEvent, RuntimeFileChangeKind, RuntimePlanItem};
 use serde_json::Value;
 
@@ -18,6 +25,186 @@ use crate::{LaunchSpec, RuntimeError};
 pub struct CodexExecInvocation {
     pub launch: LaunchSpec,
     pub args: Vec<String>,
+}
+
+/// Result of one bounded `codex exec --json` process invocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexExecResult {
+    /// Foreign Codex thread id returned before the first item event.
+    pub thread_id: String,
+    /// The last visible assistant message, bounded by the caller's limit.
+    pub final_message: String,
+}
+
+/// Run a Codex JSONL invocation under one absolute deadline.
+///
+/// The caller persists `thread_id` as soon as this function returns it through
+/// its event callback.  The process owns a Unix group, so timeout and terminal
+/// protocol failure also terminate descendants rather than leaving helpers.
+pub fn run_invocation<F>(
+    invocation: &CodexExecInvocation,
+    working_directory: &std::path::Path,
+    prompt: &str,
+    timeout: Duration,
+    max_final_message_bytes: usize,
+    mut emit: F,
+) -> Result<CodexExecResult, RuntimeError>
+where
+    F: FnMut(RuntimeEvent) -> Result<(), RuntimeError>,
+{
+    if timeout.is_zero() || max_final_message_bytes == 0 {
+        return Err(RuntimeError::InvalidConfiguration(
+            "Codex exec timeout and final-message limit must be positive".into(),
+        ));
+    }
+    let deadline = Instant::now() + timeout;
+    let mut command = Command::new(&invocation.launch.program);
+    command
+        .args(&invocation.args)
+        .current_dir(working_directory)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command
+        .spawn()
+        .map_err(|error| RuntimeError::Protocol(format!("spawn Codex exec: {error}")))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| RuntimeError::Protocol("Codex exec stdout unavailable".into()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| RuntimeError::Protocol("Codex exec stderr unavailable".into()))?;
+    let stderr_reader = std::thread::spawn(move || bounded_stderr(stderr));
+    let (sender, receiver) = mpsc::sync_channel(256);
+    let stdout_reader = std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if sender
+                .send(line.map_err(|error| error.to_string()))
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+    let write_result = child
+        .stdin
+        .take()
+        .ok_or_else(|| RuntimeError::Protocol("Codex exec stdin unavailable".into()))
+        .and_then(|mut stdin| {
+            stdin
+                .write_all(prompt.as_bytes())
+                .map_err(|error| RuntimeError::Protocol(format!("write Codex prompt: {error}")))
+        });
+    if let Err(error) = write_result {
+        terminate_group(&mut child);
+        let _ = stdout_reader.join();
+        let _ = stderr_reader.join();
+        return Err(error);
+    }
+
+    let mut thread_id = None;
+    let mut final_message = String::new();
+    let outcome = loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break Err(RuntimeError::TimedOut);
+        }
+        match receiver.recv_timeout(remaining) {
+            Ok(Ok(line)) => {
+                let value: Value = match serde_json::from_str(&line) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        break Err(RuntimeError::Protocol(format!(
+                            "decode Codex JSONL: {error}"
+                        )))
+                    }
+                };
+                let events = match normalize_event(&value) {
+                    Ok(events) => events,
+                    Err(error) => break Err(error),
+                };
+                let mut emission_error = None;
+                for event in events {
+                    if let RuntimeEvent::SessionStarted { native_session_id } = &event {
+                        thread_id = Some(native_session_id.clone());
+                    }
+                    if let RuntimeEvent::AssistantMessageCompleted { text } = &event {
+                        final_message = truncate_utf8(text, max_final_message_bytes);
+                    }
+                    if let Err(error) = emit(event) {
+                        emission_error = Some(error);
+                        break;
+                    }
+                }
+                if let Some(error) = emission_error {
+                    break Err(error);
+                }
+            }
+            Ok(Err(error)) => {
+                break Err(RuntimeError::Protocol(format!("read Codex JSONL: {error}")))
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => break Err(RuntimeError::TimedOut),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let status = child
+                    .wait()
+                    .map_err(|error| RuntimeError::Protocol(format!("wait Codex exec: {error}")))?;
+                if status.success() {
+                    break thread_id
+                        .map(|thread_id| CodexExecResult {
+                            thread_id,
+                            final_message,
+                        })
+                        .ok_or_else(|| {
+                            RuntimeError::Protocol("Codex exec ended without thread.started".into())
+                        });
+                }
+                break Err(RuntimeError::Protocol(
+                    "Codex exec exited unsuccessfully".into(),
+                ));
+            }
+        }
+    };
+    if outcome.is_err() {
+        terminate_group(&mut child);
+    }
+    let _ = stdout_reader.join();
+    let diagnostics = stderr_reader.join().unwrap_or_default();
+    outcome.map_err(|error| match error {
+        RuntimeError::Protocol(message) if !diagnostics.is_empty() => {
+            RuntimeError::Protocol(format!("{message}; Codex stderr: {diagnostics}"))
+        }
+        error => error,
+    })
+}
+
+fn bounded_stderr(mut stderr: impl Read) -> String {
+    let mut bytes = Vec::new();
+    let _ = stderr.by_ref().take(16 * 1024).read_to_end(&mut bytes);
+    String::from_utf8_lossy(&bytes).trim().to_owned()
+}
+
+fn truncate_utf8(value: &str, max_bytes: usize) -> String {
+    value
+        .char_indices()
+        .take_while(|(index, character)| index + character.len_utf8() <= max_bytes)
+        .map(|(_, character)| character)
+        .collect()
+}
+
+fn terminate_group(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    unsafe {
+        let _ = libc::killpg(child.id() as i32, libc::SIGKILL);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
 }
 
 impl CodexExecInvocation {
@@ -402,5 +589,34 @@ mod tests {
             false
         )
         .is_err());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn supervised_jsonl_invocation_binds_thread_and_forwards_normalized_events() {
+        let invocation = CodexExecInvocation {
+            launch: LaunchSpec::new("sh", Vec::new()).unwrap(),
+            args: vec![
+                "-c".into(),
+                "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"thread-1\"}' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"done\"}}'"
+                    .into(),
+            ],
+        };
+        let mut events = Vec::new();
+        let result = run_invocation(
+            &invocation,
+            std::path::Path::new("."),
+            "ignored",
+            Duration::from_secs(1),
+            32,
+            |event| {
+                events.push(event);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(result.thread_id, "thread-1");
+        assert_eq!(result.final_message, "done");
+        assert_eq!(events.len(), 2);
     }
 }

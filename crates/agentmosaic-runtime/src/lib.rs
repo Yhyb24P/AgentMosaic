@@ -33,7 +33,10 @@ pub use codex_app_server::{
     DEFAULT_FINAL_MESSAGE_MAX_BYTES,
 };
 pub use codex_bridge::run_codex_mcp_bridge;
-pub use codex_exec::{normalize_event as normalize_codex_exec_event, CodexExecInvocation};
+pub use codex_exec::{
+    normalize_event as normalize_codex_exec_event, run_invocation as run_codex_exec_invocation,
+    CodexExecInvocation, CodexExecResult,
+};
 pub use codex_lead::{CodexLeadBrain, CodexLeadConfig};
 pub use codex_team_driver::{CodexTeamDriverConfig, PersistedCodexTeamDriver};
 pub use dispatch::{dispatch, ToolOutcome};
