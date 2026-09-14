@@ -12,6 +12,7 @@ mod agent;
 mod codex_app_server;
 #[path = "bin/am-codex-mcp.rs"]
 mod codex_bridge;
+mod codex_exec;
 mod codex_lead;
 mod codex_team_driver;
 mod dispatch;
@@ -32,6 +33,7 @@ pub use codex_app_server::{
     DEFAULT_FINAL_MESSAGE_MAX_BYTES,
 };
 pub use codex_bridge::run_codex_mcp_bridge;
+pub use codex_exec::normalize_event as normalize_codex_exec_event;
 pub use codex_lead::{CodexLeadBrain, CodexLeadConfig};
 pub use codex_team_driver::{CodexTeamDriverConfig, PersistedCodexTeamDriver};
 pub use dispatch::{dispatch, ToolOutcome};
