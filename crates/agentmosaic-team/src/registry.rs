@@ -401,10 +401,12 @@ mod tests {
             DriverKind::Acp,
             DriverKind::Cli,
             DriverKind::CodexAppServer,
+            DriverKind::CodexExec,
         ] {
             assert_eq!(DriverKind::restore(kind.as_str()), Some(kind));
         }
         assert_eq!(DriverKind::CodexAppServer.as_str(), "codex-app-server");
+        assert_eq!(DriverKind::CodexExec.as_str(), "codex-exec");
         assert_eq!(
             DriverKind::restore("codex-app-server"),
             Some(DriverKind::CodexAppServer)

@@ -282,6 +282,7 @@ impl DriverFactory {
             max_prompt_bytes: values.max_prompt_bytes,
             max_result_bytes: values.max_result_bytes,
             output_schema: None,
+            artifact_paths: options.artifact_paths.clone(),
             isolate: false,
         };
         let driver = PersistedCodexExecDriver::new(config, self.database.clone(), agent.clone())
@@ -699,12 +700,19 @@ mod tests {
             .build(&[
                 record(Some("acp"), Some(r#"{"timeout_seconds":1}"#)),
                 AgentRegistryRecord {
+                    id: "exec".into(),
+                    ..record(Some("codex-exec"), Some(r#"{"timeout_seconds":1}"#))
+                },
+                AgentRegistryRecord {
                     id: "lead".into(),
                     ..record(Some("codex-app-server"), Some(&codex_config))
                 },
             ])
             .unwrap();
-        assert_eq!(drivers.keys().collect::<Vec<_>>(), vec!["lead", "worker"]);
+        assert_eq!(
+            drivers.keys().collect::<Vec<_>>(),
+            vec!["exec", "lead", "worker"]
+        );
     }
 
     #[test]
@@ -771,6 +779,7 @@ mod tests {
                 Some(r#"{"artifact_paths":["nested/inside.txt"],"max_prompt_bytes":64}"#),
             ),
             record(Some("codex-app-server"), Some(r#"{"max_events":4000}"#)),
+            record(Some("codex-exec"), Some(r#"{"timeout_seconds":60}"#)),
             // A kind no automatic run drives, or none at all, is the readiness
             // probe's concern: only the config body is judged here.
             record(Some("native"), Some(r#"{"max_events":0}"#)),

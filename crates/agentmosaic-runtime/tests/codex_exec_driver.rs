@@ -57,6 +57,7 @@ async fn persists_thread_binding_and_normalized_events() {
             max_prompt_bytes: 1024,
             max_result_bytes: 1024,
             output_schema: None,
+            artifact_paths: Vec::new(),
             isolate: false,
         },
         database.clone(),

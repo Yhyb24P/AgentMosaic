@@ -1,16 +1,17 @@
 //! Scheduler-facing durable driver for `codex exec --json`.
 
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use agentmosaic_storage::{ExternalRuntimeBinding, SqliteTaskBoard};
 use agentmosaic_team::{
-    AgentDriver, AgentTask, AgentTaskResult, RuntimeEvent, RuntimeEventRecord, TaskBoard,
-    TaskStatus,
+    AgentDriver, AgentTask, AgentTaskResult, ArtifactMeta, RuntimeEvent, RuntimeEventRecord,
+    TaskBoard, TaskStatus,
 };
 use async_trait::async_trait;
 use rusqlite::Connection;
+use sha2::{Digest, Sha256};
 
 use crate::{
     run_codex_exec_invocation, CodexExecInvocation, NoopLiveRuntimeEventSink, RuntimeError,
@@ -26,6 +27,7 @@ pub struct CodexExecDriverConfig {
     pub max_prompt_bytes: usize,
     pub max_result_bytes: usize,
     pub output_schema: Option<String>,
+    pub artifact_paths: Vec<String>,
     /// Only opt in when the registered auth/model setup does not need config.
     pub isolate: bool,
 }
@@ -37,6 +39,20 @@ impl CodexExecDriverConfig {
         }
         if self.timeout.is_zero() || self.max_prompt_bytes == 0 || self.max_result_bytes == 0 {
             return Err("Codex exec bounds must be positive".into());
+        }
+        for relative in &self.artifact_paths {
+            let path = Path::new(relative);
+            if path.as_os_str().is_empty()
+                || path.is_absolute()
+                || path.components().any(|part| {
+                    matches!(
+                        part,
+                        Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                    )
+                })
+            {
+                return Err("Codex exec artifact paths must remain inside the repository".into());
+            }
         }
         Ok(())
     }
@@ -126,6 +142,27 @@ impl PersistedCodexExecDriver {
         prompt.chars().take(self.config.max_prompt_bytes).collect()
     }
 
+    fn collect_artifacts(&self) -> Result<Vec<ArtifactMeta>, String> {
+        self.config
+            .artifact_paths
+            .iter()
+            .map(|relative| {
+                let path = self.config.working_directory.join(relative);
+                if !std::fs::metadata(&path)
+                    .map_err(|error| error.to_string())?
+                    .is_file()
+                {
+                    return Err(format!("artifact is not a regular file: {relative}"));
+                }
+                let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+                Ok(ArtifactMeta {
+                    path: relative.clone(),
+                    sha256: format!("{:x}", Sha256::digest(bytes)),
+                })
+            })
+            .collect()
+    }
+
     fn run_blocking(&self, task: AgentTask) -> Result<AgentTaskResult, String> {
         let attempt = self.current_attempt(task.id)?;
         let existing = self
@@ -185,7 +222,7 @@ impl PersistedCodexExecDriver {
                 Ok(AgentTaskResult {
                     task_id: task.id,
                     summary: result.final_message,
-                    artifacts: Vec::new(),
+                    artifacts: self.collect_artifacts()?,
                     message: None,
                 })
             }
