@@ -5,7 +5,10 @@ use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc::{self, Receiver};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -13,6 +16,7 @@ use crate::LaunchSpec;
 
 /// Upper bound on notifications retained while a correlated request is pending.
 const EVENT_QUEUE_CAPACITY: usize = 256;
+const REQUEST_DEADLINE: Duration = Duration::from_secs(60);
 
 /// Bounded byte limit for a turn's extracted final visible agent message.
 pub const DEFAULT_FINAL_MESSAGE_MAX_BYTES: usize = 16 * 1024;
@@ -55,7 +59,8 @@ impl std::error::Error for CodexBridgeError {}
 pub struct CodexAppServer {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    stdout: Receiver<Result<String, String>>,
+    reader: Option<JoinHandle<()>>,
     next_id: u64,
     /// Notifications observed while a correlated request was pending. They are
     /// replayed by `next_event` so a racing `turn/completed` is never lost.
@@ -102,9 +107,30 @@ impl CodexAppServer {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| CodexBridgeError::Io(e.to_string()))?;
+        let stdout = child.stdout.take().ok_or(CodexBridgeError::Closed)?;
+        let (sender, receiver) = mpsc::sync_channel(EVENT_QUEUE_CAPACITY);
+        let reader = std::thread::spawn(move || {
+            let mut stdout = BufReader::new(stdout);
+            loop {
+                let mut line = String::new();
+                match stdout.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        if sender.send(Ok(line)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = sender.send(Err(error.to_string()));
+                        break;
+                    }
+                }
+            }
+        });
         Ok(Self {
             stdin: child.stdin.take().ok_or(CodexBridgeError::Closed)?,
-            stdout: BufReader::new(child.stdout.take().ok_or(CodexBridgeError::Closed)?),
+            stdout: receiver,
+            reader: Some(reader),
             child,
             next_id: 1,
             pending_events: VecDeque::new(),
@@ -333,6 +359,9 @@ impl CodexAppServer {
         self.child
             .wait()
             .map_err(|e| CodexBridgeError::Io(e.to_string()))?;
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
         Ok(())
     }
 
@@ -340,8 +369,9 @@ impl CodexAppServer {
         let id = self.next_id;
         self.next_id += 1;
         self.write_value(&json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))?;
+        let deadline = Instant::now() + REQUEST_DEADLINE;
         loop {
-            let value = self.read_value()?;
+            let value = self.read_value_until(deadline)?;
             if value.get("id") == Some(&json!(id)) {
                 return value.get("result").cloned().ok_or_else(|| {
                     CodexBridgeError::Protocol(format!("{method} returned no result"))
@@ -362,8 +392,9 @@ impl CodexAppServer {
         let id = self.next_id;
         self.next_id += 1;
         self.write_value(&json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))?;
+        let deadline = Instant::now() + REQUEST_DEADLINE;
         loop {
-            let value = self.read_value()?;
+            let value = self.read_value_until(deadline)?;
             if value.get("id") == Some(&json!(id)) {
                 if let Some(error) = value.get("error") {
                     return Err(CodexBridgeError::Protocol(format!(
@@ -399,15 +430,21 @@ impl CodexAppServer {
             .map_err(|e| CodexBridgeError::Io(e.to_string()))
     }
     fn read_value(&mut self) -> Result<Value, CodexBridgeError> {
-        let mut line = String::new();
-        if self
-            .stdout
-            .read_line(&mut line)
-            .map_err(|e| CodexBridgeError::Io(e.to_string()))?
-            == 0
-        {
-            return Err(CodexBridgeError::Closed);
-        }
+        self.read_value_until(Instant::now() + REQUEST_DEADLINE)
+    }
+
+    fn read_value_until(&mut self, deadline: Instant) -> Result<Value, CodexBridgeError> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let line = match self.stdout.recv_timeout(remaining) {
+            Ok(Ok(line)) => line,
+            Ok(Err(error)) => return Err(CodexBridgeError::Io(error)),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return Err(CodexBridgeError::Io(
+                    "Codex app-server request deadline exceeded".into(),
+                ))
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(CodexBridgeError::Closed),
+        };
         serde_json::from_str(&line)
             .map_err(|_| CodexBridgeError::Protocol("malformed JSON-RPC message".into()))
     }
