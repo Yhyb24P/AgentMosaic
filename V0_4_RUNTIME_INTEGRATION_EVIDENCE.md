@@ -55,7 +55,7 @@ diff_check=PASS (full workspace canonical gate after Codex exec work)
 | Qwen | `/home/yhshy/.npm-global/bin/qwen` | 0.23.3 | acp | v1 | pending | pending | pending | pending | installed version below research reference |
 | Kimi | `/home/yhshy/.local/bin/kimi` | 0.42.0 | acp | v1 | pending | pending | pending | pending | installed version below research reference |
 | OpenCode | `/home/yhshy/.opencode/bin/opencode` | 1.18.7 | acp | v1 | pending | pending | pending | pending | installed version below research reference |
-| Claude | `/home/yhshy/.local/bin/claude` | 2.1.268 | claude-cli | stream-json | pending | pending | pending | pending | exact local CLI contract to be probed |
+| Claude | `/home/yhshy/.local/bin/claude` | 2.1.268 | claude-cli | stream-json | PASS (2026-09-15 version/help probe) | pending | pending | pending | verified `--bare -p --output-format stream-json --verbose --include-partial-messages --json-schema --resume --permission-mode --permission-prompts none`; no live prompt sent |
 
 ## Heterogeneous E2E
 
