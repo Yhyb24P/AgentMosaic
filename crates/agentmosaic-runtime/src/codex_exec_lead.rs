@@ -108,7 +108,43 @@ impl CodexExecLeadBrain {
             .map_err(|error| LeadBrainError::Unavailable(error.to_string()))
     }
 
+    fn restore_binding(&mut self, root: u64) -> Result<(), LeadBrainError> {
+        if self.thread_id.is_some() {
+            return Ok(());
+        }
+        let (Some(database), Some(agent_id)) =
+            (&self.config.binding_database, &self.config.binding_agent_id)
+        else {
+            return Ok(());
+        };
+        let board = SqliteTaskBoard::open(
+            rusqlite::Connection::open(database)
+                .map_err(|error| LeadBrainError::Unavailable(error.to_string()))?,
+        )
+        .map_err(|error| LeadBrainError::Unavailable(error.to_string()))?;
+        let attempt = board
+            .attempts(root)
+            .map_err(|error| LeadBrainError::Unavailable(format!("{error:?}")))?
+            .into_iter()
+            .rev()
+            .find(|attempt| attempt.agent_id == *agent_id && attempt.status == TaskStatus::Running)
+            .ok_or_else(|| {
+                LeadBrainError::Unavailable(
+                    "root Lead attempt is not running before Codex exec resume".into(),
+                )
+            })?;
+        if let Some(binding) = board
+            .external_binding(root, attempt.attempt)
+            .map_err(|error| LeadBrainError::Unavailable(error.to_string()))?
+            .filter(|binding| binding.runtime_kind == "codex-exec")
+        {
+            self.thread_id = binding.native_thread_id;
+        }
+        Ok(())
+    }
+
     fn run_turn(&mut self, root: u64, prompt: &str) -> Result<String, LeadBrainError> {
+        self.restore_binding(root)?;
         let invocation = match &self.thread_id {
             Some(thread) => CodexExecInvocation::resume(
                 self.config.launch.clone(),
