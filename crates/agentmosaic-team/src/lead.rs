@@ -19,6 +19,7 @@ use crate::board::{
     AgentMessage, ArtifactMeta, BoardError, SelectedArtifactRef, TaskAttempt, TaskBoard, TaskStatus,
 };
 use crate::registry::{AgentTaskResult, TaskKind};
+use crate::run_event::{bounded_event_text, LeadPhase, RunEvent};
 use crate::scheduler::{ScheduleError, Scheduler, TaskSpec};
 
 /// The Lead's structured output boundary.
@@ -236,6 +237,14 @@ impl<B: TaskBoard + Send + 'static> Lead<B> {
                 return Err(LeadError::MaxRounds);
             }
             let ctx = self.build_context(objective, round)?;
+            // The one event allowed to be ephemeral: the round is about to
+            // start and nothing about it is durable until the decision has been
+            // acted on. It is emitted outside any board lock.
+            self.scheduler.sink().emit(&RunEvent::LeadRoundStarted {
+                root_task_id: root_id,
+                round,
+                phase: LeadPhase::for_round(round),
+            });
             match self.brain.decide(&ctx).await? {
                 LeadDecision::Delegate(specs) => {
                     self.extend_tasks(&specs, root_id).await?;
@@ -493,17 +502,11 @@ fn descendants_of<B: TaskBoard>(board: &B, root_id: u64) -> Result<Vec<u64>, Lea
     Ok(descendants)
 }
 
-/// Bound a diagnostic string to 512 bytes without splitting a UTF-8 character.
+/// Bound a diagnostic string without splitting a UTF-8 character. It is the
+/// same bound every run event carries (`run_event::bounded_event_text`), so the
+/// Lead's context text and the projection's text can never drift apart.
 fn bounded_error(text: &str) -> String {
-    const MAX: usize = 512;
-    if text.len() <= MAX {
-        return text.to_string();
-    }
-    let mut end = MAX;
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_string()
+    bounded_event_text(text)
 }
 
 /// Reconstruct the final team result from the durable board: the root task's

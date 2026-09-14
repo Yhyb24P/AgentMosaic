@@ -18,6 +18,11 @@
 //! a succeeded root's persisted result idempotently, and otherwise closes
 //! interrupted descendant attempts with the board's existing no-replay
 //! recovery primitive before continuing the Lead.
+//!
+//! A run may also report its lifecycle to an optional [`RunEventSink`]. The
+//! projection is notification only: the durable board stays the only truth, the
+//! default sink is the no-op, and every event is emitted after the mutation it
+//! reports is durable.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -25,9 +30,10 @@ use std::sync::Arc;
 
 use agentmosaic_storage::{AgentRegistryRecord, SqliteAgentRegistry, SqliteTaskBoard};
 use agentmosaic_team::{
-    reconstruct_team_result, AgentConfig, AgentDriver, AgentRegistry, AgentTier, BoardError,
-    DriverKind, Lead, LeadBrainError, LeadError, RegistryError, Scheduler, TaskAttempt, TaskBoard,
-    TaskKind, TaskStatus, TeamResult,
+    bounded_event_text, reconstruct_team_result, AgentConfig, AgentDriver, AgentRegistry,
+    AgentTier, BoardError, DriverKind, Lead, LeadBrainError, LeadError, NoopRunEventSink,
+    RegistryError, RunEvent, RunEventSink, Scheduler, TaskAttempt, TaskBoard, TaskKind, TaskStatus,
+    TeamResult,
 };
 use rusqlite::Connection;
 
@@ -189,6 +195,7 @@ pub struct TeamRunner {
     repo: PathBuf,
     options: TeamRunOptions,
     bridge_host: Option<LaunchSpec>,
+    sink: Arc<dyn RunEventSink>,
 }
 
 impl TeamRunner {
@@ -202,11 +209,21 @@ impl TeamRunner {
             repo: repo.into(),
             options,
             bridge_host: None,
+            sink: Arc::new(NoopRunEventSink),
         }
     }
 
     pub fn with_bridge_host(mut self, host: LaunchSpec) -> Self {
         self.bridge_host = Some(host);
+        self
+    }
+
+    /// Attach the presentation sink the whole run reports its lifecycle to. The
+    /// default is the no-op, so a runner without a sink behaves exactly as it
+    /// did before the projection existed. The sink is non-authoritative: the
+    /// durable board stays the only truth.
+    pub fn with_sink(mut self, sink: Arc<dyn RunEventSink>) -> Self {
+        self.sink = sink;
         self
     }
 
@@ -240,8 +257,14 @@ impl TeamRunner {
             error: None,
         })?;
         board.set_status(root, TaskStatus::Running)?;
+        // The root is durable and Running: the run can now be observed.
+        self.sink.emit(&RunEvent::RunStarted {
+            root_task_id: root,
+            lead_agent: lead.id.clone(),
+        });
 
-        let scheduler = Scheduler::new(registry, drivers, board, self.options.max_retries);
+        let scheduler = Scheduler::new(registry, drivers, board, self.options.max_retries)
+            .with_sink(Arc::clone(&self.sink));
         let mut lead_loop = Lead::new(
             Box::new(brain),
             scheduler,
@@ -301,7 +324,8 @@ impl TeamRunner {
         for descendant in descendants(&board, root_task_id)? {
             board.recover_interrupted_attempt(descendant)?;
         }
-        let scheduler = Scheduler::new(registry, drivers, board, self.options.max_retries);
+        let scheduler = Scheduler::new(registry, drivers, board, self.options.max_retries)
+            .with_sink(Arc::clone(&self.sink));
         let mut lead_loop = Lead::new(
             Box::new(brain),
             scheduler,
@@ -309,6 +333,9 @@ impl TeamRunner {
             self.options.max_tasks,
             lead.id.clone(),
         );
+        // Every interrupted descendant is closed and the Lead is about to
+        // continue from the durable state, so the resumed run is observable.
+        self.sink.emit(&RunEvent::RunResumed { root_task_id });
         self.drive(&mut lead_loop, root_task_id, &objective, &lead.id)
             .await
     }
@@ -323,18 +350,40 @@ impl TeamRunner {
         lead_id: &str,
     ) -> Result<TeamRunOutcome, TeamRunnerError> {
         match lead_loop.run_on_root(root, objective).await {
-            Ok(result) => Ok(TeamRunOutcome {
-                root_task_id: root,
-                lead_agent: lead_id.to_string(),
-                result,
-            }),
-            Err(error) => match self.settle_root_failed(root, lead_id, &lead_error_text(&error)) {
-                Ok(()) => Err(TeamRunnerError::Lead(error)),
-                Err(settle) => Err(TeamRunnerError::LeadAndSettleFailed {
-                    cause: lead_error_text(&error),
-                    settle: settle.to_string(),
-                }),
-            },
+            Ok(result) => {
+                // The Lead persisted the final answer, the exact refs, and the
+                // root's succeeded status before returning.
+                self.sink.emit(&RunEvent::RunCompleted {
+                    root_task_id: root,
+                    selected_task_ids: result.task_refs.clone(),
+                    artifact_count: result.artifact_refs.len(),
+                });
+                Ok(TeamRunOutcome {
+                    root_task_id: root,
+                    lead_agent: lead_id.to_string(),
+                    result,
+                })
+            }
+            Err(error) => {
+                let cause = lead_error_text(&error);
+                let settled = self.settle_root_failed(root, lead_id, &cause);
+                let failure = match settled {
+                    Ok(()) => TeamRunnerError::Lead(error),
+                    Err(settle) => TeamRunnerError::LeadAndSettleFailed {
+                        cause: cause.clone(),
+                        settle: settle.to_string(),
+                    },
+                };
+                // Emitted only after the settle attempt has run, so a reported
+                // failure never leaves the root observable as Running. This is
+                // reached only from inside `drive`, where a root exists; a
+                // pre-root configuration failure emits no run event at all.
+                self.sink.emit(&RunEvent::RunFailed {
+                    root_task_id: root,
+                    error: bounded_event_text(&cause),
+                });
+                Err(failure)
+            }
         }
     }
 
