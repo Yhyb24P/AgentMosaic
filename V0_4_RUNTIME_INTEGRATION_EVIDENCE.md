@@ -28,8 +28,8 @@ role_runtime_decoupled=PASS (LeadBrainFactory; unsupported Lead runtimes fail be
 generic_acp=PASS (typed ACP v1 adapter; exact running-attempt binding; capability-gated resume; normalized durable events; deny-by-default permissions)
 absolute_deadline=IN_PROGRESS
 process_tree_cleanup=IN_PROGRESS
-codex_exec_runtime=IN_PROGRESS
-codex_exec_lead=IN_PROGRESS
+codex_exec_runtime=PARTIAL (durable driver, JSONL normalization, bounded process group, thread binding, resume argv, and deterministic scheduler test)
+codex_exec_lead=PARTIAL (strict shared decision contract, one same-thread repair via exec resume, and deterministic fixtures; root binding persistence remains)
 claude_cli_runtime=IN_PROGRESS
 claude_cli_lead=IN_PROGRESS
 cli_observability=IN_PROGRESS
@@ -40,15 +40,11 @@ recovery_no_replay=IN_PROGRESS
 ## Deterministic tests
 
 ```text
-fmt=PASS (G3 full gate)
-clippy=PASS (G3 full gate)
-test=PASS (G3 full gate)
-test_discovered=465
-test_passed=448
-test_failed=0
-test_ignored=17
-release_build=PASS (G3 full gate)
-diff_check=PASS (G3 full gate)
+fmt=PASS (full workspace canonical gate after Codex exec work)
+clippy=PASS (full workspace canonical gate after Codex exec work)
+test=PASS (full workspace canonical gate after Codex exec work; authenticated live cases intentionally ignored)
+release_build=PASS (full workspace canonical gate after Codex exec work)
+diff_check=PASS (full workspace canonical gate after Codex exec work)
 ```
 
 ## Runtime matrix
