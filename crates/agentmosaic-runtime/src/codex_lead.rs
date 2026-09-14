@@ -1,4 +1,4 @@
-//! The resident Codex Lead brain.
+//! Compatibility/experimental resident Codex app-server Lead brain.
 //!
 //! One Lead objective is one Codex thread. The brain spawns the local
 //! `codex app-server` once, starts a single `read-only` / `never` thread whose

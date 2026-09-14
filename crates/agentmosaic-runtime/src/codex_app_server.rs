@@ -1,4 +1,5 @@
-//! Minimal stdio JSON-RPC transport for the locally probed Codex app-server.
+//! Compatibility/experimental stdio JSON-RPC transport for the locally probed
+//! Codex app-server.
 //! Native IDs stay external; callers persist them through the team board.
 
 use std::collections::VecDeque;

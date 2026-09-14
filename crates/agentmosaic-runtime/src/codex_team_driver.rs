@@ -1,4 +1,4 @@
-//! Scheduler-facing bounded Codex app-server driver.
+//! Compatibility/experimental scheduler-facing bounded Codex app-server driver.
 //!
 //! The scheduler owns canonical task/attempt state. This driver binds only an
 //! external Codex thread/turn to that existing attempt and returns a normal
