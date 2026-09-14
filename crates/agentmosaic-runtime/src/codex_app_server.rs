@@ -61,6 +61,7 @@ pub struct CodexAppServer {
     stdin: ChildStdin,
     stdout: Receiver<Result<String, String>>,
     reader: Option<JoinHandle<()>>,
+    request_timeout: Duration,
     next_id: u64,
     /// Notifications observed while a correlated request was pending. They are
     /// replayed by `next_event` so a racing `turn/completed` is never lost.
@@ -91,6 +92,19 @@ impl CodexAppServer {
         launch: LaunchSpec,
         overrides: &[String],
     ) -> Result<Self, CodexBridgeError> {
+        Self::spawn_launch_with_timeout(launch, overrides, REQUEST_DEADLINE)
+    }
+
+    pub fn spawn_launch_with_timeout(
+        launch: LaunchSpec,
+        overrides: &[String],
+        request_timeout: Duration,
+    ) -> Result<Self, CodexBridgeError> {
+        if request_timeout.is_zero() {
+            return Err(CodexBridgeError::Io(
+                "Codex request deadline must be positive".into(),
+            ));
+        }
         let mut command = Command::new(&launch.program);
         command.args(&launch.args);
         command.args(["app-server", "--stdio"]);
@@ -131,6 +145,7 @@ impl CodexAppServer {
             stdin: child.stdin.take().ok_or(CodexBridgeError::Closed)?,
             stdout: receiver,
             reader: Some(reader),
+            request_timeout,
             child,
             next_id: 1,
             pending_events: VecDeque::new(),
@@ -369,7 +384,7 @@ impl CodexAppServer {
         let id = self.next_id;
         self.next_id += 1;
         self.write_value(&json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))?;
-        let deadline = Instant::now() + REQUEST_DEADLINE;
+        let deadline = Instant::now() + self.request_timeout;
         loop {
             let value = self.read_value_until(deadline)?;
             if value.get("id") == Some(&json!(id)) {
@@ -392,7 +407,7 @@ impl CodexAppServer {
         let id = self.next_id;
         self.next_id += 1;
         self.write_value(&json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))?;
-        let deadline = Instant::now() + REQUEST_DEADLINE;
+        let deadline = Instant::now() + self.request_timeout;
         loop {
             let value = self.read_value_until(deadline)?;
             if value.get("id") == Some(&json!(id)) {
@@ -430,7 +445,7 @@ impl CodexAppServer {
             .map_err(|e| CodexBridgeError::Io(e.to_string()))
     }
     fn read_value(&mut self) -> Result<Value, CodexBridgeError> {
-        self.read_value_until(Instant::now() + REQUEST_DEADLINE)
+        self.read_value_until(Instant::now() + self.request_timeout)
     }
 
     fn read_value_until(&mut self, deadline: Instant) -> Result<Value, CodexBridgeError> {

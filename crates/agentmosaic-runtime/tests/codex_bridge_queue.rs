@@ -4,7 +4,11 @@
 //! the correlated `thread/read` response. On the old drop-notifications code
 //! that event was lost; the queue must replay it.
 
-use agentmosaic_runtime::{CodexAppServer, CodexBridgeEvent, DEFAULT_FINAL_MESSAGE_MAX_BYTES};
+use std::time::Duration;
+
+use agentmosaic_runtime::{
+    CodexAppServer, CodexBridgeError, CodexBridgeEvent, LaunchSpec, DEFAULT_FINAL_MESSAGE_MAX_BYTES,
+};
 
 const MOCK: &str = env!("CARGO_BIN_EXE_codex_bridge_mock");
 
@@ -31,5 +35,18 @@ fn notification_racing_a_pending_request_is_queued_and_replayed() {
         other => panic!("expected queued TurnCompleted, got {other:?}"),
     }
 
+    client.close().unwrap();
+}
+
+#[test]
+fn silent_peer_fails_at_the_absolute_request_deadline() {
+    let mut client = CodexAppServer::spawn_launch_with_timeout(
+        LaunchSpec::new(MOCK, Vec::new()).unwrap(),
+        &["codex_bridge_mock.silent=true".into()],
+        Duration::from_millis(100),
+    )
+    .unwrap();
+    let error = client.initialize("test", "0").unwrap_err();
+    assert!(matches!(error, CodexBridgeError::Io(message) if message.contains("deadline")));
     client.close().unwrap();
 }
