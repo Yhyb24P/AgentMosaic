@@ -8,8 +8,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use agentmosaic_runtime::{
-    validate_driver_config, validate_lead_config, AcpWorkerConfig, AcpWorkerDriver, CodexAppServer,
-    LaunchSpec,
+    validate_driver_config, validate_lead_config, validate_registry_row, AcpWorkerConfig,
+    AcpWorkerDriver, CodexAppServer, LaunchSpec,
 };
 use agentmosaic_storage::{AgentRegistryRecord, SqliteAgentRegistry};
 
@@ -101,17 +101,20 @@ fn resolved_lead(agents: &[AgentRegistryRecord]) -> Option<&str> {
 /// The configuration problem a run would hit for this Agent, as the validator
 /// itself states it, or None when a run's own configuration checks accept it.
 ///
-/// The Lead's effective configuration is validated the way the run builds it,
-/// and every Agent's driver config is validated the way the run parses it. Both
-/// validators construct nothing and start no process.
+/// The checks run in the order a run builds them — every registry row, then
+/// every driver, then the Lead's brain — so the operator sees the same first
+/// failure a run would report. All of them construct nothing and start no
+/// process.
 fn configuration_problem(
     agent: &AgentRegistryRecord,
     root: &Path,
     lead: Option<&str>,
 ) -> Option<String> {
-    // A run builds every Agent's driver before it builds the Lead's brain, so
-    // the driver rules are read first: an operator sees the same failure the
-    // run would report, in the run's own order.
+    // A run builds the routing registry from the rows before it builds any
+    // driver or the Lead's brain, so the row's own rules come first.
+    if let Err(detail) = validate_registry_row(agent) {
+        return Some(detail);
+    }
     if let Err(detail) = validate_driver_config(agent) {
         return Some(detail);
     }

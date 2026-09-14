@@ -137,6 +137,10 @@ impl std::fmt::Display for TeamRunnerError {
                     f,
                     "no agent is registered for the {tier:?} tier; a team run needs at least one reasoner and one worker; utility agents are optional"
                 ),
+                RegistryError::ZeroConcurrency(agent) => write!(
+                    f,
+                    "agent `{agent}` has a max-concurrency of zero; every registered Agent needs a positive concurrency"
+                ),
                 other => write!(f, "the agent registry is not runnable: {other:?}"),
             },
             Self::LeadSelection(detail) => write!(f, "the team lead could not be resolved: {detail}"),
@@ -519,6 +523,24 @@ pub fn validate_lead_config(
     lead_config(record, repo).map_err(|error| error.to_string())
 }
 
+/// Judge one registry row the way a run's registry construction does, without
+/// spawning anything: the tier, the JSON string-array fields, and the
+/// concurrency rule the registry enforces.
+///
+/// This reuses the run's own construction ([`agent_config`]) and the run's own
+/// error type, so a readiness verdict and a run cannot drift apart in wording or
+/// in which row they refuse.
+pub fn validate_registry_row(record: &AgentRegistryRecord) -> Result<(), String> {
+    let config = agent_config(record).map_err(|error| error.to_string())?;
+    if config.max_concurrency == 0 {
+        return Err(
+            TeamRunnerError::Registry(RegistryError::ZeroConcurrency(record.id.clone()))
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 /// Build the validated routing registry from the durable rows.
 fn agent_registry(records: &[AgentRegistryRecord]) -> Result<AgentRegistry, TeamRunnerError> {
     let configs = records
@@ -805,5 +827,48 @@ mod tests {
         assert!(validate_lead_config(&record("lead", "reasoner"), &missing)
             .unwrap_err()
             .contains("working directory must exist"));
+    }
+
+    /// One registry row is judged by the run's own construction, so the verdict
+    /// and the wording come from the code a run calls rather than a copy of it.
+    #[test]
+    fn a_registry_row_is_judged_the_way_a_run_builds_it() {
+        assert_eq!(validate_registry_row(&record("worker", "worker")), Ok(()));
+        // An absent concurrency defaults to 1, which the registry accepts.
+        let defaulted = AgentRegistryRecord {
+            max_concurrency: None,
+            ..record("worker", "worker")
+        };
+        assert_eq!(validate_registry_row(&defaulted), Ok(()));
+
+        // An unknown tier is the run's own construction error, verbatim.
+        let unknown_tier = record("ghost", "wizard");
+        assert_eq!(
+            validate_registry_row(&unknown_tier).unwrap_err(),
+            agent_config(&unknown_tier).unwrap_err().to_string()
+        );
+
+        // A malformed JSON string-array field, likewise.
+        let malformed = AgentRegistryRecord {
+            tags_json: Some("not json".into()),
+            ..record("worker", "worker")
+        };
+        let detail = validate_registry_row(&malformed).unwrap_err();
+        assert_eq!(detail, agent_config(&malformed).unwrap_err().to_string());
+        assert!(detail.contains("expected a JSON string array"), "{detail}");
+
+        // Zero concurrency is refused by the registry, and the message is the
+        // run's own error type formatted, so doctor and run are identical by
+        // construction.
+        let zero = AgentRegistryRecord {
+            max_concurrency: Some(0),
+            ..record("worker", "worker")
+        };
+        let error = validate_registry_row(&zero).unwrap_err();
+        assert_eq!(
+            error,
+            TeamRunnerError::Registry(RegistryError::ZeroConcurrency("worker".into())).to_string()
+        );
+        assert!(error.contains("max-concurrency of zero"), "{error}");
     }
 }

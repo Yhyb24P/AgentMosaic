@@ -19,6 +19,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
 
+use rusqlite::Connection;
+
 fn cli() -> Command {
     Command::new(env!("CARGO_BIN_EXE_am"))
 }
@@ -141,6 +143,20 @@ fn register(
         stdout(&output),
         stderr(&output)
     );
+}
+
+/// Rewrite one persisted registry column directly, bypassing every validation
+/// surface. Neither `am agent add` nor `register` can persist these rows, so a
+/// hand edit is the only way to reach the breach a run would then refuse.
+fn edit_registry(project: &Path, id: &str, column: &str, value: impl rusqlite::ToSql) {
+    let connection = Connection::open(database_of(project)).unwrap();
+    let changed = connection
+        .execute(
+            &format!("UPDATE agent_registry SET {column} = ?1 WHERE id = ?2"),
+            rusqlite::params![value, id],
+        )
+        .unwrap();
+    assert_eq!(changed, 1, "no registry row `{id}` to edit");
 }
 
 /// The bounded reason a report or a failure block states, as one line.
@@ -289,6 +305,102 @@ fn a_zero_event_budget_is_not_ready_for_doctor_either() {
         reason_line(&stderr(&run)).as_deref(),
         reason_line(&report).as_deref(),
         "doctor and run disagree about the configuration"
+    );
+    assert_parity(&doctor, &run);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A zero concurrency can only be persisted by hand, but it is still the same
+/// class of breach: the run's registry refuses the row before any root exists,
+/// so doctor has to refuse it too.
+#[test]
+fn a_zero_concurrency_row_is_a_doctor_verdict_too() {
+    let root = refused_lead("zero_concurrency", "{}");
+    edit_registry(&root, "worker", "max_concurrency", 0);
+
+    let doctor = run_cli_in(&root, &["doctor"]);
+    assert!(
+        !doctor.status.success(),
+        "doctor accepted a registry row the run refuses:\n{}",
+        stdout(&doctor)
+    );
+    assert!(
+        stdout(&doctor).is_empty(),
+        "the report belongs on stderr:\n{}",
+        stdout(&doctor)
+    );
+    let report = stderr(&doctor);
+    assert!(report.contains("worker    not ready"), "{report}");
+    assert!(
+        report.contains("max-concurrency of zero"),
+        "the report does not name the registry problem:\n{report}"
+    );
+
+    let run = run_cli_in(&root, &["run", "probe objective"]);
+    assert!(!run.status.success(), "the run cannot start");
+    assert_eq!(stdout(&run), "", "a failed run wrote to stdout");
+    let failure = stderr(&run);
+    assert!(
+        failure.contains("Run could not start.\n\nReason\n  "),
+        "{failure}"
+    );
+    assert!(
+        failure.contains("max-concurrency of zero"),
+        "the pre-root failure does not carry the real reason:\n{failure}"
+    );
+
+    assert_eq!(
+        reason_line(&failure).as_deref(),
+        reason_line(&report).as_deref(),
+        "doctor and run disagree about the registry row"
+    );
+    assert_parity(&doctor, &run);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A `tags_json` body that is not a JSON string array is refused by the run's
+/// row construction, which happens before any driver or root exists. Doctor has
+/// to reach the same verdict through the same construction.
+#[test]
+fn a_malformed_tags_row_is_a_doctor_verdict_too() {
+    let root = refused_lead("malformed_tags", "{}");
+    edit_registry(&root, "worker", "tags_json", "not json");
+
+    let doctor = run_cli_in(&root, &["doctor"]);
+    assert!(
+        !doctor.status.success(),
+        "doctor accepted a registry row the run refuses:\n{}",
+        stdout(&doctor)
+    );
+    assert!(
+        stdout(&doctor).is_empty(),
+        "the report belongs on stderr:\n{}",
+        stdout(&doctor)
+    );
+    let report = stderr(&doctor);
+    assert!(report.contains("worker    not ready"), "{report}");
+    assert!(
+        report.contains("expected a JSON string array"),
+        "the report does not name the registry problem:\n{report}"
+    );
+
+    let run = run_cli_in(&root, &["run", "probe objective"]);
+    assert!(!run.status.success(), "the run cannot start");
+    assert_eq!(stdout(&run), "", "a failed run wrote to stdout");
+    let failure = stderr(&run);
+    assert!(
+        failure.contains("Run could not start.\n\nReason\n  "),
+        "{failure}"
+    );
+    assert!(
+        failure.contains("expected a JSON string array"),
+        "the pre-root failure does not carry the real reason:\n{failure}"
+    );
+
+    assert_eq!(
+        reason_line(&failure).as_deref(),
+        reason_line(&report).as_deref(),
+        "doctor and run disagree about the registry row"
     );
     assert_parity(&doctor, &run);
     let _ = fs::remove_dir_all(root);
