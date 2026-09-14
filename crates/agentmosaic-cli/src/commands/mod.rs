@@ -51,7 +51,11 @@ pub fn dispatch(command: Command) -> Result<Option<String>, String> {
             AgentCommand::Remove { id } => agent::remove(&id)?,
         },
         Command::Doctor { verbose } => doctor::run(verbose)?,
-        Command::Run { objective } => run::run(&objective)?,
+        Command::Run {
+            quiet,
+            json,
+            objective,
+        } => run::run(&objective, quiet, json)?,
         Command::Status { target, all } => inspect::status(target, all)?,
         Command::Final { target, root } => inspect::final_result(target, root)?,
         Command::Artifact { target, task } => inspect::artifact(target, task)?,

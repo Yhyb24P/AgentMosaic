@@ -145,8 +145,8 @@ impl std::fmt::Display for TeamRunnerError {
             }
             Self::Driver(error) => write!(f, "{error}"),
             Self::LeadBrain(error) => write!(f, "{error}"),
-            Self::Lead(error) => write!(f, "the lead run failed: {error:?}"),
-            Self::Board(error) => write!(f, "a task board operation failed: {error:?}"),
+            Self::Lead(error) => write!(f, "the lead run failed: {error}"),
+            Self::Board(error) => write!(f, "a task board operation failed: {error}"),
             Self::UnknownRoot(root) => write!(f, "no task {root} exists to resume"),
             Self::RootNotReasoning { root, kind } => write!(
                 f,
@@ -615,10 +615,10 @@ fn bounded(text: &str, max_bytes: usize) -> String {
     text[..end].to_string()
 }
 
-/// The Lead loop's error is a typed enum without a `Display`; render it for the
-/// durable failure row and the diagnostic message.
+/// The Lead loop's failure as the text the durable failure row and the failure
+/// event carry.
 fn lead_error_text(error: &LeadError) -> String {
-    format!("{error:?}")
+    error.to_string()
 }
 
 #[cfg(test)]

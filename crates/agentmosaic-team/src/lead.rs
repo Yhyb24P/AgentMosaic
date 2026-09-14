@@ -121,6 +121,36 @@ pub enum LeadError {
     CompletionNotGrounded,
 }
 
+/// The Lead's failure as a sentence a person can act on, rather than as the
+/// enum's structure: the durable failure row and every user-facing surface
+/// carry this text.
+impl std::fmt::Display for LeadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Schedule(ScheduleError::Board(error)) => {
+                write!(f, "the lead could not schedule its work: {error}")
+            }
+            Self::Schedule(ScheduleError::JoinFailed) => {
+                write!(f, "a scheduled task did not finish cleanly")
+            }
+            Self::Board(error) => write!(f, "a task board operation failed: {error}"),
+            Self::Brain(error) => write!(f, "{error}"),
+            Self::MaxRounds => write!(f, "the lead reached its round limit without a final answer"),
+            Self::TooManyTasks => {
+                write!(f, "the lead reached its task limit without a final answer")
+            }
+            Self::FollowUpWithoutResult => write!(
+                f,
+                "the lead asked for a follow-up before any worker result existed"
+            ),
+            Self::CompletionNotGrounded => write!(
+                f,
+                "the lead completed without grounding the answer in completed tasks"
+            ),
+        }
+    }
+}
+
 impl From<ScheduleError> for LeadError {
     fn from(e: ScheduleError) -> Self {
         Self::Schedule(e)

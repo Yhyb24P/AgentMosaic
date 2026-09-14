@@ -7,6 +7,7 @@ mod args;
 mod commands;
 mod output;
 mod project;
+mod render;
 mod target;
 
 use clap::Parser;

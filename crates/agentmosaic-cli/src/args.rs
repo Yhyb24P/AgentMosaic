@@ -51,6 +51,12 @@ pub enum Command {
     },
     /// Give one objective to the team
     Run {
+        /// Do not print routine progress or the next-step footer
+        #[arg(long)]
+        quiet: bool,
+        /// Print only the answer, with no human text on any stream
+        #[arg(long)]
+        json: bool,
         /// The objective, as one or more words
         #[arg(value_name = "OBJECTIVE", trailing_var_arg = true)]
         objective: Vec<String>,
