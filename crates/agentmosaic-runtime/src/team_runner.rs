@@ -247,6 +247,7 @@ impl TeamRunner {
             scheduler,
             self.options.max_rounds,
             self.options.max_tasks,
+            lead.id.clone(),
         );
         self.drive(&mut lead_loop, root, objective, &lead.id).await
     }
@@ -306,6 +307,7 @@ impl TeamRunner {
             scheduler,
             self.options.max_rounds,
             self.options.max_tasks,
+            lead.id.clone(),
         );
         self.drive(&mut lead_loop, root_task_id, &objective, &lead.id)
             .await

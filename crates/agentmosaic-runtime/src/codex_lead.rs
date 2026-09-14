@@ -786,6 +786,25 @@ mod tests {
     }
 
     #[test]
+    fn single_task_delegate_reply_is_accepted() {
+        let brain = brain();
+        let decision = brain
+            .parse_reply(
+                r#"{"action":"delegate","tasks":[{"kind":"bulk","target":"worker-a","objective":"scrape"}]}"#,
+            )
+            .expect("one delegated task is the contract's lower bound");
+        match decision {
+            agentmosaic_team::LeadDecision::Delegate(specs) => {
+                assert_eq!(specs.len(), 1);
+                assert_eq!(specs[0].objective, "scrape");
+                assert_eq!(specs[0].kind, agentmosaic_team::TaskKind::Bulk);
+                assert_eq!(specs[0].target.as_deref(), Some("worker-a"));
+            }
+            other => panic!("expected delegate, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn every_contract_violation_is_rejected() {
         let brain = brain();
         let cases = [

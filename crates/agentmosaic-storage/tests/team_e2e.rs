@@ -253,7 +253,7 @@ async fn heterogeneous_team_end_to_end() {
         let board = SqliteTaskBoard::open(conn).expect("open board");
         let drivers = build_drivers(in_flight.clone(), peak.clone(), summarize_calls.clone());
         let sched = Scheduler::new(build_registry(), drivers, board, 2);
-        let mut lead = Lead::new(Box::new(E2eBrain), sched, 5, 10);
+        let mut lead = Lead::new(Box::new(E2eBrain), sched, 5, 10, "reasoner-a");
         let result = lead
             .run("analyze the dataset")
             .await
