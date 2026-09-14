@@ -1,0 +1,66 @@
+# Real terminal demo — am 0.2.1 | real Codex Lead + real ACP/Qwen worker (utility=0)
+#
+# This transcript was assembled ONLY from the capture files recorded during the
+# single successful run above. Command outputs are verbatim; nothing was
+# retyped, re-entered, or spliced from another run.
+#
+# Capture source directory: /tmp/agentmosaic-v021-fresh.R5N9NH
+#   demo-*.txt files written by the original launcher as the run finished
+#   demo-success/ the clean dedicated repo the run executed in
+#
+- - - [1] am --version
+am 0.2.1
+(fresh GitHub-release install; re-verified 2026-09-14 against the same binary)
+
+- - - [2] Objective passed to "am run" (run-variant objective text)
+Delegate the implementation to the worker. In your first round, delegate exactly two tasks, both explicitly targeted at agent id worker: (1) a bulk task to read input.txt and create result.txt containing one line per unique token, sorted lexicographically, in the form "<token> <count>"; and (2) a utility task to inspect result.txt, verify it is exactly alpha 1, beta 2, gamma 1 on separate lines, and report the verification. Do not modify input.txt. Then review both worker results and summarize what was produced. Select the bulk task and its result.txt artifact in your completion.
+
+- - - [3] am doctor
+project   READY /tmp/agentmosaic-v021-fresh.R5N9NH/demo-success
+state     READY schema=11
+lead      codex-app-server    PROGRAM_FOUND LAUNCHSPEC_VALID SPAWN_OK PROTOCOL_OK SESSION_OK READY
+worker      acp    PROGRAM_FOUND LAUNCHSPEC_VALID SPAWN_OK PROTOCOL_OK SESSION_OK READY
+team      READY reasoner=1 worker=1 utility=0
+
+- - - [4] am run "<objective>" — raw stdout
+root=1 lead=lead
+answer: Reviewed both worker results: result.txt was created and independently verified to contain exactly three sorted lines:
+alpha 1
+beta 2
+gamma 1
+input.txt was unchanged.
+task_refs: 2
+artifact_refs: task=2 path=result.txt sha256=4297addc01e4f608b07fc9e71c6e8bb9ba836a12019da73bc219d97dd44a95d6
+
+- - - [5] tail of the run: "git diff -- result.txt" (captured; empty)
+(empty: result.txt was still untracked at capture time)
+
+- - - [6] result.txt (worker artifact, kept as-is)
+alpha 1
+beta 2
+gamma 1
+
+- - - [7] sha256sum result.txt
+4297addc01e4f608b07fc9e71c6e8bb9ba836a12019da73bc219d97dd44a95d6  result.txt
+
+- - - [8] am status .agentmosaic/state.db
+task=1 status=succeeded assignee=lead attempts=1 parent=- objective=Delegate the implementation to the worker. In your first round, delegate exactly two tasks, both explicitly targeted at agent id worker: (1) a bulk task to read input.txt and create result.txt containing one line per unique token, sorted lexicographically, in the form "<token> <count>"; and (2) a utility task to inspect result.txt, verify it is exactly alpha 1, beta 2, gamma 1 on separate lines, and report the verification. Do not modify input.txt. Then review both worker results and summarize what was produced. Select the bulk task and its result.txt artifact in your completion.
+task=2 status=succeeded assignee=worker attempts=1 parent=1 objective=Read input.txt and create result.txt containing one line per unique token, sorted lexicographically, in the form "<token> <count>". Do not modify input.txt. Report the output and result.txt artifact with its SHA-256 digest.
+task=3 status=succeeded assignee=worker attempts=1 parent=1 objective=After the bulk task creates result.txt, inspect result.txt and verify it contains exactly "alpha 1", "beta 2", and "gamma 1" on separate lines, in that order. Report the verification. Do not modify input.txt or result.txt.
+
+- - - [9] am final .agentmosaic/state.db 1
+Reviewed both worker results: result.txt was created and independently verified to contain exactly three sorted lines:
+alpha 1
+beta 2
+gamma 1
+input.txt was unchanged.
+
+- - - [10] am artifact .agentmosaic/state.db 2
+task=2 path=result.txt sha256=4297addc01e4f608b07fc9e71c6e8bb9ba836a12019da73bc219d97dd44a95d6
+
+- - - [11] recording timestamp
+2026-09-14T02:29:27Z
+
+# Replay verification (2026-09-14): "am status", "am final 1" and
+# "am artifact 2" re-run against .agentmosaic/state.db all exited 0 with
+# byte-identical output to sections [8]-[10].

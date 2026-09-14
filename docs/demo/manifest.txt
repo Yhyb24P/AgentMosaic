@@ -1,0 +1,30 @@
+# AgentMosaic real demo run — manifest
+# Facts recorded from the one successful run; raw captures in transcript.txt.
+
+agentmosaic_repo=Yhyb24P/AgentMosaic
+am_binary_version=am 0.2.1
+am_binary_source=cargo-dist GitHub release (owner Yhyb24P, project AgentMosaic)
+agentmosaic_release_tag=v0.2.1
+release_note=v0.2.1: Reasoner + Worker is a valid runnable team; Utility is optional; Utility tasks fall back to Worker when no Utility agent is registered; am doctor validates the same minimum-team contract as am run
+
+demo_repo=/tmp/agentmosaic-v021-fresh.R5N9NH/demo-success (clean scratch repo, single commit "demo baseline", identity AgentMosaic Demo <demo@example.invalid>)
+input_sha256=b884d3d51e68ee1906c5fd54c8ab3c3acd5b327aefdc5589f8dc1f1096629391
+input_note=input.txt unchanged for the whole run (git tri-state: only result.txt and .gitignore untracked)
+
+team=reasoner=1 worker=1 utility=0
+lead=lead | role=reasoner | adapter=codex-app-server | program=codex | doctor READY
+worker=worker | role=worker | adapter=acp | program=qwen args=--acp | doctor READY
+
+tasks=root:1 | bulk:2 (task kind bulk) | verify:3 (task kind utility, fell back to worker tier)
+task_status=all 3 succeeded, attempts=1 each
+result_path=result.txt
+result_content="alpha 1 / beta 2 / gamma 1 (3 lines, no other lines or whitespace)"
+result_sha256=4297addc01e4f608b07fc9e71c6e8bb9ba836a12019da73bc219d97dd44a95d6
+artifact_record=task=2 path=result.txt sha256=4297addc01e4f608b07fc9e71c6e8bb9ba836a12019da73bc219d97dd44a95d6
+durable_final=root task 1 final result persisted in .agentmosaic/state.db (retrieved via "am final", re-played byte-identically on 2026-09-14)
+state_db=.agentmosaic/state.db (deliberally NOT committed in this repo)
+run_completed=2026-09-14T02:29:27Z
+evidence_source_directory=/tmp/agentmosaic-v021-fresh.R5N9NH (demo-*.txt launcher captures; demo-success/ run repo)
+secrets=none present in demo repo, demo state, or this evidence set
+video=none (no terminal recording existed of the run; no re-enactment or splicing will be produced)
+REAL_TERMINAL_DEMO=NOT_READY
