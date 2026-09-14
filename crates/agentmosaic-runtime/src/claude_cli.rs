@@ -21,67 +21,83 @@ pub fn normalize_stream_event(value: &Value) -> Result<Vec<RuntimeEvent>, Runtim
                 .into(),
         ));
     }
-    let event =
-        match kind {
-            "assistant" => value
-                .pointer("/message/content")
-                .and_then(Value::as_array)
-                .and_then(|content| {
-                    content.iter().find_map(|block| {
-                        match block.get("type").and_then(Value::as_str) {
-                            Some("text") => block.get("text").and_then(Value::as_str).map(|text| {
-                                RuntimeEvent::AssistantMessageCompleted { text: text.into() }
-                            }),
-                            Some("tool_use") => block.get("id").and_then(Value::as_str).map(|id| {
-                                RuntimeEvent::ToolCallStarted {
-                                    native_call_id: id.into(),
-                                    tool: block
-                                        .get("name")
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("tool")
-                                        .into(),
-                                    input_summary: "tool started".into(),
-                                }
-                            }),
-                            _ => None,
+    if kind == "result" {
+        let mut events = Vec::new();
+        if let Some(id) = value.get("session_id").and_then(Value::as_str) {
+            events.push(RuntimeEvent::SessionStarted {
+                native_session_id: id.into(),
+            });
+        }
+        if value.get("usage").is_some() || value.get("total_cost_usd").is_some() {
+            events.push(RuntimeEvent::UsageUpdated {
+                input_tokens: value.pointer("/usage/input_tokens").and_then(Value::as_u64),
+                cached_input_tokens: value
+                    .pointer("/usage/cache_read_input_tokens")
+                    .and_then(Value::as_u64),
+                output_tokens: value
+                    .pointer("/usage/output_tokens")
+                    .and_then(Value::as_u64),
+                reasoning_tokens: None,
+                estimated_cost_usd: value.get("total_cost_usd").and_then(Value::as_f64),
+            });
+        }
+        return Ok(events);
+    }
+    let event = match kind {
+        "assistant" => value
+            .pointer("/message/content")
+            .and_then(Value::as_array)
+            .and_then(|content| {
+                content
+                    .iter()
+                    .find_map(|block| match block.get("type").and_then(Value::as_str) {
+                        Some("text") => block.get("text").and_then(Value::as_str).map(|text| {
+                            RuntimeEvent::AssistantMessageCompleted { text: text.into() }
+                        }),
+                        Some("tool_use") => block.get("id").and_then(Value::as_str).map(|id| {
+                            RuntimeEvent::ToolCallStarted {
+                                native_call_id: id.into(),
+                                tool: block
+                                    .get("name")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("tool")
+                                    .into(),
+                                input_summary: "tool started".into(),
+                            }
+                        }),
+                        _ => None,
+                    })
+            }),
+        "user" => value
+            .pointer("/message/content")
+            .and_then(Value::as_array)
+            .and_then(|content| {
+                content.iter().find_map(|block| {
+                    (block.get("type").and_then(Value::as_str) == Some("tool_result")).then(|| {
+                        RuntimeEvent::ToolCallCompleted {
+                            native_call_id: block
+                                .get("tool_use_id")
+                                .and_then(Value::as_str)
+                                .unwrap_or("unknown")
+                                .into(),
+                            tool: "tool".into(),
+                            ok: !block
+                                .get("is_error")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                            output_summary: "tool completed".into(),
                         }
                     })
-                }),
-            "user" => value
-                .pointer("/message/content")
-                .and_then(Value::as_array)
-                .and_then(|content| {
-                    content.iter().find_map(|block| {
-                        (block.get("type").and_then(Value::as_str) == Some("tool_result")).then(
-                            || RuntimeEvent::ToolCallCompleted {
-                                native_call_id: block
-                                    .get("tool_use_id")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("unknown")
-                                    .into(),
-                                tool: "tool".into(),
-                                ok: !block
-                                    .get("is_error")
-                                    .and_then(Value::as_bool)
-                                    .unwrap_or(false),
-                                output_summary: "tool completed".into(),
-                            },
-                        )
-                    })
-                }),
-            "result" => value.get("session_id").and_then(Value::as_str).map(|id| {
-                RuntimeEvent::SessionStarted {
-                    native_session_id: id.into(),
-                }
+                })
             }),
-            "system" if value.get("subtype").and_then(Value::as_str) == Some("init") => value
-                .get("session_id")
-                .and_then(Value::as_str)
-                .map(|id| RuntimeEvent::SessionStarted {
-                    native_session_id: id.into(),
-                }),
-            _ => None,
-        };
+        "system" if value.get("subtype").and_then(Value::as_str) == Some("init") => value
+            .get("session_id")
+            .and_then(Value::as_str)
+            .map(|id| RuntimeEvent::SessionStarted {
+                native_session_id: id.into(),
+            }),
+        _ => None,
+    };
     Ok(event.into_iter().collect())
 }
 
