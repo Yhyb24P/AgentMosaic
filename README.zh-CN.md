@@ -47,15 +47,15 @@ am doctor
 am run "implement the task, verify it, and summarize the result"
 ```
 
-`am init` 在 `.agentmosaic/state.db` 创建项目本地持久化状态，并把它排除在版本控制之外。
-在项目内任意目录下，`am run` 都能发现这份状态。
+`am init` 创建项目本地持久化状态，并把它排除在版本控制之外。在项目内任意目录下，
+任何 `am` 命令都能发现这份状态。
 
 `--` 之后的全部内容是不透明的 launch argv。AgentMosaic 只存储并原样执行，从不解释
 launcher 专有参数，凭据也不应写在这里。
 
-`am doctor` 在不做任何认证的前提下检查项目、团队与 runtime 的就绪状态；只要注册的
-`reasoner` 不是恰好一个，它就会报告 `LEAD_SELECTION_AMBIGUOUS_OR_MISSING`。`am run`
-需要这个唯一的 Lead 才能启动。
+`am doctor` 在不做任何认证的前提下检查项目、团队与 runtime 的就绪状态，并给出一个
+结论：`Ready to run.`，或者一段 `Reason` 加 `Fix`。`am run` 需要恰好一个注册为
+`reasoner` 的 Lead 才能启动。`am doctor --verbose` 会额外打印每个 Agent 的有界诊断阶段。
 
 ### 可选：增加一个 utility worker
 
@@ -66,11 +66,16 @@ utility Agent 的注册方式相同，用于有边界的工具型工作。它是
 am agent add utility --role utility --adapter acp -- <program> --acp
 ```
 
-本地 launcher 保留自己的 argv，例如：
+本地 launcher 保留自己的 argv，但注册给 `codex-app-server` 的启动命令，必须在
+AgentMosaic 追加 `app-server --stdio` 之后依然有效。命名 Codex profile 目前并不是可移植的
+app-server 配置方式；请改用 app-server 能接受的 `-c` 覆盖，或用一个展开成这些覆盖的
+wrapper。单独一个 `codex` 就是有效的 launcher：
 
 ```bash
-am agent add lead-ds --role reasoner --adapter codex-app-server -- codex -ds
+am agent add lead --role reasoner --adapter codex-app-server -- codex
 ```
+
+当真实运行触达默认上限时，`am agent add --max-events N` 可以调高单轮 Codex 事件预算。
 
 ## 为什么需要 AgentMosaic？
 
@@ -152,13 +157,18 @@ runtime 都可以承担这个角色。
 - 检查类命令不会启动 runtime。
 
 ```bash
-am status .agentmosaic/state.db
-am final .agentmosaic/state.db <root-task-id>
-am tui .agentmosaic/state.db
+am status          # 本项目最近一次运行，逐任务列出
+am status --all    # 本项目全部运行，最新在前
+am final           # 持久化的最终答复
+am artifact        # 记录的 artifact 路径与哈希
+am tui             # 实时只读团队面板；q 退出
 ```
 
-其余能力由 `am registry`、`am artifact`、`am binding`、`am recover`、`am recover-all`
-和 `am resume-team` 覆盖，见[恢复](docs/recovery.md)。
+检查类命令不需要数据库路径：每条命令都会自己找到本项目的持久化状态。加 `--json`
+可让 stdout 只输出一个 JSON 对象。
+
+`am advanced` 列出兼容与底层命令，它们保留原有拼写；`am agent remove <id>` 删除一个
+Agent。另见[恢复](docs/recovery.md)与 [CLI 参考](docs/cli.md)。
 
 ## 文档
 

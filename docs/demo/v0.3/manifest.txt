@@ -1,0 +1,65 @@
+# AgentMosaic v0.3.0 — real demo run manifest
+# Facts recorded from the one successful run; raw captures in transcript.txt.
+
+agentmosaic_repo=Yhyb24P/AgentMosaic
+candidate_commit=ce35677ca559bf4a2c655aec428ab4af09c89755
+candidate_commit_note=the v0.3.0 software is this candidate; the version bump and tag are TASK09
+am_binary_version=am 0.2.1
+am_binary_version_note=the binary reports the pre-bump workspace version; the v0.3 CLI behaviour is what this run exercised
+am_binary_sha256=f722465a7ff5e7de62330bdb4c6f422f95e61fa5251ea62ad5e1b7edd1ff360d
+am_binary_source=built from the candidate commit: cargo build --release -p agentmosaic-cli (target/release/am)
+codex_version=codex-cli 0.154.0
+qwen_version=0.23.3
+lead=lead | role=reasoner | adapter=codex-app-server | program=codex | doctor READY
+lead_argv=-c model_provider=brain -c model=qwen38 -c model_catalog_json=$HOME/.codex/brain-catalog.json -c model_reasoning_effort=xhigh
+lead_driver_config={"max_events":4000}
+worker=worker | role=worker | adapter=acp | program=qwen args=--acp | doctor READY
+worker_driver_config={"artifact_paths":["result.txt"]}
+team=reasoner=1 worker=1 utility=0
+objective=Read input.txt and create result.txt with the count of each token, sorted alphabetically. Verify the file, do not modify input.txt, and summarize the result.
+run_id=1
+run_exit=0
+tasks=root:1 (reasoning) | delegated:2 (bulk, target=worker) — the Lead chose a single delegated task
+task_status=all 2 succeeded, attempts=1 each
+result_path=result.txt
+result_content="alpha 1 / beta 2 / gamma 1 (3 lines, no other lines or whitespace)"
+result_sha256=4297addc01e4f608b07fc9e71c6e8bb9ba836a12019da73bc219d97dd44a95d6
+result_sha256_note=identical to the v0.2.1 reference demo artifact, from an independent run on a different model backend
+input_path=input.txt
+input_content="beta / alpha / beta / gamma (4 lines)"
+input_sha256=b884d3d51e68ee1906c5fd54c8ab3c3acd5b327aefdc5589f8dc1f1096629391
+input_note=input.txt unchanged for the whole run (identical SHA-256 before and after)
+artifact_record=task=2 path=result.txt sha256=4297addc01e4f608b07fc9e71c6e8bb9ba836a12019da73bc219d97dd44a95d6
+durable_final=root task 1 final result persisted in .agentmosaic/state.db (retrieved via "am final")
+state_db=.agentmosaic/state.db (deliberately NOT committed in this repo)
+run_completed=2026-09-14T12:02:07Z
+evidence_source_directory=<demo-temp>/captures (per-command capture files)
+
+# Documented deviations from the task book's literal forms (all with evidence):
+deviation_1_lead_launcher=the local `codex -qw` shim CANNOT serve as the Lead: `codex app-server` rejects --profile (see transcript section 8)
+deviation_1_evidence=Error: --profile only applies to runtime commands and `codex mcp`: ... (codex-cli 0.154.0, exit 1)
+deviation_1_resolution=the same local profile (model qwen38, provider brain, xhigh reasoning effort) is expressed with -c overrides that `codex app-server` accepts
+deviation_2_event_budget=the Lead's bounded per-turn event budget is 200 by default, which an xhigh-effort local model exceeded (observed failure: "the codex lead turn did not complete within 200 events")
+deviation_2_resolution=the budget is persisted driver config (max_events=4000); at the time of this run `am agent add` did not expose it, so the Lead was registered through the compatibility `register` spelling, transparently and recorded above
+deviation_2_status=CLOSED BEFORE RELEASE: `am agent add --max-events N` is now a first-class, validated option, so the normal path can express this configuration without the compatibility spelling. This record is left as the historical fact of the run.
+deviation_3_artifact_paths=the ACP worker records the artifacts it is configured to report; artifact_paths=["result.txt"] was configured at registration (no automatic changed-file discovery is implied or claimed)
+secrets=none present in the demo repo, demo state, or this evidence set
+video=none (no terminal recording was produced; a video is optional for v0.3.0 and is not the release gate)
+
+# Expected representation, and why byte equality is NOT a cross-run gate.
+# The objective is natural, so it fixes the semantics ("the count of each token,
+# sorted alphabetically") but not the exact rendering. This run produced one
+# line per token as "<token> <count>"; a later release rehearsal of the same
+# objective produced "<token>: <count>", which satisfies the same sentence.
+# A byte-reproducible run must state the representation in the objective, for
+# example: "one line per token in exactly this form: <token> <count>".
+# The digest below is a fact of THIS run, not an acceptance criterion another
+# run has to reproduce.
+result_representation_one_line_per_token=<token> <count>
+result_representation_is_a_cross_run_gate=no
+
+evidence_class=pre-release-candidate
+evidence_class_note=recorded against candidate commit and a binary whose version string is still the pre-bump workspace version; the canonical public v0.3.0 record is produced after publishing, from a fresh install
+
+REAL_RUN_EVIDENCE=READY
+PUBLIC_VIDEO=NOT_RECORDED

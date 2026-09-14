@@ -50,15 +50,16 @@ am doctor
 am run "implement the task, verify it, and summarize the result"
 ```
 
-`am init` creates project-local durable state at `.agentmosaic/state.db` and keeps it out
-of version control. `am run` discovers that state from anywhere inside the project.
+`am init` creates project-local durable state and keeps it out of version control. Every
+`am` command discovers that state from anywhere inside the project.
 
 Everything after `--` is opaque launch argv. AgentMosaic stores it and executes it
 exactly; it never interprets launcher-specific flags, and credentials never belong there.
 
-`am doctor` checks project, team and runtime readiness without authenticating anything,
-and reports `LEAD_SELECTION_AMBIGUOUS_OR_MISSING` unless exactly one `reasoner` is
-registered. `am run` needs that single Lead to start.
+`am doctor` checks project, team and runtime readiness without authenticating anything and
+returns one decision: `Ready to run.`, or a `Reason` with the `Fix`. A run needs exactly
+one `reasoner` registered as the Lead. `am doctor --verbose` adds the bounded per-Agent
+diagnostic stages.
 
 ### Optional: add a utility worker
 
@@ -70,11 +71,18 @@ When no Utility is registered, utility work falls back to the Worker tier:
 am agent add utility --role utility --adapter acp -- <program> --acp
 ```
 
-A local launcher keeps its own argv, for example:
+A local launcher keeps its own argv, but the launch command registered for
+`codex-app-server` must remain valid when AgentMosaic appends `app-server --stdio`. Named
+Codex profiles are not currently a portable app-server configuration mechanism; use
+app-server-compatible `-c` overrides, or a wrapper that expands to them. `codex` on its
+own is a valid launcher:
 
 ```bash
-am agent add lead-ds --role reasoner --adapter codex-app-server -- codex -ds
+am agent add lead --role reasoner --adapter codex-app-server -- codex
 ```
+
+`am agent add --max-events N` raises the per-turn Codex event budget when a real run has
+hit the default bound.
 
 ## Why AgentMosaic?
 
@@ -160,13 +168,19 @@ role.
 - Inspection commands never start a runtime.
 
 ```bash
-am status .agentmosaic/state.db
-am final .agentmosaic/state.db <root-task-id>
-am tui .agentmosaic/state.db
+am status          # this project's current run, task by task
+am status --all    # every run of this project, newest first
+am final           # the durable final answer
+am artifact        # recorded artifact paths and hashes
+am tui             # live read-only team board; q exits
 ```
 
-`am registry`, `am artifact`, `am binding`, `am recover`, `am recover-all` and
-`am resume-team` cover the rest; see [Recovery](docs/recovery.md).
+Inspection needs no database path: each command finds this project's durable state
+itself. Add `--json` to get exactly one JSON object on stdout.
+
+`am advanced` lists the compatibility and low-level commands, which keep their old
+spellings; `am agent remove <id>` removes one Agent. See [Recovery](docs/recovery.md) and
+the [CLI reference](docs/cli.md).
 
 ## Documentation
 

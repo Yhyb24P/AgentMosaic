@@ -10,6 +10,7 @@ mod acc;
 mod board;
 mod lead;
 mod registry;
+mod run_event;
 mod scheduler;
 
 #[cfg(test)]
@@ -27,5 +28,8 @@ pub use lead::{
 pub use registry::{
     AgentConfig, AgentDriver, AgentRegistry, AgentTask, AgentTaskResult, AgentTier, DriverKind,
     RegistryError, TaskKind,
+};
+pub use run_event::{
+    bounded_event_text, LeadPhase, NoopRunEventSink, RunEvent, RunEventSink, MAX_EVENT_TEXT_BYTES,
 };
 pub use scheduler::{ScheduleError, ScheduledResult, Scheduler, TaskSpec};

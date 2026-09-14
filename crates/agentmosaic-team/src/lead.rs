@@ -1,6 +1,6 @@
 //! The Lead plan-follow-up-synthesis loop.
 //!
-//! The Lead plans (delegating at least two structured subtasks), follows up
+//! The Lead plans (delegating one or more structured subtasks), follows up
 //! on worker results, and synthesizes a final answer grounded in the actual
 //! results of completed tasks. It is bounded by a maximum number of rounds,
 //! tasks, and (via the scheduler) attempts, so it cannot loop without bound.
@@ -19,6 +19,7 @@ use crate::board::{
     AgentMessage, ArtifactMeta, BoardError, SelectedArtifactRef, TaskAttempt, TaskBoard, TaskStatus,
 };
 use crate::registry::{AgentTaskResult, TaskKind};
+use crate::run_event::{bounded_event_text, LeadPhase, RunEvent};
 use crate::scheduler::{ScheduleError, Scheduler, TaskSpec};
 
 /// The Lead's structured output boundary.
@@ -114,12 +115,40 @@ pub enum LeadError {
     MaxRounds,
     /// The maximum number of tasks was exceeded.
     TooManyTasks,
-    /// The first round must delegate at least two subtasks.
-    InvalidFirstDecision,
     /// A follow-up was requested before any worker result existed.
     FollowUpWithoutResult,
     /// The final result does not reference completed tasks.
     CompletionNotGrounded,
+}
+
+/// The Lead's failure as a sentence a person can act on, rather than as the
+/// enum's structure: the durable failure row and every user-facing surface
+/// carry this text.
+impl std::fmt::Display for LeadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Schedule(ScheduleError::Board(error)) => {
+                write!(f, "the lead could not schedule its work: {error}")
+            }
+            Self::Schedule(ScheduleError::JoinFailed) => {
+                write!(f, "a scheduled task did not finish cleanly")
+            }
+            Self::Board(error) => write!(f, "a task board operation failed: {error}"),
+            Self::Brain(error) => write!(f, "{error}"),
+            Self::MaxRounds => write!(f, "the lead reached its round limit without a final answer"),
+            Self::TooManyTasks => {
+                write!(f, "the lead reached its task limit without a final answer")
+            }
+            Self::FollowUpWithoutResult => write!(
+                f,
+                "the lead asked for a follow-up before any worker result existed"
+            ),
+            Self::CompletionNotGrounded => write!(
+                f,
+                "the lead completed without grounding the answer in completed tasks"
+            ),
+        }
+    }
 }
 
 impl From<ScheduleError> for LeadError {
@@ -148,23 +177,29 @@ pub struct Lead<B: TaskBoard + Send + 'static> {
     scheduler: Scheduler<B>,
     max_rounds: u32,
     max_tasks: usize,
+    /// The agent id that addresses this Lead: the id directed messages are
+    /// read from and the id persisted on the root's settling attempt.
+    lead_agent: String,
     task_ids: Vec<u64>,
     root_id: Option<u64>,
 }
 
 impl<B: TaskBoard + Send + 'static> Lead<B> {
     /// Build a Lead. The scheduler's `max_retries` is the per-task attempt cap.
+    /// `lead_agent` is the Lead's own registry id, which is configurable.
     pub fn new(
         brain: Box<dyn LeadBrain>,
         scheduler: Scheduler<B>,
         max_rounds: u32,
         max_tasks: usize,
+        lead_agent: impl Into<String>,
     ) -> Self {
         Self {
             brain,
             scheduler,
             max_rounds,
             max_tasks,
+            lead_agent: lead_agent.into(),
             task_ids: Vec::new(),
             root_id: None,
         }
@@ -232,11 +267,16 @@ impl<B: TaskBoard + Send + 'static> Lead<B> {
                 return Err(LeadError::MaxRounds);
             }
             let ctx = self.build_context(objective, round)?;
+            // The one event allowed to be ephemeral: the round is about to
+            // start and nothing about it is durable until the decision has been
+            // acted on. It is emitted outside any board lock.
+            self.scheduler.sink().emit(&RunEvent::LeadRoundStarted {
+                root_task_id: root_id,
+                round,
+                phase: LeadPhase::for_round(round),
+            });
             match self.brain.decide(&ctx).await? {
                 LeadDecision::Delegate(specs) => {
-                    if round == 0 && specs.len() < 2 {
-                        return Err(LeadError::InvalidFirstDecision);
-                    }
                     self.extend_tasks(&specs, root_id).await?;
                     round += 1;
                 }
@@ -316,7 +356,9 @@ impl<B: TaskBoard + Send + 'static> Lead<B> {
                 artifacts.extend(arts);
             }
         }
-        let messages = board.messages_to("lead").map_err(LeadError::Board)?;
+        let messages = board
+            .messages_to(&self.lead_agent)
+            .map_err(LeadError::Board)?;
         let candidates = self
             .scheduler
             .registry()
@@ -424,7 +466,7 @@ impl<B: TaskBoard + Send + 'static> Lead<B> {
         let attempt = TaskAttempt {
             task_id: root_id,
             attempt: 1,
-            agent_id: "lead".into(),
+            agent_id: self.lead_agent.clone(),
             status: TaskStatus::Succeeded,
             result: Some(result.answer.clone()),
             error: None,
@@ -490,17 +532,11 @@ fn descendants_of<B: TaskBoard>(board: &B, root_id: u64) -> Result<Vec<u64>, Lea
     Ok(descendants)
 }
 
-/// Bound a diagnostic string to 512 bytes without splitting a UTF-8 character.
+/// Bound a diagnostic string without splitting a UTF-8 character. It is the
+/// same bound every run event carries (`run_event::bounded_event_text`), so the
+/// Lead's context text and the projection's text can never drift apart.
 fn bounded_error(text: &str) -> String {
-    const MAX: usize = 512;
-    if text.len() <= MAX {
-        return text.to_string();
-    }
-    let mut end = MAX;
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_string()
+    bounded_event_text(text)
 }
 
 /// Reconstruct the final team result from the durable board: the root task's
@@ -533,7 +569,7 @@ mod tests {
 
     use async_trait::async_trait;
 
-    use crate::board::{TaskAttempt, TaskBoard, TaskStatus};
+    use crate::board::{AgentMessage, TaskAttempt, TaskBoard, TaskStatus};
     use crate::lead::{
         reconstruct_team_result, Lead, LeadBrain, LeadBrainError, LeadContext, LeadDecision,
         LeadError, TeamResult,
@@ -604,7 +640,7 @@ mod tests {
             ("reasoner-a".to_string(), ok_driver("refined insight")),
         ]);
         let sched = Scheduler::new(trio_registry(), drivers, MemBoard::default(), 1);
-        Lead::new(Box::new(ScriptedBrain), sched, 5, 10)
+        Lead::new(Box::new(ScriptedBrain), sched, 5, 10, "lead")
     }
 
     fn full_drivers() -> BTreeMap<String, Arc<dyn crate::registry::AgentDriver>> {
@@ -616,8 +652,8 @@ mod tests {
         ])
     }
 
-    // T03/T07/T08/T10/T16: the Lead delegates >=2 tasks, follows up on a
-    // result, and synthesizes an answer grounded in the actual results.
+    // T03/T07/T08/T10/T16: this scripted Lead delegates two tasks, follows up
+    // on a result, and synthesizes an answer grounded in the actual results.
     #[tokio::test]
     async fn lead_delegates_follows_up_and_synthesizes() {
         let mut lead = lead();
@@ -648,27 +684,53 @@ mod tests {
         assert_eq!(reconstructed.task_refs, result.task_refs);
     }
 
-    // The first round must delegate at least two subtasks.
-    #[tokio::test]
-    async fn first_round_requires_two_subtasks() {
-        struct OneTaskBrain;
-        #[async_trait]
-        impl LeadBrain for OneTaskBrain {
-            async fn decide(&mut self, _ctx: &LeadContext) -> Result<LeadDecision, LeadBrainError> {
-                Ok(LeadDecision::Delegate(vec![TaskSpec {
+    /// A brain that delegates exactly one subtask in the first round, then
+    /// completes from that result.
+    struct OneTaskBrain;
+
+    #[async_trait]
+    impl LeadBrain for OneTaskBrain {
+        async fn decide(&mut self, ctx: &LeadContext) -> Result<LeadDecision, LeadBrainError> {
+            Ok(match ctx.round {
+                0 => LeadDecision::Delegate(vec![TaskSpec {
                     objective: "only one".into(),
                     kind: TaskKind::Bulk,
                     target: Some("worker-a".into()),
                     parent: None,
                     context: Vec::new(),
-                }]))
-            }
+                }]),
+                _ => LeadDecision::Complete(TeamResult {
+                    answer: ctx
+                        .results
+                        .iter()
+                        .map(|(_, result)| result.summary.clone())
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                    task_refs: ctx.results.iter().map(|(id, _)| *id).collect(),
+                    artifact_refs: Vec::new(),
+                }),
+            })
         }
-        let drivers = BTreeMap::from([("worker-a".to_string(), ok_driver("ok"))]);
+    }
+
+    // The first round may delegate a single subtask: the contract's lower bound
+    // is one task, not two. The run must still reach a durable, grounded final
+    // result.
+    #[tokio::test]
+    async fn first_round_accepts_a_single_subtask() {
+        let drivers = BTreeMap::from([("worker-a".to_string(), ok_driver("only result"))]);
         let sched = Scheduler::new(trio_registry(), drivers, MemBoard::default(), 1);
-        let mut lead = Lead::new(Box::new(OneTaskBrain), sched, 5, 10);
-        let err = lead.run("x").await.expect_err("one subtask is rejected");
-        assert!(matches!(err, LeadError::InvalidFirstDecision));
+        let mut lead = Lead::new(Box::new(OneTaskBrain), sched, 5, 10, "lead");
+        let result = lead.run("x").await.expect("one subtask is accepted");
+        assert_eq!(lead.task_ids().len(), 1);
+        assert_eq!(result.task_refs, lead.task_ids());
+        assert_eq!(result.answer, "only result");
+        // The returned result is the durable one, not just an in-memory value.
+        let root_id = lead.root_task_id().expect("root task");
+        let board = lead.scheduler.board().lock().unwrap();
+        let reconstructed = reconstruct_team_result(&*board, root_id).expect("reconstruct");
+        assert_eq!(reconstructed.answer, result.answer);
+        assert_eq!(reconstructed.task_refs, result.task_refs);
     }
 
     // A completion that references no completed task is rejected.
@@ -687,7 +749,7 @@ mod tests {
         }
         let drivers = BTreeMap::from([("worker-a".to_string(), err_driver("down"))]);
         let sched = Scheduler::new(trio_registry(), drivers, MemBoard::default(), 1);
-        let mut lead = Lead::new(Box::new(UngroundedBrain), sched, 5, 10);
+        let mut lead = Lead::new(Box::new(UngroundedBrain), sched, 5, 10, "lead");
         let err = lead.run("x").await.expect_err("ungrounded");
         assert!(matches!(err, LeadError::CompletionNotGrounded));
     }
@@ -710,7 +772,7 @@ mod tests {
     async fn brain_error_propagates_and_root_is_not_succeeded() {
         let drivers = BTreeMap::from([("worker-a".to_string(), ok_driver("ok"))]);
         let sched = Scheduler::new(trio_registry(), drivers, MemBoard::default(), 1);
-        let mut lead = Lead::new(Box::new(UnavailableBrain), sched, 5, 10);
+        let mut lead = Lead::new(Box::new(UnavailableBrain), sched, 5, 10, "lead");
         let err = lead.run("x").await.expect_err("brain error propagates");
         assert!(matches!(
             err,
@@ -754,7 +816,7 @@ mod tests {
             ("utility-a".to_string(), ok_driver("u")),
         ]);
         let sched = Scheduler::new(trio_registry(), drivers, MemBoard::default(), 1);
-        let mut lead = Lead::new(Box::new(AlwaysDelegateBrain), sched, 1, 10);
+        let mut lead = Lead::new(Box::new(AlwaysDelegateBrain), sched, 1, 10, "lead");
         let err = lead.run("x").await.expect_err("round cap");
         assert!(matches!(err, LeadError::MaxRounds));
     }
@@ -796,7 +858,7 @@ mod tests {
     #[tokio::test]
     async fn delegate_hostile_parent_is_contained_by_root() {
         let sched = Scheduler::new(trio_registry(), full_drivers(), MemBoard::default(), 1);
-        let mut lead = Lead::new(Box::new(HostileDelegateBrain), sched, 5, 10);
+        let mut lead = Lead::new(Box::new(HostileDelegateBrain), sched, 5, 10, "lead");
         lead.run("x").await.expect("completes");
         let root_id = lead.root_task_id().expect("root");
         let task_ids = lead.task_ids().to_vec();
@@ -850,7 +912,7 @@ mod tests {
     #[tokio::test]
     async fn followup_hostile_parent_is_contained_by_root() {
         let sched = Scheduler::new(trio_registry(), full_drivers(), MemBoard::default(), 1);
-        let mut lead = Lead::new(Box::new(HostileFollowUpBrain), sched, 5, 10);
+        let mut lead = Lead::new(Box::new(HostileFollowUpBrain), sched, 5, 10, "lead");
         lead.run("x").await.expect("completes");
         let root_id = lead.root_task_id().expect("root");
         let task_ids = lead.task_ids().to_vec();
@@ -920,7 +982,13 @@ mod tests {
             .unwrap();
         board.set_status(rogue, TaskStatus::Succeeded).unwrap();
         let sched = Scheduler::new(trio_registry(), full_drivers(), board, 1);
-        let mut lead = Lead::new(Box::new(RogueSelectingBrain { rogue }), sched, 5, 10);
+        let mut lead = Lead::new(
+            Box::new(RogueSelectingBrain { rogue }),
+            sched,
+            5,
+            10,
+            "lead",
+        );
         let err = lead.run("x").await.expect_err("non-descendant rejected");
         assert!(matches!(err, LeadError::CompletionNotGrounded));
     }
@@ -960,7 +1028,7 @@ mod tests {
     #[tokio::test]
     async fn completion_selecting_root_is_rejected() {
         let sched = Scheduler::new(trio_registry(), full_drivers(), MemBoard::default(), 1);
-        let mut lead = Lead::new(Box::new(RootSelectingBrain), sched, 5, 10);
+        let mut lead = Lead::new(Box::new(RootSelectingBrain), sched, 5, 10, "lead");
         let err = lead.run("x").await.expect_err("root rejected");
         assert!(matches!(err, LeadError::CompletionNotGrounded));
     }
@@ -986,7 +1054,7 @@ mod tests {
             .unwrap();
         board.set_status(root_id, TaskStatus::Running).unwrap();
         let sched = Scheduler::new(trio_registry(), full_drivers(), board, 1);
-        let mut lead = Lead::new(Box::new(ScriptedBrain), sched, 5, 10);
+        let mut lead = Lead::new(Box::new(ScriptedBrain), sched, 5, 10, "lead");
         let result = lead
             .run_on_root(root_id, "analyze")
             .await
@@ -1047,7 +1115,7 @@ mod tests {
     async fn run_on_root_seeds_existing_descendants() {
         let (board, root_id, child_id) = resumed_board();
         let sched = Scheduler::new(trio_registry(), full_drivers(), board, 1);
-        let mut lead = Lead::new(Box::new(ScriptedBrain), sched, 5, 4);
+        let mut lead = Lead::new(Box::new(ScriptedBrain), sched, 5, 4, "lead");
         let result = lead
             .run_on_root(root_id, "analyze")
             .await
@@ -1068,7 +1136,7 @@ mod tests {
         let sched = Scheduler::new(trio_registry(), full_drivers(), board, 1);
         // Without the seeded child this budget would be enough for the
         // delegate (2) and the follow-up (1).
-        let mut lead = Lead::new(Box::new(ScriptedBrain), sched, 5, 3);
+        let mut lead = Lead::new(Box::new(ScriptedBrain), sched, 5, 3, "lead");
         let err = lead
             .run_on_root(root_id, "analyze")
             .await
@@ -1120,6 +1188,7 @@ mod tests {
             sched,
             5,
             10,
+            "lead",
         );
         lead.run("x").await.expect("completes");
         let captured = seen.lock().unwrap().clone();
@@ -1181,11 +1250,93 @@ mod tests {
             sched,
             5,
             10,
+            "lead",
         );
         lead.run("x").await.expect("completes");
         let captured = seen.lock().unwrap().clone();
         assert_eq!(captured.len(), 1);
         assert_eq!(captured[0].0, lead.task_ids()[1]);
         assert_eq!(captured[0].1, "worker-a is down");
+    }
+
+    /// A brain that captures the directed messages it was handed, then
+    /// delegates one task and completes from its result.
+    struct MessageCapturingBrain {
+        seen: Arc<Mutex<Vec<AgentMessage>>>,
+    }
+
+    #[async_trait]
+    impl LeadBrain for MessageCapturingBrain {
+        async fn decide(&mut self, ctx: &LeadContext) -> Result<LeadDecision, LeadBrainError> {
+            *self.seen.lock().unwrap() = ctx.messages.clone();
+            Ok(match ctx.round {
+                0 => LeadDecision::Delegate(vec![TaskSpec {
+                    objective: "b".into(),
+                    kind: TaskKind::Bulk,
+                    target: Some("worker-a".into()),
+                    parent: None,
+                    context: Vec::new(),
+                }]),
+                _ => LeadDecision::Complete(TeamResult {
+                    answer: "done".into(),
+                    task_refs: ctx.results.iter().map(|(id, _)| *id).collect(),
+                    artifact_refs: Vec::new(),
+                }),
+            })
+        }
+    }
+
+    // Directed messages follow the configured Lead id, not the literal "lead".
+    #[tokio::test]
+    async fn directed_messages_follow_the_configured_lead_id() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mut board = MemBoard::default();
+        board
+            .record_message(&AgentMessage {
+                from_agent: "worker-a".into(),
+                to_agent: "reasoner-a".into(),
+                body: "addressed to the reasoner".into(),
+            })
+            .unwrap();
+        board
+            .record_message(&AgentMessage {
+                from_agent: "worker-a".into(),
+                to_agent: "lead".into(),
+                body: "decoy for the literal id".into(),
+            })
+            .unwrap();
+        let sched = Scheduler::new(trio_registry(), full_drivers(), board, 1);
+        let mut lead = Lead::new(
+            Box::new(MessageCapturingBrain { seen: seen.clone() }),
+            sched,
+            5,
+            10,
+            "reasoner-a",
+        );
+        lead.run("x").await.expect("completes");
+        let captured = seen.lock().unwrap().clone();
+        let bodies: Vec<&str> = captured.iter().map(|m| m.body.as_str()).collect();
+        assert!(
+            bodies.contains(&"addressed to the reasoner"),
+            "{captured:?}"
+        );
+        assert!(
+            !bodies.contains(&"decoy for the literal id"),
+            "{captured:?}"
+        );
+    }
+
+    // `run` persists the resolved Lead id on the root's settling attempt row.
+    #[tokio::test]
+    async fn final_attempt_records_the_resolved_lead_id() {
+        let sched = Scheduler::new(trio_registry(), full_drivers(), MemBoard::default(), 1);
+        let mut lead = Lead::new(Box::new(ScriptedBrain), sched, 5, 10, "reasoner-a");
+        lead.run("x").await.expect("completes");
+        let root_id = lead.root_task_id().expect("root");
+        let board = lead.scheduler.board().lock().unwrap();
+        let attempts = board.attempts(root_id).unwrap();
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].agent_id, "reasoner-a");
+        assert_eq!(attempts[0].status, TaskStatus::Succeeded);
     }
 }

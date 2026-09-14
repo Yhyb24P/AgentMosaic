@@ -18,16 +18,22 @@
 //! a succeeded root's persisted result idempotently, and otherwise closes
 //! interrupted descendant attempts with the board's existing no-replay
 //! recovery primitive before continuing the Lead.
+//!
+//! A run may also report its lifecycle to an optional [`RunEventSink`]. The
+//! projection is notification only: the durable board stays the only truth, the
+//! default sink is the no-op, and every event is emitted after the mutation it
+//! reports is durable.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use agentmosaic_storage::{AgentRegistryRecord, SqliteAgentRegistry, SqliteTaskBoard};
 use agentmosaic_team::{
-    reconstruct_team_result, AgentConfig, AgentDriver, AgentRegistry, AgentTier, BoardError,
-    DriverKind, Lead, LeadBrainError, LeadError, RegistryError, Scheduler, TaskAttempt, TaskBoard,
-    TaskKind, TaskStatus, TeamResult,
+    bounded_event_text, reconstruct_team_result, AgentConfig, AgentDriver, AgentRegistry,
+    AgentTier, BoardError, DriverKind, Lead, LeadBrainError, LeadError, NoopRunEventSink,
+    RegistryError, RunEvent, RunEventSink, Scheduler, TaskAttempt, TaskBoard, TaskKind, TaskStatus,
+    TeamResult,
 };
 use rusqlite::Connection;
 
@@ -131,6 +137,10 @@ impl std::fmt::Display for TeamRunnerError {
                     f,
                     "no agent is registered for the {tier:?} tier; a team run needs at least one reasoner and one worker; utility agents are optional"
                 ),
+                RegistryError::ZeroConcurrency(agent) => write!(
+                    f,
+                    "agent `{agent}` has a max-concurrency of zero; every registered Agent needs a positive concurrency"
+                ),
                 other => write!(f, "the agent registry is not runnable: {other:?}"),
             },
             Self::LeadSelection(detail) => write!(f, "the team lead could not be resolved: {detail}"),
@@ -139,8 +149,8 @@ impl std::fmt::Display for TeamRunnerError {
             }
             Self::Driver(error) => write!(f, "{error}"),
             Self::LeadBrain(error) => write!(f, "{error}"),
-            Self::Lead(error) => write!(f, "the lead run failed: {error:?}"),
-            Self::Board(error) => write!(f, "a task board operation failed: {error:?}"),
+            Self::Lead(error) => write!(f, "the lead run failed: {error}"),
+            Self::Board(error) => write!(f, "a task board operation failed: {error}"),
             Self::UnknownRoot(root) => write!(f, "no task {root} exists to resume"),
             Self::RootNotReasoning { root, kind } => write!(
                 f,
@@ -189,6 +199,7 @@ pub struct TeamRunner {
     repo: PathBuf,
     options: TeamRunOptions,
     bridge_host: Option<LaunchSpec>,
+    sink: Arc<dyn RunEventSink>,
 }
 
 impl TeamRunner {
@@ -202,11 +213,21 @@ impl TeamRunner {
             repo: repo.into(),
             options,
             bridge_host: None,
+            sink: Arc::new(NoopRunEventSink),
         }
     }
 
     pub fn with_bridge_host(mut self, host: LaunchSpec) -> Self {
         self.bridge_host = Some(host);
+        self
+    }
+
+    /// Attach the presentation sink the whole run reports its lifecycle to. The
+    /// default is the no-op, so a runner without a sink behaves exactly as it
+    /// did before the projection existed. The sink is non-authoritative: the
+    /// durable board stays the only truth.
+    pub fn with_sink(mut self, sink: Arc<dyn RunEventSink>) -> Self {
+        self.sink = sink;
         self
     }
 
@@ -240,13 +261,20 @@ impl TeamRunner {
             error: None,
         })?;
         board.set_status(root, TaskStatus::Running)?;
+        // The root is durable and Running: the run can now be observed.
+        self.sink.emit(&RunEvent::RunStarted {
+            root_task_id: root,
+            lead_agent: lead.id.clone(),
+        });
 
-        let scheduler = Scheduler::new(registry, drivers, board, self.options.max_retries);
+        let scheduler = Scheduler::new(registry, drivers, board, self.options.max_retries)
+            .with_sink(Arc::clone(&self.sink));
         let mut lead_loop = Lead::new(
             Box::new(brain),
             scheduler,
             self.options.max_rounds,
             self.options.max_tasks,
+            lead.id.clone(),
         );
         self.drive(&mut lead_loop, root, objective, &lead.id).await
     }
@@ -300,13 +328,18 @@ impl TeamRunner {
         for descendant in descendants(&board, root_task_id)? {
             board.recover_interrupted_attempt(descendant)?;
         }
-        let scheduler = Scheduler::new(registry, drivers, board, self.options.max_retries);
+        let scheduler = Scheduler::new(registry, drivers, board, self.options.max_retries)
+            .with_sink(Arc::clone(&self.sink));
         let mut lead_loop = Lead::new(
             Box::new(brain),
             scheduler,
             self.options.max_rounds,
             self.options.max_tasks,
+            lead.id.clone(),
         );
+        // Every interrupted descendant is closed and the Lead is about to
+        // continue from the durable state, so the resumed run is observable.
+        self.sink.emit(&RunEvent::RunResumed { root_task_id });
         self.drive(&mut lead_loop, root_task_id, &objective, &lead.id)
             .await
     }
@@ -321,18 +354,40 @@ impl TeamRunner {
         lead_id: &str,
     ) -> Result<TeamRunOutcome, TeamRunnerError> {
         match lead_loop.run_on_root(root, objective).await {
-            Ok(result) => Ok(TeamRunOutcome {
-                root_task_id: root,
-                lead_agent: lead_id.to_string(),
-                result,
-            }),
-            Err(error) => match self.settle_root_failed(root, lead_id, &lead_error_text(&error)) {
-                Ok(()) => Err(TeamRunnerError::Lead(error)),
-                Err(settle) => Err(TeamRunnerError::LeadAndSettleFailed {
-                    cause: lead_error_text(&error),
-                    settle: settle.to_string(),
-                }),
-            },
+            Ok(result) => {
+                // The Lead persisted the final answer, the exact refs, and the
+                // root's succeeded status before returning.
+                self.sink.emit(&RunEvent::RunCompleted {
+                    root_task_id: root,
+                    selected_task_ids: result.task_refs.clone(),
+                    artifact_count: result.artifact_refs.len(),
+                });
+                Ok(TeamRunOutcome {
+                    root_task_id: root,
+                    lead_agent: lead_id.to_string(),
+                    result,
+                })
+            }
+            Err(error) => {
+                let cause = lead_error_text(&error);
+                let settled = self.settle_root_failed(root, lead_id, &cause);
+                let failure = match settled {
+                    Ok(()) => TeamRunnerError::Lead(error),
+                    Err(settle) => TeamRunnerError::LeadAndSettleFailed {
+                        cause: cause.clone(),
+                        settle: settle.to_string(),
+                    },
+                };
+                // Emitted only after the settle attempt has run, so a reported
+                // failure never leaves the root observable as Running. This is
+                // reached only from inside `drive`, where a root exists; a
+                // pre-root configuration failure emits no run event at all.
+                self.sink.emit(&RunEvent::RunFailed {
+                    root_task_id: root,
+                    error: bounded_event_text(&cause),
+                });
+                Err(failure)
+            }
         }
     }
 
@@ -409,31 +464,81 @@ impl TeamRunner {
         lead: &AgentRegistryRecord,
         candidates: Vec<&str>,
     ) -> Result<CodexLeadBrain, TeamRunnerError> {
-        let options = parse_agent_options(&lead.id, lead.driver_config_json.as_deref())?;
-        let launch = launch_spec(lead).map_err(|error| match error {
-            DriverFactoryError::MissingExecutable(_) => {
-                TeamRunnerError::MissingLeadExecutable(lead.id.clone())
-            }
-            other => TeamRunnerError::Driver(other),
-        })?;
-        let config = CodexLeadConfig {
-            launch,
-            working_directory: self.repo.clone(),
-            model: options.model.clone(),
-            overrides: options.overrides.clone(),
-            max_prompt_bytes: options
-                .max_prompt_bytes
-                .unwrap_or(DEFAULT_LEAD_MAX_PROMPT_BYTES),
-            max_answer_bytes: options
-                .max_answer_bytes
-                .unwrap_or(DEFAULT_LEAD_MAX_ANSWER_BYTES),
-            max_events: options.max_events.unwrap_or(DEFAULT_LEAD_MAX_EVENTS),
-        };
+        let config = lead_config(lead, &self.repo)?;
         Ok(CodexLeadBrain::new(
             config,
             candidates.into_iter().map(str::to_string).collect(),
         )?)
     }
+}
+
+/// Build the Lead's effective configuration the way a run will. Starts no
+/// process and opens no board.
+///
+/// This is the one construction path for a Lead's configuration:
+/// [`TeamRunner::lead_brain`] builds its brain from exactly this value, so a
+/// readiness verdict and a run can never disagree about the Lead's
+/// configuration. The configuration is validated here too, because a
+/// configuration a run would refuse is not one a run will use.
+///
+/// The typed form is what the run calls, so the run's error classes stay what
+/// they were; [`validate_lead_config`] is the same verdict as one line of text.
+fn lead_config(
+    record: &AgentRegistryRecord,
+    repo: &Path,
+) -> Result<CodexLeadConfig, TeamRunnerError> {
+    let options = parse_agent_options(&record.id, record.driver_config_json.as_deref())?;
+    let launch = launch_spec(record).map_err(|error| match error {
+        DriverFactoryError::MissingExecutable(_) => {
+            TeamRunnerError::MissingLeadExecutable(record.id.clone())
+        }
+        other => TeamRunnerError::Driver(other),
+    })?;
+    let config = CodexLeadConfig {
+        launch,
+        working_directory: repo.to_path_buf(),
+        model: options.model.clone(),
+        overrides: options.overrides.clone(),
+        max_prompt_bytes: options
+            .max_prompt_bytes
+            .unwrap_or(DEFAULT_LEAD_MAX_PROMPT_BYTES),
+        max_answer_bytes: options
+            .max_answer_bytes
+            .unwrap_or(DEFAULT_LEAD_MAX_ANSWER_BYTES),
+        max_events: options.max_events.unwrap_or(DEFAULT_LEAD_MAX_EVENTS),
+    };
+    config
+        .validate()
+        .map_err(|detail| TeamRunnerError::LeadBrain(LeadBrainError::Unavailable(detail)))?;
+    Ok(config)
+}
+
+/// The Lead's effective configuration, as the one-line verdict a readiness
+/// check renders: `Ok` is exactly the configuration a run would build for
+/// `record`, and `Err` is the message the run's own construction produces.
+pub fn validate_lead_config(
+    record: &AgentRegistryRecord,
+    repo: &Path,
+) -> Result<CodexLeadConfig, String> {
+    lead_config(record, repo).map_err(|error| error.to_string())
+}
+
+/// Judge one registry row the way a run's registry construction does, without
+/// spawning anything: the tier, the JSON string-array fields, and the
+/// concurrency rule the registry enforces.
+///
+/// This reuses the run's own construction ([`agent_config`]) and the run's own
+/// error type, so a readiness verdict and a run cannot drift apart in wording or
+/// in which row they refuse.
+pub fn validate_registry_row(record: &AgentRegistryRecord) -> Result<(), String> {
+    let config = agent_config(record).map_err(|error| error.to_string())?;
+    if config.max_concurrency == 0 {
+        return Err(
+            TeamRunnerError::Registry(RegistryError::ZeroConcurrency(record.id.clone()))
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 /// Build the validated routing registry from the durable rows.
@@ -564,10 +669,10 @@ fn bounded(text: &str, max_bytes: usize) -> String {
     text[..end].to_string()
 }
 
-/// The Lead loop's error is a typed enum without a `Display`; render it for the
-/// durable failure row and the diagnostic message.
+/// The Lead loop's failure as the text the durable failure row and the failure
+/// event carry.
 fn lead_error_text(error: &LeadError) -> String {
-    format!("{error:?}")
+    error.to_string()
 }
 
 #[cfg(test)]
@@ -653,5 +758,117 @@ mod tests {
             error,
             TeamRunnerError::UnsupportedTier { ref tier, .. } if tier == "wizard"
         ));
+    }
+
+    /// The Lead's effective configuration is built by the one function a run
+    /// calls, so a readiness verdict is the run's own verdict.
+    #[test]
+    fn a_lead_configuration_is_built_and_judged_the_way_a_run_does() {
+        let repo = std::env::temp_dir();
+        let good = AgentRegistryRecord {
+            driver_kind: Some("codex-app-server".into()),
+            driver_config_json: Some(
+                r#"{"model":"gpt","overrides":["x=1"],"max_prompt_bytes":4096,"max_answer_bytes":2048,"max_events":4000}"#
+                    .into(),
+            ),
+            ..record("lead", "reasoner")
+        };
+        let config = validate_lead_config(&good, &repo).unwrap();
+        assert_eq!(config.model.as_deref(), Some("gpt"));
+        assert_eq!(config.overrides, vec!["x=1"]);
+        assert_eq!(config.max_prompt_bytes, 4096);
+        assert_eq!(config.max_answer_bytes, 2048);
+        assert_eq!(config.max_events, 4000);
+        assert_eq!(config.working_directory, repo);
+        assert_eq!(config.launch.program, std::path::Path::new("agent"));
+
+        // An absent body is the documented defaults, exactly as a run reads it.
+        let defaults = validate_lead_config(&record("lead", "reasoner"), &repo).unwrap();
+        assert_eq!(defaults.model, None);
+        assert!(defaults.overrides.is_empty());
+        assert_eq!(defaults.max_prompt_bytes, DEFAULT_LEAD_MAX_PROMPT_BYTES);
+        assert_eq!(defaults.max_answer_bytes, DEFAULT_LEAD_MAX_ANSWER_BYTES);
+        assert_eq!(defaults.max_events, DEFAULT_LEAD_MAX_EVENTS);
+
+        for (config, expected) in [
+            ("not json", "is not valid JSON"),
+            ("[1,2]", "must be a JSON object"),
+            (r#"{"api_key":"x"}"#, "looks like a credential"),
+            (
+                r#"{"max_events":"not-a-number"}"#,
+                "`max_events` must be a number",
+            ),
+            (r#"{"max_events":0}"#, "max_events must be positive"),
+            (r#"{"max_prompt_bytes":16}"#, "at least 1024"),
+            (
+                r#"{"max_answer_bytes":0}"#,
+                "max_answer_bytes must be positive",
+            ),
+            (r#"{"model":""}"#, "model must be non-empty"),
+        ] {
+            let row = AgentRegistryRecord {
+                driver_config_json: Some(config.into()),
+                ..record("lead", "reasoner")
+            };
+            let detail = validate_lead_config(&row, &repo).unwrap_err();
+            assert!(detail.contains(expected), "{config}: {detail}");
+        }
+
+        // No executable: the run's own launch error, verbatim.
+        let no_program = AgentRegistryRecord {
+            executable: None,
+            ..record("lead", "reasoner")
+        };
+        assert!(validate_lead_config(&no_program, &repo)
+            .unwrap_err()
+            .contains("has no executable"));
+        // A repository that is not a directory is not one a run works in.
+        let missing = repo.join("agentmosaic-lead-config-must-not-exist");
+        assert!(validate_lead_config(&record("lead", "reasoner"), &missing)
+            .unwrap_err()
+            .contains("working directory must exist"));
+    }
+
+    /// One registry row is judged by the run's own construction, so the verdict
+    /// and the wording come from the code a run calls rather than a copy of it.
+    #[test]
+    fn a_registry_row_is_judged_the_way_a_run_builds_it() {
+        assert_eq!(validate_registry_row(&record("worker", "worker")), Ok(()));
+        // An absent concurrency defaults to 1, which the registry accepts.
+        let defaulted = AgentRegistryRecord {
+            max_concurrency: None,
+            ..record("worker", "worker")
+        };
+        assert_eq!(validate_registry_row(&defaulted), Ok(()));
+
+        // An unknown tier is the run's own construction error, verbatim.
+        let unknown_tier = record("ghost", "wizard");
+        assert_eq!(
+            validate_registry_row(&unknown_tier).unwrap_err(),
+            agent_config(&unknown_tier).unwrap_err().to_string()
+        );
+
+        // A malformed JSON string-array field, likewise.
+        let malformed = AgentRegistryRecord {
+            tags_json: Some("not json".into()),
+            ..record("worker", "worker")
+        };
+        let detail = validate_registry_row(&malformed).unwrap_err();
+        assert_eq!(detail, agent_config(&malformed).unwrap_err().to_string());
+        assert!(detail.contains("expected a JSON string array"), "{detail}");
+
+        // Zero concurrency is refused by the registry, and the message is the
+        // run's own error type formatted, so doctor and run are identical by
+        // construction.
+        let zero = AgentRegistryRecord {
+            max_concurrency: Some(0),
+            ..record("worker", "worker")
+        };
+        let error = validate_registry_row(&zero).unwrap_err();
+        assert_eq!(
+            error,
+            TeamRunnerError::Registry(RegistryError::ZeroConcurrency("worker".into())).to_string()
+        );
+        assert!(error.contains("max-concurrency of zero"), "{error}");
     }
 }

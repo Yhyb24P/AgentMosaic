@@ -20,6 +20,7 @@ use crate::board::{BoardError, TaskAttempt, TaskBoard, TaskStatus};
 use crate::registry::{
     AgentDriver, AgentRegistry, AgentTask, AgentTaskResult, AgentTier, TaskKind,
 };
+use crate::run_event::{bounded_event_text, NoopRunEventSink, RunEvent, RunEventSink};
 
 /// A structured subtask to create and run.
 #[derive(Debug, Clone)]
@@ -72,6 +73,7 @@ pub struct Scheduler<B: TaskBoard + Send + 'static> {
     board: Arc<Mutex<B>>,
     max_retries: u32,
     semaphores: BTreeMap<String, Arc<Semaphore>>,
+    sink: Arc<dyn RunEventSink>,
 }
 
 impl<B: TaskBoard + Send + 'static> Scheduler<B> {
@@ -79,6 +81,10 @@ impl<B: TaskBoard + Send + 'static> Scheduler<B> {
     /// is the per-agent retry limit before reassignment. The per-agent
     /// semaphores are sized by each agent's `max_concurrency` and shared by
     /// every task this scheduler runs.
+    ///
+    /// The default notification sink is the no-op, so a scheduler without
+    /// [`Scheduler::with_sink`] behaves exactly as it did before the projection
+    /// existed.
     pub fn new(
         registry: AgentRegistry,
         drivers: BTreeMap<String, Arc<dyn AgentDriver>>,
@@ -92,7 +98,21 @@ impl<B: TaskBoard + Send + 'static> Scheduler<B> {
             board: Arc::new(Mutex::new(board)),
             max_retries,
             semaphores,
+            sink: Arc::new(NoopRunEventSink),
         }
+    }
+
+    /// Attach the presentation sink this scheduler emits its lifecycle events
+    /// to. The sink is non-authoritative: it observes, it never decides.
+    pub fn with_sink(mut self, sink: Arc<dyn RunEventSink>) -> Self {
+        self.sink = sink;
+        self
+    }
+
+    /// The sink this scheduler emits to. The Lead shares it, so one instance
+    /// observes the whole lifecycle.
+    pub fn sink(&self) -> Arc<dyn RunEventSink> {
+        Arc::clone(&self.sink)
     }
 
     /// The durable board this scheduler persists to, shared and synchronized
@@ -127,6 +147,19 @@ impl<B: TaskBoard + Send + 'static> Scheduler<B> {
                 )?;
                 task_ids.push(id);
             }
+        }
+        // The board guard is closed and every task is durable: the projection is
+        // emitted only now, after the lock is released, one event per created
+        // task. The Lead always parents delegated work to the run root; a task
+        // scheduled without a parent is the root of its own tree.
+        for (spec, &task_id) in specs.iter().zip(&task_ids) {
+            self.sink.emit(&RunEvent::TaskDelegated {
+                root_task_id: spec.parent.unwrap_or(task_id),
+                task_id,
+                kind: spec.kind,
+                requested_target: spec.target.clone(),
+                objective: bounded_event_text(&spec.objective),
+            });
         }
 
         self.run_existing(&task_ids, specs).await
@@ -194,9 +227,19 @@ impl<B: TaskBoard + Send + 'static> Scheduler<B> {
             let drivers = self.drivers.clone();
             let semaphores = self.semaphores.clone();
             let board = self.board.clone();
+            let sink = Arc::clone(&self.sink);
             let max_retries = self.max_retries;
             handles.push(tokio::spawn(async move {
-                run_one(&drivers, &semaphores, &board, max_retries, task, candidates).await
+                run_one(
+                    &drivers,
+                    &semaphores,
+                    &board,
+                    max_retries,
+                    sink,
+                    task,
+                    candidates,
+                )
+                .await
             }));
         }
 
@@ -284,11 +327,15 @@ fn parent_summary<B: TaskBoard>(board: &B, parent: u64) -> Result<Option<String>
 /// under its shared concurrency quota, then reassigning deterministically. Each
 /// attempt is persisted as Running before the driver runs and settled after, so
 /// the board is durable throughout. Returns the attempts and the final result.
+///
+/// `sink` observes the lifecycle: every event it receives is emitted after the
+/// corresponding durable mutation succeeded and with the board lock released.
 async fn run_one<B: TaskBoard + Send + 'static>(
     drivers: &BTreeMap<String, Arc<dyn AgentDriver>>,
     semaphores: &BTreeMap<String, Arc<Semaphore>>,
     board: &Arc<Mutex<B>>,
     max_retries: u32,
+    sink: Arc<dyn RunEventSink>,
     task: AgentTask,
     candidates: Vec<String>,
 ) -> Result<(Vec<TaskAttempt>, Result<AgentTaskResult, String>), BoardError> {
@@ -330,6 +377,12 @@ async fn run_one<B: TaskBoard + Send + 'static>(
                 })?;
                 b.set_status(task.id, TaskStatus::Running)?;
             }
+            // The attempt is durably Running and the guard is closed.
+            sink.emit(&RunEvent::AttemptStarted {
+                task_id: task.id,
+                attempt: attempt_seq,
+                agent_id: agent.clone(),
+            });
             // Inject the directed messages addressed to this agent so they
             // actually reach its context (T09).
             let mut ctx_task = task.clone();
@@ -373,6 +426,31 @@ async fn run_one<B: TaskBoard + Send + 'static>(
                     }
                 }
             }
+            // The terminal attempt is durable and the guard is closed: the
+            // success path reports each committed artifact and then the
+            // committed artifact count, the failure path reports the attempt.
+            match &outcome {
+                Ok(result) => {
+                    for artifact in &result.artifacts {
+                        sink.emit(&RunEvent::ArtifactRecorded {
+                            task_id: task.id,
+                            path: artifact.path.clone(),
+                            sha256: artifact.sha256.clone(),
+                        });
+                    }
+                    sink.emit(&RunEvent::TaskSucceeded {
+                        task_id: task.id,
+                        agent_id: agent.clone(),
+                        artifact_count: result.artifacts.len(),
+                    });
+                }
+                Err(error) => sink.emit(&RunEvent::AttemptFailed {
+                    task_id: task.id,
+                    attempt: attempt_seq,
+                    agent_id: agent.clone(),
+                    error: bounded_event_text(error),
+                }),
+            }
             match outcome {
                 Ok(result) => {
                     attempts.push(terminal);
@@ -403,6 +481,11 @@ async fn run_one<B: TaskBoard + Send + 'static>(
                 .last()
                 .and_then(|a| a.error.clone())
                 .unwrap_or_else(|| "no candidate agent".to_string());
+            // The task is durably failed and the guard is closed.
+            sink.emit(&RunEvent::TaskFailed {
+                task_id: task.id,
+                error: bounded_event_text(&last_err),
+            });
             Ok((attempts, Err(last_err)))
         }
     }

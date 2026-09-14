@@ -33,12 +33,12 @@ pub use codex_lead::{CodexLeadBrain, CodexLeadConfig};
 pub use codex_team_driver::{CodexTeamDriverConfig, PersistedCodexTeamDriver};
 pub use dispatch::{dispatch, ToolOutcome};
 pub use driver_factory::{
-    DriverFactory, DriverFactoryError, DEFAULT_ACP_MAX_PROMPT_BYTES, DEFAULT_ACP_MAX_RESULT_BYTES,
-    DEFAULT_ACP_TIMEOUT_SECONDS, DEFAULT_CODEX_MAX_EVENTS,
+    validate_driver_config, DriverFactory, DriverFactoryError, DEFAULT_ACP_MAX_PROMPT_BYTES,
+    DEFAULT_ACP_MAX_RESULT_BYTES, DEFAULT_ACP_TIMEOUT_SECONDS, DEFAULT_CODEX_MAX_EVENTS,
 };
 pub use launch::LaunchSpec;
 pub use team_runner::{
-    TeamRunOptions, TeamRunOutcome, TeamRunner, TeamRunnerError, DEFAULT_LEAD_MAX_ANSWER_BYTES,
-    DEFAULT_LEAD_MAX_EVENTS, DEFAULT_LEAD_MAX_PROMPT_BYTES, DEFAULT_MAX_RETRIES,
-    DEFAULT_MAX_ROUNDS, DEFAULT_MAX_TASKS,
+    validate_lead_config, validate_registry_row, TeamRunOptions, TeamRunOutcome, TeamRunner,
+    TeamRunnerError, DEFAULT_LEAD_MAX_ANSWER_BYTES, DEFAULT_LEAD_MAX_EVENTS,
+    DEFAULT_LEAD_MAX_PROMPT_BYTES, DEFAULT_MAX_RETRIES, DEFAULT_MAX_ROUNDS, DEFAULT_MAX_TASKS,
 };

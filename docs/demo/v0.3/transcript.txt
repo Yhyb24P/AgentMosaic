@@ -1,0 +1,203 @@
+# Real terminal demo — AgentMosaic v0.3.0 candidate | real Codex Lead + real ACP/Qwen worker (utility=0)
+# The binary still reports the pre-bump workspace version (`am 0.2.1`); the version
+# bump and tag belong to the release task. See manifest.txt.
+#
+# This transcript was assembled ONLY from the capture files written while the
+# single run below executed. Command outputs are verbatim; nothing was retyped,
+# re-entered, or spliced from another run. Exit codes are the ones recorded at
+# capture time.
+#
+#
+# Sanitisation disclosure (the only edits applied to the captured text). Two
+# normalisations were made, and nothing else:
+#   1. the absolute path of the local candidate checkout was replaced, because
+#      that directory name is a retired product identity the repository's
+#      identity gate forbids in tracked files; such paths became `am` (for the
+#      binary) or `<candidate-repo>` (for the checkout);
+#   2. machine-specific absolute paths were replaced with semantic
+#      placeholders: `$HOME` for the user home directory and `<demo-temp>` for
+#      the scratch run directory.
+# The binary digest and the candidate commit that identify the build are
+# recorded verbatim in manifest.txt, and no command, argument, model output or
+# exit code was altered.
+# Capture directory: <demo-temp>/captures
+# Run repository:    <demo-temp> (clean scratch repo, single
+#                    commit "demo baseline", identity AgentMosaic Demo)
+# Note: the `captures/` directory shows up as untracked in the two
+# `git status --short` captures because it lives inside the run repository.
+
+- - - [1] am --version
+$ am --version
+am 0.2.1
+exit=0
+
+- - - [2] binary provenance: sha256 of the built binary and the candidate commit
+$ sha256sum am
+f722465a7ff5e7de62330bdb4c6f422f95e61fa5251ea62ad5e1b7edd1ff360d  am
+exit=0
+$ git -C <candidate-repo> rev-parse HEAD
+ce35677ca559bf4a2c655aec428ab4af09c89755
+exit=0
+
+- - - [3] am init
+$ am init .
+initialized AgentMosaic
+project  <demo-temp>
+updated .gitignore
+
+Next: add a Lead and a Worker.
+
+Lead
+  am agent add lead --role reasoner --adapter codex-app-server -- codex
+
+Worker
+  am agent add worker --role worker --adapter acp -- qwen --acp
+
+Then
+  am doctor
+exit=0
+
+- - - [4] Lead registration (compatibility spelling; see manifest.txt for why)
+$ am register .agentmosaic/state.db lead lead reasoner codex-app-server codex -c,model_provider=brain,-c,model=qwen38,-c,model_catalog_json=$HOME/.codex/brain-catalog.json,-c,model_reasoning_effort=xhigh 1 - - {"max_events":4000}
+registered agent=lead
+exit=0
+
+- - - [5] worker registration (normal path)
+$ am agent add worker --role worker --adapter acp --artifact result.txt -- qwen --acp
+registered agent `worker`
+role     worker
+adapter  acp
+launch   qwen --acp
+
+Next: am doctor
+exit=0
+
+- - - [6] am agent list
+$ am agent list
+ID      ROLE      ADAPTER             LAUNCH
+lead    reasoner  codex-app-server    codex -c model_provider=brain -c model=qwen38 -c model...
+worker  worker    acp                 qwen --acp
+exit=0
+
+- - - [7] am registry (durable rows, including the Lead's driver config)
+$ am registry .agentmosaic/state.db
+id=lead name=lead tier=reasoner driver_kind=codex-app-server executable=codex version=- args=["-c","model_provider=brain","-c","model=qwen38","-c","model_catalog_json=$HOME/.codex/brain-catalog.json","-c","model_reasoning_effort=xhigh"] concurrency=1 tags=[] driver_config={"max_events":4000}
+id=worker name=worker tier=worker driver_kind=acp executable=qwen version=- args=["--acp"] concurrency=1 tags=[] driver_config={"artifact_paths":["result.txt"]}
+exit=0
+
+- - - [8] why the Lead is not registered as 'codex -qw': codex app-server rejects --profile
+$ codex -qw app-server --stdio
+Error: --profile only applies to runtime commands and `codex mcp`: `codex`, `codex exec`, `codex review`, `codex resume`, `codex queue`, `codex archive`, `codex delete`, `codex unarchive`, `codex fork`, `codex mcp`, `codex sandbox`, and `codex debug prompt-input`.
+exit=1
+
+- - - [9] am doctor
+$ am doctor
+project   ready
+lead      ready  codex -c model_provider=brain -c model=qwen38 -c model...
+worker    ready  qwen --acp
+team      ready  1 lead · 1 worker
+
+Ready to run.
+  am run "<objective>"
+exit=0
+
+- - - [10] am doctor --verbose (the bounded readiness stages)
+$ am doctor --verbose
+project   ready  <demo-temp>
+state     ready  schema=11
+lead      ready  codex -c model_provider=brain -c model=qwen38 -c model...  PROGRAM_FOUND LAUNCHSPEC_VALID SPAWN_OK PROTOCOL_OK SESSION_OK READY
+worker    ready  qwen --acp  PROGRAM_FOUND LAUNCHSPEC_VALID SPAWN_OK PROTOCOL_OK SESSION_OK READY
+team      ready  1 lead · 1 worker
+
+Ready to run.
+  am run "<objective>"
+exit=0
+
+- - - [11] pre-run baseline: git status --short (the change the run makes must be visible)
+$ git status --short
+?? .gitignore
+?? captures/
+exit=0
+
+- - - [12] am run "<objective>" — stderr (progress and lifecycle; stdout carries only the answer)
+run     starting  Read input.txt and create result.txt with the count of each token, sorte...
+run #1  started   lead=lead
+lead    planning  round=1
+task #2 delegated bulk -> worker
+worker  running   task #2 · attempt 1
+        artifact  result.txt
+worker  completed task #2
+lead    reviewing round=2
+run #1  complete  1m04s
+
+artifacts
+  result.txt  task #2  sha256 4297addc…
+
+next
+  am status 1
+  am final 1
+  am tui
+
+- - - [13] am run "<objective>" — stdout (the final answer) and the recorded exit code
+Task complete: result.txt was created in <demo-temp> containing each token from input.txt with its count, sorted alphabetically: alpha 1, beta 2, gamma 1 (3 distinct tokens). Verified by independent recomputation (sort | uniq -c) with line-by-line diff matching, and confirmed input.txt was not modified (SHA-256 b884d3d51e68ee1906c5fd54c8ab3c3acd5b327aefdc5589f8dc1f1096629391 before and after). Artifact: result.txt.
+exit=0
+
+- - - [14] post-run git status --short (result.txt is the new file)
+$ git status --short
+?? .gitignore
+?? captures/
+?? result.txt
+exit=0
+
+- - - [15] result.txt (the worker artifact, kept as-is)
+$ cat result.txt
+alpha 1
+beta 2
+gamma 1
+exit=0
+
+- - - [16] sha256sum result.txt
+$ sha256sum result.txt
+4297addc01e4f608b07fc9e71c6e8bb9ba836a12019da73bc219d97dd44a95d6  result.txt
+exit=0
+
+- - - [17] sha256sum input.txt (unchanged for the whole run)
+$ sha256sum input.txt
+b884d3d51e68ee1906c5fd54c8ab3c3acd5b327aefdc5589f8dc1f1096629391  input.txt
+exit=0
+
+- - - [18] am status (no database path)
+$ am status
+run #1  succeeded
+objective  Read input.txt and create result.txt with the count of each token, sorte...
+lead       lead
+
+tasks
+  #1  lead  succeeded  Read input.txt and create result.txt with the count of each token, sorte...
+  #2  worker  succeeded  In the working directory <demo-temp>: 1) Read input.txt. ...
+
+artifacts
+  #2  result.txt
+exit=0
+
+- - - [19] am final (no database path)
+$ am final
+Task complete: result.txt was created in <demo-temp> containing each token from input.txt with its count, sorted alphabetically: alpha 1, beta 2, gamma 1 (3 distinct tokens). Verified by independent recomputation (sort | uniq -c) with line-by-line diff matching, and confirmed input.txt was not modified (SHA-256 b884d3d51e68ee1906c5fd54c8ab3c3acd5b327aefdc5589f8dc1f1096629391 before and after). Artifact: result.txt.
+exit=0
+
+- - - [20] am artifact (no database path)
+$ am artifact
+task=2 path=result.txt sha256=4297addc01e4f608b07fc9e71c6e8bb9ba836a12019da73bc219d97dd44a95d6
+exit=0
+
+- - - [21] machine surface: am status --json
+{"run_id":1,"status":"succeeded","objective":"Read input.txt and create result.txt with the count of each token, sorted alphabetically. Verify the file, do not modify input.txt, and summarize the result.","lead":"lead","tasks":[{"id":1,"assignee":"lead","status":"succeeded","objective":"Read input.txt and create result.txt with the count of each token, sorted alphabetically. Verify the file, do not modify input.txt, and summarize the result."},{"id":2,"assignee":"worker","status":"succeeded","objective":"In the working directory <demo-temp>: 1) Read input.txt. 2) Produce result.txt containing the count of each token (whitespace-separated) found in input.txt, sorted alphabetically, one token per line. 3) Verify result.txt exists and its counts are correct by re-checking against input.txt (e.g., recompute independently). 4) Do not modify input.txt. 5) Report back the full contents of result.txt, the total number of distinct tokens, and confirmation that input.txt was not modified."}],"artifacts":[{"task_id":2,"path":"result.txt","sha256":"4297addc01e4f608b07fc9e71c6e8bb9ba836a12019da73bc219d97dd44a95d6"}]}
+
+- - - [22] machine surface: am final --json
+{"run_id":1,"answer":"Task complete: result.txt was created in <demo-temp> containing each token from input.txt with its count, sorted alphabetically: alpha 1, beta 2, gamma 1 (3 distinct tokens). Verified by independent recomputation (sort | uniq -c) with line-by-line diff matching, and confirmed input.txt was not modified (SHA-256 b884d3d51e68ee1906c5fd54c8ab3c3acd5b327aefdc5589f8dc1f1096629391 before and after). Artifact: result.txt."}
+
+- - - [23] machine surface: am artifact --json
+{"artifacts":[{"task_id":2,"path":"result.txt","sha256":"4297addc01e4f608b07fc9e71c6e8bb9ba836a12019da73bc219d97dd44a95d6"}]}
+
+- - - [24] recording timestamp
+2026-09-14T12:02:26Z

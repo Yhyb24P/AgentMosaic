@@ -60,12 +60,13 @@ dependencies = [
 
 [[package]]
 name = "agentmosaic-cli"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "agentmosaic-runtime",
  "agentmosaic-storage",
  "agentmosaic-team",
  "agentmosaic-tui",
+ "clap",
  "rusqlite",
  "serde",
  "serde_json",
@@ -74,7 +75,7 @@ dependencies = [
 
 [[package]]
 name = "agentmosaic-context"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "agentmosaic-core",
  "agentmosaic-model",
@@ -82,11 +83,11 @@ dependencies = [
 
 [[package]]
 name = "agentmosaic-core"
-version = "0.2.1"
+version = "0.3.0"
 
 [[package]]
 name = "agentmosaic-model"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "agentmosaic-tools",
  "async-trait",
@@ -98,7 +99,7 @@ dependencies = [
 
 [[package]]
 name = "agentmosaic-runtime"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "agent-client-protocol",
  "agentmosaic-context",
@@ -119,7 +120,7 @@ dependencies = [
 
 [[package]]
 name = "agentmosaic-storage"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "agentmosaic-context",
  "agentmosaic-core",
@@ -133,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "agentmosaic-team"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "schemars 0.8.22",
@@ -145,14 +146,14 @@ dependencies = [
 
 [[package]]
 name = "agentmosaic-tools"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "agentmosaic-tui"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "agentmosaic-storage",
  "agentmosaic-team",
@@ -163,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "agentmosaic-workspace"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "agentmosaic-tools",
  "glob",
@@ -208,6 +209,12 @@ checksum = "ae221649c9976a6f6c56ae1facf410f3ddb33cc661c4b7b61020a912d4237fbc"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "anstyle"
+version = "1.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "55cc3b69f167a1ef2e161439aa98aed94e6028e5f9a59be9a6ffb47aef1651f9"
 
 [[package]]
 name = "anyhow"
@@ -434,6 +441,45 @@ dependencies = [
  "serde",
  "windows-link",
 ]
+
+[[package]]
+name = "clap"
+version = "4.5.40"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "40b6887a1d8685cebccf115538db5c0efe625ccac9696ad45c409d96566e910f"
+dependencies = [
+ "clap_builder",
+ "clap_derive",
+]
+
+[[package]]
+name = "clap_builder"
+version = "4.5.40"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0c66c08ce9f0c698cbce5c0279d0bb6ac936d8674174fe48f736533b964f59e"
+dependencies = [
+ "anstyle",
+ "clap_lex",
+ "strsim",
+]
+
+[[package]]
+name = "clap_derive"
+version = "4.5.40"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2c7947ae4cc3d851207c1adb5b5e260ff0cca11446b1d6d1423788e442257ce"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "clap_lex"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f46ad14479a25103f283c0f10005961cf086d8dc42205bb44c46ac563475dca6"
 
 [[package]]
 name = "compact_str"

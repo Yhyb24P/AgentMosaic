@@ -105,6 +105,16 @@ pub enum BoardError {
     Storage(String),
 }
 
+/// The board's failure as a sentence rather than as the enum's structure.
+impl std::fmt::Display for BoardError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownTask(task) => write!(f, "no task {task} exists on the board"),
+            Self::Storage(detail) => write!(f, "the task board storage failed: {detail}"),
+        }
+    }
+}
+
 /// The durable task board.
 ///
 /// Implementations persist tasks, attempts, messages, and artifacts so that a

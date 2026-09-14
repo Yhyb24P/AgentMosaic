@@ -26,8 +26,10 @@
 //! One additional set of keys configures a `codex-app-server` agent when it is
 //! the run's Lead: `model` (the resident thread's model), `max_prompt_bytes`
 //! (default 32768), `max_answer_bytes` (default 16384), and `max_events`
-//! (default 200). The Lead's `driver_args` are not used: the Lead brain speaks
-//! the `app-server --stdio` protocol itself.
+//! (default 200). The stored `driver_args` are the program's own argv and are
+//! placed before the adapter-appended `app-server --stdio`, so the Lead brain
+//! does not shell out to a separate helper: it speaks that protocol over the
+//! spawned process' stdio.
 //!
 //! The run's repository is the working directory of every driver built here.
 
@@ -191,39 +193,16 @@ impl DriverFactory {
     ) -> Result<Arc<dyn AgentDriver>, DriverFactoryError> {
         let agent = record.id.clone();
         let launch = launch_spec(record)?;
-        let timeout_seconds = options
-            .timeout_seconds
-            .unwrap_or(DEFAULT_ACP_TIMEOUT_SECONDS);
-        if timeout_seconds == 0 {
-            return Err(DriverFactoryError::InvalidDriverConfig {
-                agent: agent.clone(),
-                detail: "timeout_seconds must be greater than zero".into(),
-            });
-        }
-        let max_prompt_bytes = options
-            .max_prompt_bytes
-            .unwrap_or(DEFAULT_ACP_MAX_PROMPT_BYTES);
-        let max_result_bytes = options
-            .max_result_bytes
-            .unwrap_or(DEFAULT_ACP_MAX_RESULT_BYTES);
-        if max_prompt_bytes == 0 || max_result_bytes == 0 {
-            return Err(DriverFactoryError::InvalidDriverConfig {
-                agent: agent.clone(),
-                detail: "max_prompt_bytes and max_result_bytes must be greater than zero".into(),
-            });
-        }
-        for path in &options.artifact_paths {
-            validate_artifact_path(&agent, path)?;
-        }
+        let values = acp_option_values(&agent, options)?;
         let config = AcpWorkerConfig {
             runtime_kind: "acp".into(),
             command: launch.program,
             args: launch.args,
             auth_method: options.auth_method.clone(),
             working_directory: self.repo.clone(),
-            timeout: Duration::from_secs(timeout_seconds),
-            max_prompt_bytes,
-            max_result_bytes,
+            timeout: Duration::from_secs(values.timeout_seconds),
+            max_prompt_bytes: values.max_prompt_bytes,
+            max_result_bytes: values.max_result_bytes,
             artifact_paths: options
                 .artifact_paths
                 .iter()
@@ -267,16 +246,7 @@ impl DriverFactory {
                 })?
             }
         };
-        let max_events = options.max_events.unwrap_or(DEFAULT_CODEX_MAX_EVENTS);
-        if max_events == 0 {
-            return Err(DriverFactoryError::InvalidDriverConfig {
-                agent: agent.clone(),
-                detail: "max_events must be greater than zero".into(),
-            });
-        }
-        for path in &options.artifact_paths {
-            validate_artifact_path(&agent, path)?;
-        }
+        let values = codex_option_values(&agent, options)?;
         let config = CodexTeamDriverConfig {
             command: launch.program_display(),
             args: launch.args,
@@ -284,7 +254,7 @@ impl DriverFactory {
             mcp_command: mcp_launch.program,
             mcp_args: mcp_launch.args,
             artifact_paths: options.artifact_paths.clone(),
-            max_events,
+            max_events: values.max_events,
             overrides: options.overrides.clone(),
         };
         let driver = PersistedCodexTeamDriver::new(config, self.database.clone(), agent.clone())
@@ -455,6 +425,108 @@ fn string_array(
             format!("`{key}` must be an array of strings"),
         )),
     }
+}
+
+/// The ACP option values, after the adapter's own value rules.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AcpOptionValues {
+    pub(crate) timeout_seconds: u64,
+    pub(crate) max_prompt_bytes: usize,
+    pub(crate) max_result_bytes: usize,
+}
+
+/// Resolve and validate the ACP options. Driver construction and the
+/// standalone configuration validation both call this one function, so a
+/// readiness verdict cannot drift from what a run accepts.
+pub(crate) fn acp_option_values(
+    agent: &str,
+    options: &AgentOptions,
+) -> Result<AcpOptionValues, DriverFactoryError> {
+    let timeout_seconds = options
+        .timeout_seconds
+        .unwrap_or(DEFAULT_ACP_TIMEOUT_SECONDS);
+    if timeout_seconds == 0 {
+        return Err(invalid_config(
+            agent,
+            "timeout_seconds must be greater than zero",
+        ));
+    }
+    let max_prompt_bytes = options
+        .max_prompt_bytes
+        .unwrap_or(DEFAULT_ACP_MAX_PROMPT_BYTES);
+    let max_result_bytes = options
+        .max_result_bytes
+        .unwrap_or(DEFAULT_ACP_MAX_RESULT_BYTES);
+    if max_prompt_bytes == 0 || max_result_bytes == 0 {
+        return Err(invalid_config(
+            agent,
+            "max_prompt_bytes and max_result_bytes must be greater than zero",
+        ));
+    }
+    for path in &options.artifact_paths {
+        validate_artifact_path(agent, path)?;
+    }
+    Ok(AcpOptionValues {
+        timeout_seconds,
+        max_prompt_bytes,
+        max_result_bytes,
+    })
+}
+
+/// The Codex team-driver option values, after the adapter's own value rules.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CodexOptionValues {
+    pub(crate) max_events: usize,
+}
+
+/// Resolve and validate the Codex team-driver options, the way
+/// [`acp_option_values`] does for ACP.
+pub(crate) fn codex_option_values(
+    agent: &str,
+    options: &AgentOptions,
+) -> Result<CodexOptionValues, DriverFactoryError> {
+    let max_events = options.max_events.unwrap_or(DEFAULT_CODEX_MAX_EVENTS);
+    if max_events == 0 {
+        return Err(invalid_config(
+            agent,
+            "max_events must be greater than zero",
+        ));
+    }
+    for path in &options.artifact_paths {
+        validate_artifact_path(agent, path)?;
+    }
+    Ok(CodexOptionValues { max_events })
+}
+
+/// Validate one registry row's `driver_config_json` the way a run will.
+///
+/// The body is parsed with the same parser a run uses, and the adapter's value
+/// rules are the same functions driver construction calls, so this verdict
+/// cannot disagree with what `am run` accepts. Nothing is spawned and no board
+/// is opened.
+///
+/// Boundary: a non-Lead `codex-app-server` Agent's team driver also needs an
+/// injected bridge-host launch spec, and only a run has one to inject (`am run`
+/// injects its own executable). There is no host here, so this function judges
+/// the option body — every rule the driver applies to the parsed options — and
+/// stops there; whether that driver itself builds is settled only by a run.
+pub fn validate_driver_config(record: &AgentRegistryRecord) -> Result<(), String> {
+    let options = parse_agent_options(&record.id, record.driver_config_json.as_deref())
+        .map_err(|error| error.to_string())?;
+    let kind = record
+        .driver_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|kind| !kind.is_empty())
+        .and_then(DriverKind::restore);
+    let verdict = match kind {
+        Some(DriverKind::Acp) => acp_option_values(&record.id, &options).map(|_| ()),
+        Some(DriverKind::CodexAppServer) => codex_option_values(&record.id, &options).map(|_| ()),
+        // A kind no automatic run can drive, or none at all, is a protocol
+        // concern of the readiness probe: only the config body is judged here.
+        _ => Ok(()),
+    };
+    verdict.map_err(|error| error.to_string())
 }
 
 fn driver_args(record: &AgentRegistryRecord) -> Result<Vec<String>, DriverFactoryError> {
@@ -655,5 +727,84 @@ mod tests {
         row.executable = None;
         let error = build_error(&[row]);
         assert!(matches!(error, DriverFactoryError::MissingExecutable(_)));
+    }
+
+    /// The standalone verdict of one stored configuration: a good body is
+    /// accepted, and every refused one carries the parser's or the adapter's own
+    /// message — never a second wording that could drift from driver
+    /// construction.
+    #[test]
+    fn a_stored_configuration_is_judged_by_the_drivers_own_rules() {
+        for good in [
+            record(Some("acp"), None),
+            record(Some("acp"), Some(r#"{"timeout_seconds":60}"#)),
+            record(
+                Some("acp"),
+                Some(r#"{"artifact_paths":["nested/inside.txt"],"max_prompt_bytes":64}"#),
+            ),
+            record(Some("codex-app-server"), Some(r#"{"max_events":4000}"#)),
+            // A kind no automatic run drives, or none at all, is the readiness
+            // probe's concern: only the config body is judged here.
+            record(Some("native"), Some(r#"{"max_events":0}"#)),
+            record(None, None),
+        ] {
+            assert_eq!(
+                validate_driver_config(&good),
+                Ok(()),
+                "{:?} was refused",
+                good.driver_config_json
+            );
+        }
+
+        for (kind, config, expected) in [
+            (Some("acp"), Some("not json"), "is not valid JSON"),
+            (Some("acp"), Some("[1,2]"), "must be a JSON object"),
+            (
+                Some("acp"),
+                Some(r#"{"api_key":"x"}"#),
+                "looks like a credential",
+            ),
+            (
+                Some("codex-app-server"),
+                Some(r#"{"max_events":"not-a-number"}"#),
+                "`max_events` must be a number",
+            ),
+            (
+                Some("codex-app-server"),
+                Some(r#"{"max_events":0}"#),
+                "max_events must be greater than zero",
+            ),
+            (
+                Some("acp"),
+                Some(r#"{"artifact_paths":["/etc/passwd"]}"#),
+                "must be a non-empty path inside the repository",
+            ),
+            (
+                Some("acp"),
+                Some(r#"{"artifact_paths":["../outside.txt"]}"#),
+                "must be a non-empty path inside the repository",
+            ),
+            (
+                Some("acp"),
+                Some(r#"{"timeout_seconds":0}"#),
+                "timeout_seconds must be greater than zero",
+            ),
+            (
+                Some("acp"),
+                Some(r#"{"max_result_bytes":0}"#),
+                "max_result_bytes must be greater than zero",
+            ),
+        ] {
+            let detail = validate_driver_config(&record(kind, config)).unwrap_err();
+            assert!(detail.contains(expected), "{config:?}: {detail}");
+        }
+
+        // The same body the factory refuses is refused here, with the same
+        // words: the two paths share the value rules.
+        let refused = record(Some("acp"), Some(r#"{"timeout_seconds":0}"#));
+        assert_eq!(
+            validate_driver_config(&refused).unwrap_err(),
+            build_error(std::slice::from_ref(&refused)).to_string()
+        );
     }
 }

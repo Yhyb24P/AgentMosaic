@@ -20,6 +20,7 @@ agentmosaic-storage = { path = "../agentmosaic-storage" }
 agentmosaic-team = { path = "../agentmosaic-team" }
 agentmosaic-runtime = { path = "../agentmosaic-runtime" }
 agentmosaic-tui = { path = "../agentmosaic-tui" }
+clap.workspace = true
 serde.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
