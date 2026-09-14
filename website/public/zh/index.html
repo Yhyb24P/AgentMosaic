@@ -235,7 +235,8 @@ am doctor
 
 am run "implement the task, verify it, and summarize the result"</code></pre>
       </div>
-      <p class="prose"><code>am init</code> 会把项目本地持久化状态写到 <code>.agentmosaic/state.db</code>。<code>--</code> 之后的内容是 launch argv，AgentMosaic 只原样存储与执行，因此凭据不应写在那里。</p>
+      <p class="prose"><code>am init</code> 会创建项目本地持久化状态。<code>--</code> 之后的内容是 launch argv，AgentMosaic 只原样存储与执行，因此凭据不应写在那里。</p>
+      <p class="prose">运行结束后，<code>am status</code>、<code>am final</code>、<code>am artifact</code> 和 <code>am tui</code> 会就地读取持久化结果，不需要数据库路径；加 <code>--json</code> 可得到单个机器可读对象。</p>
     </div>
   </section>
 

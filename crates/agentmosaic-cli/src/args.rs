@@ -57,7 +57,7 @@ pub enum Command {
         /// Do not print routine progress or the next-step footer
         #[arg(long)]
         quiet: bool,
-        /// Print one JSON object for scripts, with no human text on any stream
+        /// Print one JSON object on stdout, with no human progress on any stream
         #[arg(long)]
         json: bool,
         /// The objective, as one or more words

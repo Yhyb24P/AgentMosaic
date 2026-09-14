@@ -235,7 +235,8 @@ am doctor
 
 am run "implement the task, verify it, and summarize the result"</code></pre>
       </div>
-      <p class="prose"><code>am init</code> writes project-local durable state to <code>.agentmosaic/state.db</code>. Anything after <code>--</code> is launch argv that AgentMosaic stores and executes unchanged, so credentials never go there.</p>
+      <p class="prose"><code>am init</code> writes project-local durable state. Anything after <code>--</code> is launch argv that AgentMosaic stores and executes unchanged, so credentials never go there.</p>
+      <p class="prose">After a run, <code>am status</code>, <code>am final</code>, <code>am artifact</code> and <code>am tui</code> read the durable result in place, with no database path; <code>--json</code> gives one machine-readable object.</p>
     </div>
   </section>
 
