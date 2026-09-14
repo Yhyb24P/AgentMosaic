@@ -9,6 +9,7 @@
 
 mod acp_worker;
 mod agent;
+mod claude_cli;
 mod codex_app_server;
 #[path = "bin/am-codex-mcp.rs"]
 mod codex_bridge;
@@ -30,6 +31,7 @@ pub use acp_worker::{
     PersistedAcpWorkerDriver,
 };
 pub use agent::{AgentConfig, AgentError, AgentLoop, Delivery};
+pub use claude_cli::ClaudeCliInvocation;
 pub use codex_app_server::{
     select_final_agent_message, CodexAppServer, CodexBridgeError, CodexBridgeEvent,
     DEFAULT_FINAL_MESSAGE_MAX_BYTES,
