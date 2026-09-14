@@ -60,7 +60,7 @@ dependencies = [
 
 [[package]]
 name = "agentmosaic-cli"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "agentmosaic-runtime",
  "agentmosaic-storage",
@@ -75,7 +75,7 @@ dependencies = [
 
 [[package]]
 name = "agentmosaic-context"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "agentmosaic-core",
  "agentmosaic-model",
@@ -83,11 +83,11 @@ dependencies = [
 
 [[package]]
 name = "agentmosaic-core"
-version = "0.3.0"
+version = "0.4.0-dev"
 
 [[package]]
 name = "agentmosaic-model"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "agentmosaic-tools",
  "async-trait",
@@ -99,7 +99,7 @@ dependencies = [
 
 [[package]]
 name = "agentmosaic-runtime"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "agent-client-protocol",
  "agentmosaic-context",
@@ -120,7 +120,7 @@ dependencies = [
 
 [[package]]
 name = "agentmosaic-storage"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "agentmosaic-context",
  "agentmosaic-core",
@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "agentmosaic-team"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "async-trait",
  "schemars 0.8.22",
@@ -146,14 +146,14 @@ dependencies = [
 
 [[package]]
 name = "agentmosaic-tools"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "agentmosaic-tui"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "agentmosaic-storage",
  "agentmosaic-team",
@@ -164,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "agentmosaic-workspace"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "agentmosaic-tools",
  "glob",
