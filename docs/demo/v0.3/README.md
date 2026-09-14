@@ -19,6 +19,18 @@ no spliced output.
 This is **not** the v0.2.1 demo. The v0.2.1 transcript in `../` is kept as historical
 regression evidence and was not reused.
 
+**Evidence class: pre-release candidate.** This record is bound to the candidate commit
+and a locally built binary whose version string is still the pre-bump workspace version
+(`am 0.2.1`), because the version bump and tag belong to the release task. The canonical
+public v0.3.0 record is a separate, post-publication run of the same workflow using a
+fresh install, and supersedes this one for release purposes. Nothing here was re-enacted
+or spliced.
+
+**Path sanitisation.** Machine-specific absolute paths in this evidence set were replaced
+with the semantic placeholders `$HOME` and `<demo-temp>`; the digests, versions, run id
+and commands are unchanged, and the substitution is disclosed in `transcript.txt` and
+`manifest.txt`.
+
 ## Objective
 
 The objective is a normal user goal. It names no task kind, no target agent id, no
@@ -130,10 +142,28 @@ is hidden, and none of them implies a capability the product does not have.
    the failing run into a successful one; a single run does not by itself prove that
    the budget was the *only* factor, so it is recorded as the observed limiter.
 
+   **Status: closed before release.** `am agent add --max-events N` is now a
+   first-class, validated option, so the normal path can express this configuration
+   without the compatibility spelling. The record above is kept as the historical fact
+   of this run.
+
 3. **The worker's artifact path is configured, not discovered.** The ACP driver
    records the artifacts it is told to report; `artifact_paths=["result.txt"]` was set
    at registration. AgentMosaic does not do automatic changed-file discovery, and this
    evidence does not claim it does.
+
+## Expected representation, and why the digest is not a cross-run gate
+
+The objective is natural: it fixes the semantics ("the count of each token, sorted
+alphabetically") but not the exact rendering. This run produced one line per token as
+`<token> <count>`. A later release rehearsal of the same objective produced
+`<token>: <count>`, which satisfies the same sentence just as well.
+
+So the digest below is a fact of **this** run, not an acceptance criterion that another
+run must reproduce. A byte-reproducible run has to state the representation in the
+objective, for example: *one line per token in exactly this form: `<token> <count>`*.
+Mixing a semantic objective with a byte-exact gate is exactly the confusion this note
+exists to prevent.
 
 ## Acceptance contract
 
@@ -148,7 +178,7 @@ is hidden, and none of them implies a capability the product does not have.
 | stdout is only the answer | transcript section 13 |
 | run exit 0 | transcript section 13 (`exit=0`) |
 | durable final | transcript section 19 (`am final`, no path) |
-| correct artifact | transcript sections 15–16, digest `4297addc…a95d6` |
+| correct artifact | transcript sections 15–16: `alpha 1 / beta 2 / gamma 1`, digest `4297addc…a95d6` (a fact of this run; see the representation note above) |
 | no database path in the normal path | transcript sections 18–20 |
 | one coherent real run | single `run #1`, recorded once; captures are not spliced |
 
