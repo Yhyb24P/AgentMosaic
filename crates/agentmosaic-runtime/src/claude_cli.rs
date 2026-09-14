@@ -1,6 +1,89 @@
 //! Verified non-interactive Claude Code invocation construction.
 
+use agentmosaic_team::RuntimeEvent;
+use serde_json::Value;
+
 use crate::{LaunchSpec, RuntimeError};
+
+/// Normalize one supported Claude `stream-json` object without retaining raw
+/// thinking, tool input, or tool result output.
+pub fn normalize_stream_event(value: &Value) -> Result<Vec<RuntimeEvent>, RuntimeError> {
+    let kind = value
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| RuntimeError::Protocol("Claude stream event missing type".into()))?;
+    if matches!(kind, "error" | "error_during_execution") {
+        return Err(RuntimeError::Protocol(
+            value
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("Claude execution failed")
+                .into(),
+        ));
+    }
+    let event =
+        match kind {
+            "assistant" => value
+                .pointer("/message/content")
+                .and_then(Value::as_array)
+                .and_then(|content| {
+                    content.iter().find_map(|block| {
+                        match block.get("type").and_then(Value::as_str) {
+                            Some("text") => block.get("text").and_then(Value::as_str).map(|text| {
+                                RuntimeEvent::AssistantMessageCompleted { text: text.into() }
+                            }),
+                            Some("tool_use") => block.get("id").and_then(Value::as_str).map(|id| {
+                                RuntimeEvent::ToolCallStarted {
+                                    native_call_id: id.into(),
+                                    tool: block
+                                        .get("name")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("tool")
+                                        .into(),
+                                    input_summary: "tool started".into(),
+                                }
+                            }),
+                            _ => None,
+                        }
+                    })
+                }),
+            "user" => value
+                .pointer("/message/content")
+                .and_then(Value::as_array)
+                .and_then(|content| {
+                    content.iter().find_map(|block| {
+                        (block.get("type").and_then(Value::as_str) == Some("tool_result")).then(
+                            || RuntimeEvent::ToolCallCompleted {
+                                native_call_id: block
+                                    .get("tool_use_id")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("unknown")
+                                    .into(),
+                                tool: "tool".into(),
+                                ok: !block
+                                    .get("is_error")
+                                    .and_then(Value::as_bool)
+                                    .unwrap_or(false),
+                                output_summary: "tool completed".into(),
+                            },
+                        )
+                    })
+                }),
+            "result" => value.get("session_id").and_then(Value::as_str).map(|id| {
+                RuntimeEvent::SessionStarted {
+                    native_session_id: id.into(),
+                }
+            }),
+            "system" if value.get("subtype").and_then(Value::as_str) == Some("init") => value
+                .get("session_id")
+                .and_then(Value::as_str)
+                .map(|id| RuntimeEvent::SessionStarted {
+                    native_session_id: id.into(),
+                }),
+            _ => None,
+        };
+    Ok(event.into_iter().collect())
+}
 
 /// Shell-free argv for Claude Code 2.1.268's supported stream-json surface.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +145,7 @@ fn append_schema(args: &mut Vec<String>, schema: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn invocation_uses_only_verified_machine_flags() {
@@ -83,5 +167,19 @@ mod tests {
             None
         )
         .is_err());
+    }
+
+    #[test]
+    fn stream_json_drops_thinking_and_raw_tool_data() {
+        assert!(matches!(
+            normalize_stream_event(&json!({"type":"system","subtype":"init","session_id":"s"}))
+                .unwrap()[0],
+            RuntimeEvent::SessionStarted { .. }
+        ));
+        let tool = normalize_stream_event(&json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"call","name":"Bash","input":{"secret":"no"}}]}})).unwrap();
+        assert!(
+            matches!(&tool[0], RuntimeEvent::ToolCallStarted { input_summary, .. } if input_summary == "tool started")
+        );
+        assert!(normalize_stream_event(&json!({"type":"assistant","message":{"content":[{"type":"thinking","thinking":"private"}]}})).unwrap().is_empty());
     }
 }

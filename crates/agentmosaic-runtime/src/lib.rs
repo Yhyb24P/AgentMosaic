@@ -31,7 +31,9 @@ pub use acp_worker::{
     PersistedAcpWorkerDriver,
 };
 pub use agent::{AgentConfig, AgentError, AgentLoop, Delivery};
-pub use claude_cli::ClaudeCliInvocation;
+pub use claude_cli::{
+    normalize_stream_event as normalize_claude_stream_event, ClaudeCliInvocation,
+};
 pub use codex_app_server::{
     select_final_agent_message, CodexAppServer, CodexBridgeError, CodexBridgeEvent,
     DEFAULT_FINAL_MESSAGE_MAX_BYTES,
