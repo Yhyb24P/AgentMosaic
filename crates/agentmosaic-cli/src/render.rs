@@ -211,10 +211,16 @@ impl State {
 /// In [`RunMode::Human`] the sink has already announced `run #N  failed`, so
 /// only the diagnosis follows; the quieter surfaces print the headline
 /// themselves. A failure that never reached a root left no durable state, so it
-/// points at the readiness check rather than at the board.
+/// points at the readiness check rather than at the board — but the reason
+/// stays the run's own error, because a reason replaced by a suggestion is a
+/// diagnostic loop: `am run` would send the operator to `am doctor`, which
+/// would answer "Ready to run." about the very configuration that just failed.
 pub fn failure_payload(mode: RunMode, run_id: Option<u64>, error: &str) -> String {
     let Some(run_id) = run_id else {
-        return "Run could not start.\n  am doctor".to_string();
+        return format!(
+            "Run could not start.\n\nReason\n  {reason}\n\nCheck\n  am doctor --verbose",
+            reason = single_line(error)
+        );
     };
     let headline = match mode {
         RunMode::Human => String::new(),
@@ -578,15 +584,29 @@ mod tests {
     }
 
     // A failure with no durable root has no state to preserve: it points at the
-    // one command that says what is not ready.
+    // one command that says what is not ready, and it keeps the run's own
+    // reason — the suggestion must never replace the error.
     #[test]
     fn a_pre_root_failure_points_at_the_readiness_check() {
         for mode in [RunMode::Human, RunMode::Quiet, RunMode::Machine] {
             assert_eq!(
                 failure_payload(mode, None, "no reasoner agent is registered"),
-                "Run could not start.\n  am doctor"
+                "Run could not start.\n\nReason\n  no reasoner agent is registered\n\n\
+                 Check\n  am doctor --verbose"
             );
         }
+        // A multi-line reason is still one bounded line. Replacing the run's
+        // error with its own suggestion is the loop PATCH-B closes.
+        let multi = failure_payload(RunMode::Human, None, "agent `lead` is invalid:\n  no model");
+        assert!(
+            multi.contains("\nReason\n  agent `lead` is invalid: no model\n"),
+            "{multi}"
+        );
+        assert!(
+            !failure_payload(RunMode::Human, None, "the real reason")
+                .contains("Run could not start.\n  am doctor"),
+            "the suggestion replaced the reason"
+        );
     }
 
     // A multi-line reason stays one indented line, and a very long one is

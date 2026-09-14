@@ -25,7 +25,7 @@
 //! reports is durable.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use agentmosaic_storage::{AgentRegistryRecord, SqliteAgentRegistry, SqliteTaskBoard};
@@ -460,31 +460,63 @@ impl TeamRunner {
         lead: &AgentRegistryRecord,
         candidates: Vec<&str>,
     ) -> Result<CodexLeadBrain, TeamRunnerError> {
-        let options = parse_agent_options(&lead.id, lead.driver_config_json.as_deref())?;
-        let launch = launch_spec(lead).map_err(|error| match error {
-            DriverFactoryError::MissingExecutable(_) => {
-                TeamRunnerError::MissingLeadExecutable(lead.id.clone())
-            }
-            other => TeamRunnerError::Driver(other),
-        })?;
-        let config = CodexLeadConfig {
-            launch,
-            working_directory: self.repo.clone(),
-            model: options.model.clone(),
-            overrides: options.overrides.clone(),
-            max_prompt_bytes: options
-                .max_prompt_bytes
-                .unwrap_or(DEFAULT_LEAD_MAX_PROMPT_BYTES),
-            max_answer_bytes: options
-                .max_answer_bytes
-                .unwrap_or(DEFAULT_LEAD_MAX_ANSWER_BYTES),
-            max_events: options.max_events.unwrap_or(DEFAULT_LEAD_MAX_EVENTS),
-        };
+        let config = lead_config(lead, &self.repo)?;
         Ok(CodexLeadBrain::new(
             config,
             candidates.into_iter().map(str::to_string).collect(),
         )?)
     }
+}
+
+/// Build the Lead's effective configuration the way a run will. Starts no
+/// process and opens no board.
+///
+/// This is the one construction path for a Lead's configuration:
+/// [`TeamRunner::lead_brain`] builds its brain from exactly this value, so a
+/// readiness verdict and a run can never disagree about the Lead's
+/// configuration. The configuration is validated here too, because a
+/// configuration a run would refuse is not one a run will use.
+///
+/// The typed form is what the run calls, so the run's error classes stay what
+/// they were; [`validate_lead_config`] is the same verdict as one line of text.
+fn lead_config(
+    record: &AgentRegistryRecord,
+    repo: &Path,
+) -> Result<CodexLeadConfig, TeamRunnerError> {
+    let options = parse_agent_options(&record.id, record.driver_config_json.as_deref())?;
+    let launch = launch_spec(record).map_err(|error| match error {
+        DriverFactoryError::MissingExecutable(_) => {
+            TeamRunnerError::MissingLeadExecutable(record.id.clone())
+        }
+        other => TeamRunnerError::Driver(other),
+    })?;
+    let config = CodexLeadConfig {
+        launch,
+        working_directory: repo.to_path_buf(),
+        model: options.model.clone(),
+        overrides: options.overrides.clone(),
+        max_prompt_bytes: options
+            .max_prompt_bytes
+            .unwrap_or(DEFAULT_LEAD_MAX_PROMPT_BYTES),
+        max_answer_bytes: options
+            .max_answer_bytes
+            .unwrap_or(DEFAULT_LEAD_MAX_ANSWER_BYTES),
+        max_events: options.max_events.unwrap_or(DEFAULT_LEAD_MAX_EVENTS),
+    };
+    config
+        .validate()
+        .map_err(|detail| TeamRunnerError::LeadBrain(LeadBrainError::Unavailable(detail)))?;
+    Ok(config)
+}
+
+/// The Lead's effective configuration, as the one-line verdict a readiness
+/// check renders: `Ok` is exactly the configuration a run would build for
+/// `record`, and `Err` is the message the run's own construction produces.
+pub fn validate_lead_config(
+    record: &AgentRegistryRecord,
+    repo: &Path,
+) -> Result<CodexLeadConfig, String> {
+    lead_config(record, repo).map_err(|error| error.to_string())
 }
 
 /// Build the validated routing registry from the durable rows.
@@ -704,5 +736,74 @@ mod tests {
             error,
             TeamRunnerError::UnsupportedTier { ref tier, .. } if tier == "wizard"
         ));
+    }
+
+    /// The Lead's effective configuration is built by the one function a run
+    /// calls, so a readiness verdict is the run's own verdict.
+    #[test]
+    fn a_lead_configuration_is_built_and_judged_the_way_a_run_does() {
+        let repo = std::env::temp_dir();
+        let good = AgentRegistryRecord {
+            driver_kind: Some("codex-app-server".into()),
+            driver_config_json: Some(
+                r#"{"model":"gpt","overrides":["x=1"],"max_prompt_bytes":4096,"max_answer_bytes":2048,"max_events":4000}"#
+                    .into(),
+            ),
+            ..record("lead", "reasoner")
+        };
+        let config = validate_lead_config(&good, &repo).unwrap();
+        assert_eq!(config.model.as_deref(), Some("gpt"));
+        assert_eq!(config.overrides, vec!["x=1"]);
+        assert_eq!(config.max_prompt_bytes, 4096);
+        assert_eq!(config.max_answer_bytes, 2048);
+        assert_eq!(config.max_events, 4000);
+        assert_eq!(config.working_directory, repo);
+        assert_eq!(config.launch.program, std::path::Path::new("agent"));
+
+        // An absent body is the documented defaults, exactly as a run reads it.
+        let defaults = validate_lead_config(&record("lead", "reasoner"), &repo).unwrap();
+        assert_eq!(defaults.model, None);
+        assert!(defaults.overrides.is_empty());
+        assert_eq!(defaults.max_prompt_bytes, DEFAULT_LEAD_MAX_PROMPT_BYTES);
+        assert_eq!(defaults.max_answer_bytes, DEFAULT_LEAD_MAX_ANSWER_BYTES);
+        assert_eq!(defaults.max_events, DEFAULT_LEAD_MAX_EVENTS);
+
+        for (config, expected) in [
+            ("not json", "is not valid JSON"),
+            ("[1,2]", "must be a JSON object"),
+            (r#"{"api_key":"x"}"#, "looks like a credential"),
+            (
+                r#"{"max_events":"not-a-number"}"#,
+                "`max_events` must be a number",
+            ),
+            (r#"{"max_events":0}"#, "max_events must be positive"),
+            (r#"{"max_prompt_bytes":16}"#, "at least 1024"),
+            (
+                r#"{"max_answer_bytes":0}"#,
+                "max_answer_bytes must be positive",
+            ),
+            (r#"{"model":""}"#, "model must be non-empty"),
+        ] {
+            let row = AgentRegistryRecord {
+                driver_config_json: Some(config.into()),
+                ..record("lead", "reasoner")
+            };
+            let detail = validate_lead_config(&row, &repo).unwrap_err();
+            assert!(detail.contains(expected), "{config}: {detail}");
+        }
+
+        // No executable: the run's own launch error, verbatim.
+        let no_program = AgentRegistryRecord {
+            executable: None,
+            ..record("lead", "reasoner")
+        };
+        assert!(validate_lead_config(&no_program, &repo)
+            .unwrap_err()
+            .contains("has no executable"));
+        // A repository that is not a directory is not one a run works in.
+        let missing = repo.join("agentmosaic-lead-config-must-not-exist");
+        assert!(validate_lead_config(&record("lead", "reasoner"), &missing)
+            .unwrap_err()
+            .contains("working directory must exist"));
     }
 }

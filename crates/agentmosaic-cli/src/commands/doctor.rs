@@ -7,7 +7,10 @@
 use std::path::Path;
 use std::time::Duration;
 
-use agentmosaic_runtime::{AcpWorkerConfig, AcpWorkerDriver, CodexAppServer, LaunchSpec};
+use agentmosaic_runtime::{
+    validate_driver_config, validate_lead_config, AcpWorkerConfig, AcpWorkerDriver, CodexAppServer,
+    LaunchSpec,
+};
 use agentmosaic_storage::{AgentRegistryRecord, SqliteAgentRegistry};
 
 use crate::json::{self, DoctorAgentJson, DoctorJson, TeamJson};
@@ -24,9 +27,10 @@ pub fn run(verbose: bool, machine: bool) -> Result<(String, bool), String> {
         .schema_version()
         .map_err(|e| format!("doctor: {e}"))?;
     let agents = registry.list_agents().map_err(|e| format!("doctor: {e}"))?;
+    let lead = resolved_lead(&agents);
     let described = agents
         .iter()
-        .map(|agent| describe(agent, &root))
+        .map(|agent| describe(agent, &root, lead))
         .collect::<Vec<_>>();
     let report = DoctorReport {
         project_root: root.display().to_string(),
@@ -50,19 +54,71 @@ struct DescribedAgent {
 }
 
 /// One registered Agent, as the report renders it.
-fn describe(agent: &AgentRegistryRecord, root: &Path) -> DescribedAgent {
-    let probe = probe_agent(agent, root);
+///
+/// Configuration comes first: a run reads this Agent's registry row before it
+/// touches the board, so a configuration a run would refuse is decided here
+/// rather than after a probe that cannot see it. Only a configuration the run
+/// itself accepts goes on to be probed.
+fn describe(agent: &AgentRegistryRecord, root: &Path, lead: Option<&str>) -> DescribedAgent {
+    let configuration = configuration_problem(agent, root, lead);
+    let (stage, stages, detail) = match configuration {
+        Some(detail) => (
+            ReadinessStage::ConfigInvalid,
+            "CONFIG_INVALID".to_string(),
+            Some(detail),
+        ),
+        None => {
+            let probe = probe_agent(agent, root);
+            (probe.stage, probe.stages, None)
+        }
+    };
     DescribedAgent {
         view: DoctorAgent {
             id: agent.id.clone(),
             role: agent.tier.clone(),
             program: agent.executable.clone().unwrap_or_else(|| "-".into()),
             launch: crate::output::bounded_launch(agent),
-            stage: probe.stage,
-            stages: probe.stages,
+            stage,
+            stages,
+            detail,
         },
         adapter: agent.driver_kind.clone(),
     }
+}
+
+/// The id of the run's Lead: the single registered reasoner, exactly as a run
+/// resolves it. Zero or several reasoners is a composition problem the report
+/// already carries, so no Agent is validated as the Lead then.
+fn resolved_lead(agents: &[AgentRegistryRecord]) -> Option<&str> {
+    let mut reasoners = agents.iter().filter(|agent| agent.tier == "reasoner");
+    let only = reasoners.next()?;
+    if reasoners.next().is_some() {
+        return None;
+    }
+    Some(only.id.as_str())
+}
+
+/// The configuration problem a run would hit for this Agent, as the validator
+/// itself states it, or None when a run's own configuration checks accept it.
+///
+/// The Lead's effective configuration is validated the way the run builds it,
+/// and every Agent's driver config is validated the way the run parses it. Both
+/// validators construct nothing and start no process.
+fn configuration_problem(
+    agent: &AgentRegistryRecord,
+    root: &Path,
+    lead: Option<&str>,
+) -> Option<String> {
+    // A run builds every Agent's driver before it builds the Lead's brain, so
+    // the driver rules are read first: an operator sees the same failure the
+    // run would report, in the run's own order.
+    if let Err(detail) = validate_driver_config(agent) {
+        return Some(detail);
+    }
+    if lead == Some(agent.id.as_str()) {
+        return validate_lead_config(agent, root).err();
+    }
+    None
 }
 
 /// The decision as one typed object: what is registered, whether each runtime

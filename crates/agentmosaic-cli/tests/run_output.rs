@@ -398,9 +398,18 @@ fn a_run_that_cannot_start_points_at_the_readiness_check() {
 
     assert!(!run.status.success(), "a team with no agents cannot run");
     assert_eq!(stdout(&run), "", "a failed run wrote to stdout");
+    // The reason is the run's own error — here the missing-tier message — and
+    // `am doctor` is a suggestion next to it, never a replacement for it.
+    let failure = stderr(&run);
+    let expected_reason = "no agent is registered for the Reasoner tier; a team run needs \
+                           at least one reasoner and one worker; utility agents are optional";
+    assert!(failure.contains(expected_reason), "{failure}");
     assert_eq!(
-        stderr(&run),
-        "run     starting  deliver the objective\nRun could not start.\n  am doctor\n"
+        failure,
+        format!(
+            "run     starting  deliver the objective\nRun could not start.\n\nReason\n  \
+             {expected_reason}\n\nCheck\n  am doctor --verbose\n"
+        )
     );
     let _ = std::fs::remove_dir_all(root);
 }

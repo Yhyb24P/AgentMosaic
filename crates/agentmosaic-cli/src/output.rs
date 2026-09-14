@@ -16,6 +16,10 @@ const MAX_OBJECTIVE_BYTES: usize = 72;
 /// terminal.
 const MAX_LAUNCH_BYTES: usize = 48;
 
+/// The longest configuration detail one Agent's report line carries. The
+/// `Reason` section below it always carries the detail whole.
+const MAX_AGENT_DETAIL_BYTES: usize = 96;
+
 /// Argument spellings that make an argv credential-looking. A durable,
 /// shareable launch rendering never echoes one; the CLI has no business
 /// printing a token it does not own.
@@ -383,6 +387,9 @@ pub enum ReadinessStage {
     Ready,
     ProgramMissing,
     LaunchSpecInvalid,
+    /// The configuration a run would read from this Agent's registry row is not
+    /// one a run would accept.
+    ConfigInvalid,
     SpawnFailed,
     ProtocolUnavailable,
     RuntimePreparationRequired,
@@ -401,6 +408,7 @@ impl ReadinessStage {
             Self::Ready => "ready",
             Self::ProgramMissing => "program_missing",
             Self::LaunchSpecInvalid => "launch_spec_invalid",
+            Self::ConfigInvalid => "config_invalid",
             Self::SpawnFailed => "spawn_failed",
             Self::ProtocolUnavailable => "protocol_unavailable",
             Self::RuntimePreparationRequired => "runtime_preparation_required",
@@ -421,6 +429,10 @@ pub struct DoctorAgent {
     pub stage: ReadinessStage,
     /// The bounded diagnostic stages, printed only by `am doctor --verbose`.
     pub stages: String,
+    /// The validator's own one-line detail when the configuration is not one a
+    /// run would accept. It is rendered on the Agent's line and, whole, as the
+    /// reason.
+    pub detail: Option<String>,
 }
 
 /// Everything `am doctor` decided: the project, its registered Agents, and the
@@ -488,13 +500,20 @@ impl DoctorReport {
             } else {
                 "not ready"
             };
+            // A configuration failure is the Agent's own fact, so its line
+            // carries it: the decision names the Agent that has to be fixed.
+            let detail = agent
+                .detail
+                .as_deref()
+                .map(|detail| format!("  {}", bounded(detail, MAX_AGENT_DETAIL_BYTES)))
+                .unwrap_or_default();
             lines.push(if verbose {
                 format!(
-                    "{:<width$}{state}  {}  {}",
+                    "{:<width$}{state}  {}  {}{detail}",
                     agent.id, agent.launch, agent.stages
                 )
             } else {
-                format!("{:<width$}{state}  {}", agent.id, agent.launch)
+                format!("{:<width$}{state}  {}{detail}", agent.id, agent.launch)
             });
         }
         lines.push(format!(
@@ -574,6 +593,16 @@ impl DoctorAgent {
                         .to_string(),
                 ),
             },
+            ReadinessStage::ConfigInvalid => Remediation {
+                reason: match self.detail.as_deref() {
+                    Some(detail) => detail.to_string(),
+                    None => format!("the configuration of `{}` is not valid", self.id),
+                },
+                fix: recheck(format!(
+                    "fix the driver configuration of `{id}` or re-register the Agent, then run:",
+                    id = self.id
+                )),
+            },
             ReadinessStage::SpawnFailed => Remediation {
                 reason: format!("the {role} runtime `{}` could not be started", self.program),
                 fix: recheck(format!("check the {role} runtime configuration, then run:")),
@@ -637,6 +666,7 @@ mod tests {
             launch: program.into(),
             stage,
             stages: format!("PROGRAM_FOUND LAUNCHSPEC_VALID {}", stage_code(stage)),
+            detail: None,
         }
     }
 
@@ -645,6 +675,7 @@ mod tests {
             ReadinessStage::Ready => "SPAWN_OK PROTOCOL_OK SESSION_OK READY",
             ReadinessStage::ProgramMissing => "PROGRAM_NOT_FOUND",
             ReadinessStage::LaunchSpecInvalid => "LAUNCHSPEC_INVALID",
+            ReadinessStage::ConfigInvalid => "CONFIG_INVALID",
             ReadinessStage::SpawnFailed => "SPAWN_FAILED",
             ReadinessStage::ProtocolUnavailable => "PROTOCOL_UNAVAILABLE",
             ReadinessStage::RuntimePreparationRequired => "RUNTIME_PREPARATION_REQUIRED",
@@ -782,6 +813,50 @@ mod tests {
             assert!(!text.contains("login"), "{text}");
             assert!(!text.contains("Ready to run."), "{text}");
         }
+    }
+
+    /// A configuration the run would refuse is its own readiness class: the
+    /// agent's line carries the detail, and the reason carries it whole.
+    #[test]
+    fn doctor_reports_an_invalid_configuration_with_its_detail() {
+        let detail = "agent `lead` has an invalid driver config: `max_events` must be a number";
+        let mut agents = ready_pair();
+        agents[0] = DoctorAgent {
+            detail: Some(detail.into()),
+            ..agent("lead", "reasoner", "codex", ReadinessStage::ConfigInvalid)
+        };
+        let verdict = report(agents);
+        assert!(!verdict.ready());
+        let text = verdict.render(false);
+        assert!(text.contains("lead      not ready  codex  "), "{text}");
+        assert!(text.contains(detail), "{text}");
+        assert!(text.contains(&format!("\nReason\n  {detail}\n")), "{text}");
+        assert!(
+            text.contains("fix the driver configuration of `lead`"),
+            "{text}"
+        );
+        assert!(text.contains("\n  am doctor"), "{text}");
+        assert!(!text.contains("Ready to run."), "{text}");
+
+        // A detail longer than one line carries is bounded on the line, and
+        // never cut in the reason.
+        let long = "x".repeat(MAX_AGENT_DETAIL_BYTES + 40);
+        let mut agents = ready_pair();
+        agents[0] = DoctorAgent {
+            detail: Some(long.clone()),
+            ..agent("lead", "reasoner", "codex", ReadinessStage::ConfigInvalid)
+        };
+        let text = report(agents).render(false);
+        let line = text
+            .lines()
+            .find(|line| line.starts_with("lead"))
+            .expect("the lead's line");
+        assert!(line.ends_with("..."), "the line is bounded: {line}");
+        assert!(line.len() < MAX_AGENT_DETAIL_BYTES + 64, "{line}");
+        assert!(
+            text.contains(&format!("\nReason\n  {long}\n")),
+            "the reason carries the detail whole:\n{text}"
+        );
     }
 
     /// An incomplete team is not ready even when every registered runtime is,
