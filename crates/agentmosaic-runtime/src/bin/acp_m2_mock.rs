@@ -25,6 +25,8 @@ enum Mode {
     CancelWait,
     Crash,
     Repair,
+    Permission,
+    Resume,
 }
 
 fn parse_mode(args: &[String]) -> Result<Mode, String> {
@@ -43,6 +45,8 @@ fn parse_mode(args: &[String]) -> Result<Mode, String> {
                     "cancel-wait" => Mode::CancelWait,
                     "crash" => Mode::Crash,
                     "repair" => Mode::Repair,
+                    "permission" => Mode::Permission,
+                    "resume" => Mode::Resume,
                     other => return Err(format!("unknown mode: {other}")),
                 };
             }
@@ -112,7 +116,15 @@ fn handle_line(line: &str, mode: Mode, pending_prompt: &mut Option<Value>) -> Li
                 return LineOutcome::Crash;
             }
         }
+        Some("session/resume") if matches!(mode, Mode::Resume) => {
+            write_response(&id, json!({}));
+        }
         Some("session/prompt") => {
+            if matches!(mode, Mode::Permission) {
+                *pending_prompt = id;
+                write_permission_request();
+                return LineOutcome::Done;
+            }
             let turn = PROMPT_TURNS.fetch_add(1, Ordering::SeqCst);
             let text = if matches!(mode, Mode::Repair) && turn == 0 {
                 "not-a-peer-result".into()
@@ -140,7 +152,7 @@ fn handle_line(line: &str, mode: Mode, pending_prompt: &mut Option<Value>) -> Li
                     *pending_prompt = id;
                     return LineOutcome::Done;
                 }
-                Mode::Sync | Mode::Crash | Mode::Repair => {}
+                Mode::Permission | Mode::Sync | Mode::Crash | Mode::Repair | Mode::Resume => {}
             }
             if !matches!(mode, Mode::Hang) {
                 write_response(&id, json!({ "stopReason": "end_turn" }));
@@ -150,9 +162,12 @@ fn handle_line(line: &str, mode: Mode, pending_prompt: &mut Option<Value>) -> Li
             write_response(
                 &id,
                 json!({
-                    "protocolVersion": [1],
-                    "agentCapabilities": {},
+                    "protocolVersion": 1,
+                    "agentCapabilities": if matches!(mode, Mode::Resume) {
+                        json!({ "sessionCapabilities": { "resume": {} } })
+                    } else { json!({}) },
                     "authMethods": [],
+                    "agentInfo": { "name": "acp-m2-mock", "version": "1.0" },
                 }),
             );
         }
@@ -170,12 +185,53 @@ fn handle_line(line: &str, mode: Mode, pending_prompt: &mut Option<Value>) -> Li
             }
         }
         None => {
+            if matches!(mode, Mode::Permission)
+                && id.as_ref().and_then(Value::as_str) == Some("mock-permission")
+            {
+                let selected = value
+                    .get("result")
+                    .and_then(|result| result.get("outcome"))
+                    .and_then(|outcome| outcome.get("optionId"))
+                    .and_then(Value::as_str);
+                if selected != Some("reject") {
+                    write_error(&pending_prompt.take(), -32000, "mock requires deny policy");
+                    return LineOutcome::Done;
+                }
+                write_notification(&json!({
+                    "sessionId": MOCK_SESSION,
+                    "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": { "type": "text", "text": r#"{"summary":"permission-denied"}"# },
+                    },
+                }));
+                write_response(&pending_prompt.take(), json!({ "stopReason": "end_turn" }));
+                return LineOutcome::Done;
+            }
             if id.is_some() {
                 write_error(&id, -32600, "malformed JSON-RPC request");
             }
         }
     }
     LineOutcome::Done
+}
+
+fn write_permission_request() {
+    write_frame(&json!({
+        "jsonrpc": "2.0",
+        "id": "mock-permission",
+        "method": "session/request_permission",
+        "params": {
+            "sessionId": MOCK_SESSION,
+            "toolCall": {
+                "toolCallId": "mock-tool-call",
+                "title": "write guarded file",
+            },
+            "options": [
+                { "optionId": "allow", "name": "Allow once", "kind": "allow_once" },
+                { "optionId": "reject", "name": "Deny once", "kind": "reject_once" },
+            ],
+        },
+    }));
 }
 
 fn write_response(id: &Option<Value>, result: Value) {

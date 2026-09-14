@@ -6,6 +6,8 @@ use std::sync::Arc;
 use agentmosaic_storage::SqliteTaskBoard;
 use agentmosaic_team::{RuntimeEventPolicy, RuntimeEventRecord};
 
+use crate::runtime_adapter::{RuntimeError, RuntimeEventSink};
+
 /// Best-effort presentation sink. Implementations cannot return an execution
 /// error, and the dispatcher contains a panicking observer as well.
 pub trait LiveRuntimeEventSink: Send + Sync {
@@ -77,6 +79,12 @@ impl RuntimeEventDispatcher {
             self.durable.write(record)?;
         }
         Ok(())
+    }
+}
+
+impl RuntimeEventSink for RuntimeEventDispatcher {
+    fn emit(&self, record: RuntimeEventRecord) -> Result<(), RuntimeError> {
+        RuntimeEventDispatcher::emit(self, record).map_err(RuntimeError::Persistence)
     }
 }
 

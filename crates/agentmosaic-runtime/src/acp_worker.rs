@@ -2,18 +2,36 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use agent_client_protocol::schema::v1::{
-    AuthMethodId, AuthenticateRequest, CancelNotification, StopReason,
+    AuthMethodId, AuthenticateRequest, CancelNotification, ContentBlock, ContentChunk,
+    InitializeRequest, InitializeResponse, PermissionOptionKind, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
+    SessionNotification, SessionUpdate, StopReason, ToolCallStatus,
 };
+use agent_client_protocol::schema::ProtocolVersion;
+use agent_client_protocol::util::MatchDispatch;
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Client, SessionMessage};
-use agentmosaic_storage::{ExternalRuntimeBinding, SqliteTaskBoard};
-use agentmosaic_team::{AgentDriver, AgentTask, AgentTaskResult, ArtifactMeta, TaskBoard};
+use agentmosaic_storage::{
+    ExtendedExternalRuntimeBinding, ExternalRuntimeBinding, SqliteTaskBoard,
+};
+use agentmosaic_team::{
+    AgentDriver, AgentTask, AgentTaskResult, ArtifactMeta, RuntimeEvent, RuntimeFileChangeKind,
+    RuntimePermissionDecision, RuntimePermissionOption, RuntimePlanItem, TaskBoard, TaskStatus,
+};
 use async_trait::async_trait;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use tokio::sync::oneshot;
 use tokio::sync::watch;
+
+use crate::{
+    NoopLiveRuntimeEventSink, NoopRuntimeEventSink, RuntimeAdapter, RuntimeBinding,
+    RuntimeCapabilities, RuntimeCheckpoint, RuntimeDescriptor, RuntimeError,
+    RuntimeEventDispatcher, RuntimeEventSink, RuntimeExecution, RuntimeExecutionRequest,
+    RuntimeKind, RuntimeOutcome, SqliteRuntimeEventWriter,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcpWorkerConfig {
@@ -54,19 +72,84 @@ impl std::fmt::Display for AcpWorkerError {
 }
 impl std::error::Error for AcpWorkerError {}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AcpPermissionPolicy {
+    /// Select an advertised rejection option, or cancel when none exists.
+    #[default]
+    Deny,
+    /// Explicit opt-in for isolated, controlled local execution only.
+    Allow,
+}
+
+#[derive(Clone)]
 pub struct AcpWorkerDriver {
     config: AcpWorkerConfig,
+    permission_policy: AcpPermissionPolicy,
+    events: Arc<dyn RuntimeEventSink>,
 }
 
 /// Scheduler-facing ACP driver that persists only the foreign session binding
 /// into the existing SQLite team board. The scheduler remains the sole owner
 /// of task/attempt lifecycle and result commits.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PersistedAcpWorkerDriver {
-    worker: AcpWorkerDriver,
+    driver: crate::RuntimeAgentDriver,
+}
+
+struct PersistedAcpRuntimeRun {
+    adapter: AcpRuntimeAdapter,
     database: PathBuf,
     agent_id: String,
+    events: Arc<dyn RuntimeEventSink>,
+}
+
+/// Stable-v1 ACP implementation of the vendor-neutral runtime adapter.
+///
+/// `start` waits until ACP has returned the *actual* session id, but holds the
+/// first prompt behind a one-shot gate.  This lets the scheduler-facing bridge
+/// persist that binding before any foreign side effect is released.
+#[derive(Clone)]
+pub struct AcpRuntimeAdapter {
+    worker: AcpWorkerDriver,
+}
+
+struct AcpRuntimeExecution {
+    binding: RuntimeBinding,
+    release: Option<oneshot::Sender<()>>,
+    cancellation: AcpCancellation,
+    task: Option<tokio::task::JoinHandle<Result<AcpTaskExecution, AcpWorkerError>>>,
+}
+
+struct AcpResumedExecution {
+    binding: RuntimeBinding,
+    worker: AcpWorkerDriver,
+    task: AgentTask,
+    cancelled: bool,
+}
+
+impl std::fmt::Debug for AcpWorkerDriver {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AcpWorkerDriver")
+            .field("config", &self.config)
+            .field("permission_policy", &self.permission_policy)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for PersistedAcpWorkerDriver {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("PersistedAcpWorkerDriver").finish()
+    }
+}
+
+impl std::fmt::Debug for AcpRuntimeAdapter {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AcpRuntimeAdapter")
+            .field("worker", &self.worker)
+            .finish()
+    }
 }
 
 /// A bounded, same-session ACP exchange. The native session id is an external
@@ -92,6 +175,11 @@ pub struct AcpTaskExecution {
 /// reference remains foreign runtime metadata; callers keep canonical state in
 /// their existing task board.
 pub type AcpSessionStartedObserver = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+
+/// Internal extension of the legacy session callback. It carries only the
+/// typed initialization snapshot, never raw wire frames or credentials.
+type AcpSessionDescriptorObserver =
+    Arc<dyn Fn(&str, &RuntimeDescriptor) -> Result<(), String> + Send + Sync>;
 
 /// A caller-owned cancellation trigger for one ACP task execution.  It does
 /// not carry a session id: the live driver derives the foreign reference from
@@ -135,6 +223,42 @@ enum AcpRunOutcome {
     Cancelled,
 }
 
+struct RuntimeStartGate {
+    binding: oneshot::Sender<RuntimeBinding>,
+    release: oneshot::Receiver<()>,
+}
+
+#[derive(Clone)]
+struct AcpEventIdentity {
+    task_id: u64,
+    attempt: u32,
+    agent_id: String,
+    runtime_name: Option<String>,
+    events: Arc<dyn RuntimeEventSink>,
+}
+
+impl AcpEventIdentity {
+    fn emit(
+        &self,
+        native_session_id: &str,
+        event: RuntimeEvent,
+    ) -> Result<(), agent_client_protocol::Error> {
+        self.events
+            .emit(agentmosaic_team::RuntimeEventRecord {
+                task_id: self.task_id,
+                attempt: self.attempt,
+                agent_id: self.agent_id.clone(),
+                runtime_name: self.runtime_name.clone(),
+                native_session_id: Some(native_session_id.to_string()),
+                event,
+            })
+            .map_err(|error| {
+                agent_client_protocol::Error::internal_error()
+                    .data(format!("emit normalized runtime event: {error}"))
+            })
+    }
+}
+
 impl AcpWorkerDriver {
     pub fn new(config: AcpWorkerConfig) -> Result<Self, AcpWorkerError> {
         if config.runtime_kind.trim().is_empty()
@@ -153,7 +277,21 @@ impl AcpWorkerDriver {
         {
             return Err(AcpWorkerError::InvalidConfig("runtime kind, command, existing working directory, bounded relative artifact paths, timeout, and limits are required".into()));
         }
-        Ok(Self { config })
+        Ok(Self {
+            config,
+            permission_policy: AcpPermissionPolicy::Deny,
+            events: Arc::new(NoopRuntimeEventSink),
+        })
+    }
+
+    pub fn with_permission_policy(mut self, policy: AcpPermissionPolicy) -> Self {
+        self.permission_policy = policy;
+        self
+    }
+
+    pub fn with_event_sink(mut self, events: Arc<dyn RuntimeEventSink>) -> Self {
+        self.events = events;
+        self
     }
 
     /// Verify that an ACP runtime can initialize and open the smallest safe
@@ -161,6 +299,13 @@ impl AcpWorkerDriver {
     /// execute a user task: it is the bounded protocol check used by `am
     /// doctor`.
     pub async fn probe_readiness(&self) -> Result<(), AcpWorkerError> {
+        self.probe_descriptor().await.map(|_| ())
+    }
+
+    /// Perform the stable-v1 handshake and return only typed, negotiated
+    /// runtime facts. The client advertises no reverse filesystem or terminal
+    /// capabilities, so a peer cannot route unrestricted host I/O through AM.
+    pub async fn probe_descriptor(&self) -> Result<RuntimeDescriptor, AcpWorkerError> {
         let agent =
             AcpAgent::new(AcpAgentConfig::new(&self.config.command).args(self.config.args.clone()));
         let cwd = self.config.working_directory.clone();
@@ -169,11 +314,12 @@ impl AcpWorkerDriver {
                 .builder()
                 .name("agentmosaic-doctor")
                 .connect_with(agent, async move |cx| {
+                    let initialized = initialize_v1(&cx).await?;
                     cx.build_session(&cwd)
                         .block_task()
                         .start_session()
                         .await
-                        .map(|_session| ())
+                        .map(|_session| descriptor_from_initialize(&initialized))
                 });
         tokio::time::timeout(self.config.timeout, run)
             .await
@@ -194,25 +340,42 @@ impl AcpWorkerDriver {
         task: &AgentTask,
         cancellation: &mut AcpCancellationListener,
     ) -> Result<(String, String), AcpWorkerError> {
-        self.run_with_cancellation_observed(task, cancellation, None)
-            .await
+        self.run_with_cancellation_observed(
+            task,
+            cancellation,
+            None,
+            None,
+            None,
+            1,
+            self.config.runtime_kind.clone(),
+        )
+        .await
     }
 
+    #[allow(clippy::too_many_arguments)] // lifecycle callbacks and the start gate are independently optional.
     async fn run_with_cancellation_observed(
         &self,
         task: &AgentTask,
         cancellation: &mut AcpCancellationListener,
         session_started: Option<AcpSessionStartedObserver>,
+        descriptor_started: Option<AcpSessionDescriptorObserver>,
+        start_gate: Option<RuntimeStartGate>,
+        attempt: u32,
+        agent_id: String,
     ) -> Result<(String, String), AcpWorkerError> {
         let prompt = bounded_prompt(task, self.config.max_prompt_bytes);
         let agent =
             AcpAgent::new(AcpAgentConfig::new(&self.config.command).args(self.config.args.clone()));
         let cwd = self.config.working_directory.clone();
         let max_result_bytes = self.config.max_result_bytes;
+        let events = Arc::clone(&self.events);
+        let permission_policy = self.permission_policy;
+        let task_id = task.id;
         let run = Client
             .builder()
             .name("agentmosaic-r6")
             .connect_with(agent, async move |cx| {
+                let initialized = initialize_v1(&cx).await?;
                 if let Some(method) = &self.config.auth_method {
                     cx.send_request(AuthenticateRequest::new(AuthMethodId::new(method.as_str())))
                         .block_task()
@@ -228,11 +391,49 @@ impl AcpWorkerDriver {
                                     .data(format!("persist ACP session binding: {error}"))
                             })?;
                         }
+                        let descriptor = descriptor_from_initialize(&initialized);
+                        if let Some(observer) = descriptor_started {
+                            observer(&session_id, &descriptor).map_err(|error| {
+                                agent_client_protocol::Error::internal_error()
+                                    .data(format!("persist ACP runtime descriptor: {error}"))
+                            })?;
+                        }
+                        if let Some(start_gate) = start_gate {
+                            let binding = RuntimeBinding {
+                                task_id,
+                                attempt,
+                                agent_id: agent_id.clone(),
+                                runtime_kind: RuntimeKind::Acp,
+                                native_session_id: session_id.clone(),
+                                descriptor: descriptor.clone(),
+                            };
+                            start_gate.binding.send(binding).map_err(|_| {
+                                agent_client_protocol::Error::internal_error()
+                                    .data("ACP runtime starter dropped before binding")
+                            })?;
+                            start_gate.release.await.map_err(|_| {
+                                agent_client_protocol::Error::internal_error()
+                                    .data("ACP runtime execution was dropped before release")
+                            })?;
+                        }
+                        let identity = AcpEventIdentity {
+                            task_id,
+                            attempt,
+                            agent_id,
+                            runtime_name: descriptor.runtime_name,
+                            events,
+                        };
+                        identity.emit(
+                            &session_id,
+                            RuntimeEvent::SessionStarted {
+                                native_session_id: session_id.clone(),
+                            },
+                        )?;
                         session.send_prompt(&prompt)?;
                         let connection = session.connection().clone();
                         let native_session_id = session.session_id().clone();
                         tokio::select! {
-                            response = session.read_to_string() => {
+                            response = read_acp_turn(&mut session, &identity, permission_policy) => {
                                 let response = response?;
                                 if parse_peer_result(&response, max_result_bytes).is_ok() {
                                     Ok(AcpRunOutcome::Completed(session_id, response))
@@ -244,7 +445,7 @@ impl AcpWorkerDriver {
                                     // heuristic extraction.
                                     session.send_prompt("Your prior result did not satisfy the required peer-result contract. Return exactly one JSON object with only a non-empty string field named summary. Do not include prose, markdown, credentials, hidden reasoning, or other fields.")?;
                                     let repaired = tokio::select! {
-                                        repaired = session.read_to_string() => repaired?,
+                                        repaired = read_acp_turn(&mut session, &identity, permission_policy) => repaired?,
                                         _ = cancellation.cancelled() => {
                                             connection.send_notification(CancelNotification::new(native_session_id))?;
                                             loop {
@@ -309,6 +510,7 @@ impl AcpWorkerDriver {
             .builder()
             .name("agentmosaic-r6")
             .connect_with(agent, async move |cx| {
+                initialize_v1(&cx).await?;
                 if let Some(method) = &self.config.auth_method {
                     cx.send_request(AuthenticateRequest::new(AuthMethodId::new(method.as_str())))
                         .block_task()
@@ -360,6 +562,16 @@ impl AcpWorkerDriver {
             .builder()
             .name("agentmosaic-r6")
             .connect_with(agent, async move |cx| {
+                let initialized = initialize_v1(&cx).await?;
+                if initialized
+                    .agent_capabilities
+                    .session_capabilities
+                    .resume
+                    .is_none()
+                {
+                    return Err(agent_client_protocol::Error::invalid_request()
+                        .data("ACP agent did not advertise session/resume"));
+                }
                 if let Some(method) = &self.config.auth_method {
                     cx.send_request(AuthenticateRequest::new(AuthMethodId::new(method.as_str())))
                         .block_task()
@@ -413,8 +625,39 @@ impl AcpWorkerDriver {
         cancellation: &mut AcpCancellationListener,
         session_started: AcpSessionStartedObserver,
     ) -> Result<AcpTaskExecution, AcpWorkerError> {
+        self.execute_task_with_attempt_context(
+            task,
+            cancellation,
+            session_started,
+            None,
+            None,
+            1,
+            self.config.runtime_kind.clone(),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)] // preserves the compatibility entrypoints while carrying exact attempt context.
+    async fn execute_task_with_attempt_context(
+        &self,
+        task: &AgentTask,
+        cancellation: &mut AcpCancellationListener,
+        session_started: AcpSessionStartedObserver,
+        descriptor_started: Option<AcpSessionDescriptorObserver>,
+        start_gate: Option<RuntimeStartGate>,
+        attempt: u32,
+        agent_id: String,
+    ) -> Result<AcpTaskExecution, AcpWorkerError> {
         let (external_session_id, response) = self
-            .run_with_cancellation_observed(task, cancellation, Some(session_started))
+            .run_with_cancellation_observed(
+                task,
+                cancellation,
+                Some(session_started),
+                descriptor_started,
+                start_gate,
+                attempt,
+                agent_id,
+            )
             .await?;
         let summary = parse_peer_result(&response, self.config.max_result_bytes)?;
         let artifacts = self.collect_artifacts()?;
@@ -473,74 +716,608 @@ impl AcpWorkerDriver {
     }
 }
 
+impl AcpRuntimeAdapter {
+    pub fn new(config: AcpWorkerConfig) -> Result<Self, AcpWorkerError> {
+        Ok(Self {
+            worker: AcpWorkerDriver::new(config)?,
+        })
+    }
+
+    pub fn from_worker(worker: AcpWorkerDriver) -> Self {
+        Self { worker }
+    }
+}
+
+fn runtime_error(error: AcpWorkerError) -> RuntimeError {
+    match error {
+        AcpWorkerError::InvalidConfig(detail) => RuntimeError::InvalidConfiguration(detail),
+        AcpWorkerError::Protocol(detail) => RuntimeError::Protocol(detail),
+        AcpWorkerError::TimedOut => RuntimeError::TimedOut,
+        AcpWorkerError::Cancelled => RuntimeError::Cancelled,
+        AcpWorkerError::InvalidPeerResult(detail) => RuntimeError::InvalidResult(detail),
+    }
+}
+
+impl AcpRuntimeExecution {
+    fn release(&mut self) -> Result<(), RuntimeError> {
+        if let Some(release) = self.release.take() {
+            release
+                .send(())
+                .map_err(|_| RuntimeError::Protocol("ACP execution gate was dropped".into()))?;
+        }
+        Ok(())
+    }
+
+    async fn finish(&mut self) -> Result<RuntimeOutcome, RuntimeError> {
+        let task = self.task.take().ok_or(RuntimeError::AlreadyFinished)?;
+        let execution = task
+            .await
+            .map_err(|error| RuntimeError::Protocol(format!("ACP execution task failed: {error}")))?
+            .map_err(runtime_error)?;
+        if execution.result.task_id != self.binding.task_id
+            || execution.external_session_id != self.binding.native_session_id
+        {
+            return Err(RuntimeError::InvalidResult(
+                "ACP completion did not match the bound task/session".into(),
+            ));
+        }
+        Ok(RuntimeOutcome {
+            binding: self.binding.clone(),
+            result: execution.result,
+        })
+    }
+}
+
+#[async_trait]
+impl RuntimeExecution for AcpRuntimeExecution {
+    fn binding(&self) -> &RuntimeBinding {
+        &self.binding
+    }
+
+    async fn wait(&mut self) -> Result<RuntimeOutcome, RuntimeError> {
+        self.release()?;
+        self.finish().await
+    }
+
+    async fn cancel(&mut self) -> Result<(), RuntimeError> {
+        self.cancellation.cancel();
+        self.release()?;
+        match self.finish().await {
+            Err(RuntimeError::Cancelled) => Ok(()),
+            Ok(_) => Err(RuntimeError::Protocol(
+                "ACP completed successfully after cancellation was requested".into(),
+            )),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+#[async_trait]
+impl RuntimeExecution for AcpResumedExecution {
+    fn binding(&self) -> &RuntimeBinding {
+        &self.binding
+    }
+
+    async fn wait(&mut self) -> Result<RuntimeOutcome, RuntimeError> {
+        if self.cancelled {
+            return Err(RuntimeError::Cancelled);
+        }
+        let summary = self
+            .worker
+            .resume_with_follow_up(&self.binding.native_session_id, &self.task.objective)
+            .await
+            .map_err(runtime_error)?;
+        Ok(RuntimeOutcome {
+            binding: self.binding.clone(),
+            result: AgentTaskResult {
+                task_id: self.task.id,
+                summary,
+                artifacts: Vec::new(),
+                message: None,
+            },
+        })
+    }
+
+    async fn cancel(&mut self) -> Result<(), RuntimeError> {
+        // A resume has no live session until `wait` performs the negotiated
+        // request. Marking it cancelled prevents any replay/prompt side effect.
+        self.cancelled = true;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl RuntimeAdapter for AcpRuntimeAdapter {
+    fn adapter_kind(&self) -> RuntimeKind {
+        RuntimeKind::Acp
+    }
+
+    async fn probe(&self) -> Result<RuntimeDescriptor, RuntimeError> {
+        self.worker.probe_descriptor().await.map_err(runtime_error)
+    }
+
+    async fn start(
+        &self,
+        request: RuntimeExecutionRequest,
+        events: Arc<dyn RuntimeEventSink>,
+    ) -> Result<Box<dyn RuntimeExecution>, RuntimeError> {
+        let worker = self.worker.clone().with_event_sink(events);
+        let timeout = worker.config.timeout;
+        let (cancellation, mut listener) = AcpCancellation::new();
+        let (binding_sender, binding_receiver) = oneshot::channel();
+        let (release_sender, release_receiver) = oneshot::channel();
+        let task = request.task.clone();
+        let agent_id = request.agent_id.clone();
+        let attempt = request.attempt;
+        let observer: AcpSessionStartedObserver = Arc::new(|_| Ok(()));
+        let join = tokio::spawn(async move {
+            worker
+                .execute_task_with_attempt_context(
+                    &task,
+                    &mut listener,
+                    observer,
+                    None,
+                    Some(RuntimeStartGate {
+                        binding: binding_sender,
+                        release: release_receiver,
+                    }),
+                    attempt,
+                    agent_id,
+                )
+                .await
+        });
+        let binding = match tokio::time::timeout(timeout, binding_receiver).await {
+            Ok(Ok(binding)) => binding,
+            Ok(Err(_)) => {
+                let result = join.await.map_err(|error| {
+                    RuntimeError::Protocol(format!("ACP starter failed: {error}"))
+                })?;
+                return Err(match result {
+                    Ok(_) => RuntimeError::Protocol("ACP starter ended without a binding".into()),
+                    Err(error) => runtime_error(error),
+                });
+            }
+            Err(_) => {
+                join.abort();
+                return Err(RuntimeError::TimedOut);
+            }
+        };
+        Ok(Box::new(AcpRuntimeExecution {
+            binding,
+            release: Some(release_sender),
+            cancellation,
+            task: Some(join),
+        }))
+    }
+
+    async fn resume(
+        &self,
+        checkpoint: RuntimeCheckpoint,
+        request: RuntimeExecutionRequest,
+        events: Arc<dyn RuntimeEventSink>,
+    ) -> Result<Box<dyn RuntimeExecution>, RuntimeError> {
+        if checkpoint.native_session_id.trim().is_empty() {
+            return Err(RuntimeError::InvalidConfiguration(
+                "ACP resume requires a native session id".into(),
+            ));
+        }
+        let descriptor = self.probe().await?;
+        if !descriptor.capabilities.supports_resume {
+            return Err(RuntimeError::UnsupportedCapability(
+                "ACP peer did not advertise session/resume".into(),
+            ));
+        }
+        let binding = RuntimeBinding {
+            task_id: request.task.id,
+            attempt: request.attempt,
+            agent_id: request.agent_id,
+            runtime_kind: RuntimeKind::Acp,
+            native_session_id: checkpoint.native_session_id,
+            descriptor,
+        };
+        events.emit(agentmosaic_team::RuntimeEventRecord {
+            task_id: binding.task_id,
+            attempt: binding.attempt,
+            agent_id: binding.agent_id.clone(),
+            runtime_name: binding.descriptor.runtime_name.clone(),
+            native_session_id: Some(binding.native_session_id.clone()),
+            event: RuntimeEvent::SessionResumed {
+                native_session_id: binding.native_session_id.clone(),
+            },
+        })?;
+        Ok(Box::new(AcpResumedExecution {
+            binding,
+            worker: self.worker.clone(),
+            task: request.task,
+            cancelled: false,
+        }))
+    }
+}
+
+async fn initialize_v1(
+    connection: &agent_client_protocol::ConnectionTo<agent_client_protocol::Agent>,
+) -> Result<InitializeResponse, agent_client_protocol::Error> {
+    connection
+        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+        .block_task()
+        .await
+}
+
+fn descriptor_from_initialize(response: &InitializeResponse) -> RuntimeDescriptor {
+    let capabilities = &response.agent_capabilities;
+    let info = response.agent_info.as_ref();
+    RuntimeDescriptor {
+        runtime_name: info.map(|value| value.name.clone()),
+        runtime_version: info.map(|value| value.version.clone()),
+        protocol_kind: "acp".into(),
+        protocol_version: "1".into(),
+        capabilities: RuntimeCapabilities {
+            supports_load: capabilities.load_session,
+            supports_resume: capabilities.session_capabilities.resume.is_some(),
+            supports_fork: false,
+            supports_cancel: true,
+            assistant_stream: true,
+            plan_updates: true,
+            tool_events: true,
+            permission_requests: true,
+            reverse_filesystem: false,
+            reverse_terminal: false,
+            subagent_events: false,
+            mcp: capabilities.mcp_capabilities.http || capabilities.mcp_capabilities.sse,
+        },
+    }
+}
+
+async fn read_acp_turn(
+    session: &mut agent_client_protocol::ActiveSession<'_, agent_client_protocol::Agent>,
+    identity: &AcpEventIdentity,
+    permission_policy: AcpPermissionPolicy,
+) -> Result<String, agent_client_protocol::Error> {
+    let mut output = String::new();
+    loop {
+        match session.read_update().await? {
+            SessionMessage::SessionMessage(dispatch) => {
+                MatchDispatch::new(dispatch)
+                    .if_notification(async |notification: SessionNotification| {
+                        let (delta, events) = map_acp_update(notification.update);
+                        if let Some(delta) = delta {
+                            output.push_str(&delta);
+                        }
+                        for event in events {
+                            identity.emit(&notification.session_id.to_string(), event)?;
+                        }
+                        Ok(())
+                    })
+                    .await
+                    .if_request(async |request: RequestPermissionRequest, responder| {
+                        resolve_permission(identity, permission_policy, request, responder)
+                    })
+                    .await
+                    .otherwise_ignore()?;
+            }
+            SessionMessage::StopReason(StopReason::Cancelled) => {
+                return Err(agent_client_protocol::Error::internal_error()
+                    .data("ACP prompt stopped as cancelled"));
+            }
+            SessionMessage::StopReason(_) => {
+                identity.emit(
+                    &session.session_id().to_string(),
+                    RuntimeEvent::AssistantMessageCompleted {
+                        text: output.clone(),
+                    },
+                )?;
+                return Ok(output);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn resolve_permission(
+    identity: &AcpEventIdentity,
+    policy: AcpPermissionPolicy,
+    request: RequestPermissionRequest,
+    responder: agent_client_protocol::Responder<RequestPermissionResponse>,
+) -> Result<(), agent_client_protocol::Error> {
+    let session_id = request.session_id.to_string();
+    let request_id = request.tool_call.tool_call_id.to_string();
+    let action = request
+        .tool_call
+        .fields
+        .title
+        .clone()
+        .unwrap_or_else(|| request_id.clone());
+    let normalized_options = request
+        .options
+        .iter()
+        .map(|option| RuntimePermissionOption {
+            option_id: option.option_id.to_string(),
+            label: option.name.clone(),
+        })
+        .collect();
+    identity.emit(
+        &session_id,
+        RuntimeEvent::PermissionRequested {
+            request_id: request_id.clone(),
+            action,
+            options: normalized_options,
+        },
+    )?;
+
+    let selected = request.options.iter().find(|option| match policy {
+        AcpPermissionPolicy::Deny => matches!(
+            option.kind,
+            PermissionOptionKind::RejectOnce | PermissionOptionKind::RejectAlways
+        ),
+        AcpPermissionPolicy::Allow => matches!(
+            option.kind,
+            PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways
+        ),
+    });
+    let (outcome, decision) = match selected {
+        Some(option) => {
+            let option_id = option.option_id.clone();
+            let decision = match policy {
+                AcpPermissionPolicy::Deny => RuntimePermissionDecision::Denied,
+                AcpPermissionPolicy::Allow => RuntimePermissionDecision::Allowed {
+                    option_id: Some(option_id.to_string()),
+                },
+            };
+            (
+                RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option_id)),
+                decision,
+            )
+        }
+        None => (
+            RequestPermissionOutcome::Cancelled,
+            RuntimePermissionDecision::Cancelled,
+        ),
+    };
+    responder.respond(RequestPermissionResponse::new(outcome))?;
+    identity.emit(
+        &session_id,
+        RuntimeEvent::PermissionResolved {
+            request_id,
+            decision,
+        },
+    )
+}
+
+/// Convert one typed stable-v1 update into public normalized observations.
+/// Raw input/output and thought chunks are deliberately never copied.
+fn map_acp_update(update: SessionUpdate) -> (Option<String>, Vec<RuntimeEvent>) {
+    match update {
+        SessionUpdate::AgentMessageChunk(ContentChunk {
+            content: ContentBlock::Text(text),
+            ..
+        }) => {
+            let delta = text.text;
+            (
+                Some(delta.clone()),
+                vec![RuntimeEvent::AssistantMessageDelta { text: delta }],
+            )
+        }
+        SessionUpdate::AgentThoughtChunk(_) => (None, Vec::new()),
+        SessionUpdate::Plan(plan) => (
+            None,
+            vec![RuntimeEvent::PlanUpdated {
+                items: plan
+                    .entries
+                    .into_iter()
+                    .map(|entry| RuntimePlanItem {
+                        text: entry.content,
+                        status: Some(enum_name(&entry.status)),
+                    })
+                    .collect(),
+            }],
+        ),
+        SessionUpdate::ToolCall(call) => {
+            let id = call.tool_call_id.to_string();
+            let mut events = vec![RuntimeEvent::ToolCallStarted {
+                native_call_id: id.clone(),
+                tool: call.title.clone(),
+                input_summary: call.title,
+            }];
+            for location in call.locations {
+                events.push(RuntimeEvent::FileChanged {
+                    path: location.path.to_string_lossy().into_owned(),
+                    change: RuntimeFileChangeKind::Modified,
+                });
+            }
+            if matches!(
+                call.status,
+                ToolCallStatus::Completed | ToolCallStatus::Failed
+            ) {
+                events.push(RuntimeEvent::ToolCallCompleted {
+                    native_call_id: id,
+                    tool: "acp-tool".into(),
+                    ok: call.status == ToolCallStatus::Completed,
+                    output_summary: enum_name(&call.status),
+                });
+            }
+            (None, events)
+        }
+        SessionUpdate::ToolCallUpdate(call) => {
+            let id = call.tool_call_id.to_string();
+            let status = call
+                .fields
+                .status
+                .map(|value| enum_name(&value))
+                .unwrap_or_else(|| "updated".into());
+            let event = match call.fields.status {
+                Some(ToolCallStatus::Completed | ToolCallStatus::Failed) => {
+                    RuntimeEvent::ToolCallCompleted {
+                        native_call_id: id,
+                        tool: call.fields.title.unwrap_or_else(|| "acp-tool".into()),
+                        ok: call.fields.status == Some(ToolCallStatus::Completed),
+                        output_summary: status,
+                    }
+                }
+                _ => RuntimeEvent::ToolCallUpdated {
+                    native_call_id: id,
+                    status,
+                    output_summary: None,
+                },
+            };
+            (None, vec![event])
+        }
+        SessionUpdate::UsageUpdate(usage) => (
+            None,
+            vec![RuntimeEvent::UsageUpdated {
+                input_tokens: Some(usage.used),
+                cached_input_tokens: None,
+                output_tokens: None,
+                reasoning_tokens: None,
+                estimated_cost_usd: usage
+                    .cost
+                    .filter(|cost| cost.currency.eq_ignore_ascii_case("USD"))
+                    .map(|cost| cost.amount),
+            }],
+        ),
+        _ => (None, Vec::new()),
+    }
+}
+
+fn enum_name(value: &impl serde::Serialize) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_else(|| "other".into())
+}
+
 impl PersistedAcpWorkerDriver {
     pub fn new(
         config: AcpWorkerConfig,
         database: PathBuf,
         agent_id: impl Into<String>,
     ) -> Result<Self, AcpWorkerError> {
-        Ok(Self {
-            worker: AcpWorkerDriver::new(config)?,
+        let writer = SqliteRuntimeEventWriter::new(database.clone())
+            .map_err(AcpWorkerError::InvalidConfig)?;
+        let events: Arc<dyn RuntimeEventSink> = Arc::new(RuntimeEventDispatcher::new(
+            Arc::new(NoopLiveRuntimeEventSink),
+            Arc::new(writer),
+        ));
+        let worker = AcpWorkerDriver::new(config)?.with_event_sink(Arc::clone(&events));
+        let run = Arc::new(PersistedAcpRuntimeRun {
+            adapter: AcpRuntimeAdapter::from_worker(worker),
             database,
             agent_id: agent_id.into(),
+            events,
+        });
+        Ok(Self {
+            driver: crate::RuntimeAgentDriver::new(run),
         })
+    }
+}
+
+#[async_trait]
+impl crate::RuntimeDriverRun for PersistedAcpRuntimeRun {
+    async fn run(&self, task: AgentTask) -> Result<AgentTaskResult, RuntimeError> {
+        let agent_id = self.agent_id.clone();
+        let attempts = SqliteTaskBoard::open(
+            rusqlite::Connection::open(&self.database)
+                .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
+        )
+        .map_err(|error| RuntimeError::Persistence(error.to_string()))?
+        .attempts(task.id)
+        .map_err(|error| RuntimeError::Persistence(format!("read scheduler attempt: {error:?}")))?;
+        let running = attempts
+            .iter()
+            .filter(|row| row.status == TaskStatus::Running && row.agent_id == agent_id)
+            .collect::<Vec<_>>();
+        let [running] = running.as_slice() else {
+            return Err(RuntimeError::Protocol(format!(
+                "scheduler ACP driver requires exactly one running attempt for agent `{agent_id}`, found {}",
+                running.len()
+            )));
+        };
+        let attempt = running.attempt;
+        let mut execution = self
+            .adapter
+            .start(
+                RuntimeExecutionRequest {
+                    task: task.clone(),
+                    attempt,
+                    agent_id: self.agent_id.clone(),
+                },
+                Arc::clone(&self.events),
+            )
+            .await?;
+        let binding = execution.binding().clone();
+        let board = SqliteTaskBoard::open(
+            rusqlite::Connection::open(&self.database)
+                .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
+        )
+        .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+        board
+            .upsert_external_binding_extended(&ExtendedExternalRuntimeBinding {
+                binding: ExternalRuntimeBinding {
+                    team_task_id: binding.task_id,
+                    attempt,
+                    agent_id: self.agent_id.clone(),
+                    runtime_kind: "acp".into(),
+                    native_thread_id: Some(binding.native_session_id.clone()),
+                    native_turn_id: None,
+                    lifecycle_state: "running".into(),
+                },
+                runtime_name: binding.descriptor.runtime_name.clone(),
+                runtime_version: binding.descriptor.runtime_version.clone(),
+                protocol_kind: Some(binding.descriptor.protocol_kind.clone()),
+                protocol_version: Some(binding.descriptor.protocol_version.clone()),
+                capabilities_json: Some(
+                    serde_json::to_string(&binding.descriptor.capabilities)
+                        .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
+                ),
+                started_at: Some(runtime_timestamp()),
+                finished_at: None,
+            })
+            .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+        let outcome = execution.wait().await?;
+        let board = SqliteTaskBoard::open(
+            rusqlite::Connection::open(&self.database)
+                .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
+        )
+        .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+        board
+            .upsert_external_binding_extended(&ExtendedExternalRuntimeBinding {
+                binding: ExternalRuntimeBinding {
+                    team_task_id: binding.task_id,
+                    attempt,
+                    agent_id: self.agent_id.clone(),
+                    runtime_kind: "acp".into(),
+                    native_thread_id: Some(binding.native_session_id),
+                    native_turn_id: None,
+                    lifecycle_state: "completed".into(),
+                },
+                runtime_name: binding.descriptor.runtime_name,
+                runtime_version: binding.descriptor.runtime_version,
+                protocol_kind: Some(binding.descriptor.protocol_kind),
+                protocol_version: Some(binding.descriptor.protocol_version),
+                capabilities_json: Some(
+                    serde_json::to_string(&binding.descriptor.capabilities)
+                        .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
+                ),
+                started_at: None,
+                finished_at: Some(runtime_timestamp()),
+            })
+            .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+        Ok(outcome.result)
     }
 }
 
 #[async_trait]
 impl AgentDriver for PersistedAcpWorkerDriver {
     async fn run_task(&self, task: AgentTask) -> Result<AgentTaskResult, String> {
-        let database = self.database.clone();
-        let agent_id = self.agent_id.clone();
-        let attempt = SqliteTaskBoard::open(
-            rusqlite::Connection::open(&database).map_err(|error| error.to_string())?,
-        )
-        .map_err(|error| error.to_string())?
-        .attempts(task.id)
-        .map_err(|error| format!("read scheduler attempt: {error:?}"))?
-        .len() as u32;
-        if attempt == 0 {
-            return Err("scheduler ACP driver requires a persisted running attempt".into());
-        }
-        let observer: AcpSessionStartedObserver = Arc::new(move |session_id| {
-            let board = SqliteTaskBoard::open(
-                rusqlite::Connection::open(&database).map_err(|error| error.to_string())?,
-            )
-            .map_err(|error| error.to_string())?;
-            board
-                .upsert_external_binding(&ExternalRuntimeBinding {
-                    team_task_id: task.id,
-                    attempt,
-                    agent_id: agent_id.clone(),
-                    runtime_kind: "acp".into(),
-                    native_thread_id: Some(session_id.to_string()),
-                    native_turn_id: None,
-                    lifecycle_state: "running".into(),
-                })
-                .map_err(|error| error.to_string())
-        });
-        let execution = self
-            .worker
-            .execute_task_with_session_observer(&task, observer)
-            .await
-            .map_err(|error| error.to_string())?;
-        let board = SqliteTaskBoard::open(
-            rusqlite::Connection::open(&self.database).map_err(|error| error.to_string())?,
-        )
-        .map_err(|error| error.to_string())?;
-        board
-            .upsert_external_binding(&ExternalRuntimeBinding {
-                team_task_id: task.id,
-                attempt,
-                agent_id: self.agent_id.clone(),
-                runtime_kind: "acp".into(),
-                native_thread_id: Some(execution.external_session_id),
-                native_turn_id: None,
-                lifecycle_state: "completed".into(),
-            })
-            .map_err(|error| error.to_string())?;
-        Ok(execution.result)
+        self.driver.run_task(task).await
     }
+}
+
+fn runtime_timestamp() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .to_string()
 }
 
 #[async_trait]
@@ -610,7 +1387,51 @@ fn parse_peer_result(response: &str, max_bytes: usize) -> Result<String, AcpWork
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_client_protocol::schema::v1::{
+        Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, TextContent, ToolCall,
+    };
     use agentmosaic_team::TaskKind;
+
+    #[test]
+    fn typed_acp_updates_map_without_exposing_thought_or_raw_input() {
+        let (delta, events) = map_acp_update(SessionUpdate::AgentMessageChunk(ContentChunk::new(
+            ContentBlock::Text(TextContent::new("hello")),
+        )));
+        assert_eq!(delta.as_deref(), Some("hello"));
+        assert!(matches!(
+            events.as_slice(),
+            [RuntimeEvent::AssistantMessageDelta { text }] if text == "hello"
+        ));
+
+        let (_, events) = map_acp_update(SessionUpdate::AgentThoughtChunk(ContentChunk::new(
+            ContentBlock::Text(TextContent::new("private reasoning")),
+        )));
+        assert!(events.is_empty());
+
+        let call = ToolCall::new("call-1", "inspect repository")
+            .raw_input(serde_json::json!({"token":"must-not-survive"}));
+        let (_, events) = map_acp_update(SessionUpdate::ToolCall(call));
+        let encoded = serde_json::to_string(&events).unwrap();
+        assert!(encoded.contains("inspect repository"));
+        assert!(!encoded.contains("must-not-survive"));
+    }
+
+    #[test]
+    fn typed_acp_plan_maps_to_normalized_plan_items() {
+        let plan = Plan::new(vec![PlanEntry::new(
+            "verify the result",
+            PlanEntryPriority::High,
+            PlanEntryStatus::InProgress,
+        )]);
+        let (_, events) = map_acp_update(SessionUpdate::Plan(plan));
+        assert!(matches!(
+            events.as_slice(),
+            [RuntimeEvent::PlanUpdated { items }]
+                if items[0].text == "verify the result"
+                    && items[0].status.as_deref() == Some("in_progress")
+        ));
+    }
+
     #[test]
     fn prompt_is_bounded() {
         let task = AgentTask {

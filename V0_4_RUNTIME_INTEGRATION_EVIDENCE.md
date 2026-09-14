@@ -25,7 +25,7 @@ v8_to_v12=PASS (authentic checked-in v8 fixture)
 ```text
 runtime_event_foundation=PASS
 role_runtime_decoupled=PASS (LeadBrainFactory; unsupported Lead runtimes fail before root creation)
-generic_acp=IN_PROGRESS
+generic_acp=PASS (typed ACP v1 adapter; exact running-attempt binding; capability-gated resume; normalized durable events; deny-by-default permissions)
 absolute_deadline=IN_PROGRESS
 process_tree_cleanup=IN_PROGRESS
 codex_exec_runtime=IN_PROGRESS
@@ -40,15 +40,15 @@ recovery_no_replay=IN_PROGRESS
 ## Deterministic tests
 
 ```text
-fmt=PASS (G2 full gate)
-clippy=PASS (G2 full gate)
-test=PASS (G2 full gate)
-test_discovered=456
-test_passed=439
+fmt=PASS (G3 full gate)
+clippy=PASS (G3 full gate)
+test=PASS (G3 full gate)
+test_discovered=465
+test_passed=448
 test_failed=0
 test_ignored=17
-release_build=PASS (G2 full gate)
-diff_check=PASS (G2 full gate)
+release_build=PASS (G3 full gate)
+diff_check=PASS (G3 full gate)
 ```
 
 ## Runtime matrix

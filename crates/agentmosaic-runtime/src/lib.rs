@@ -17,12 +17,14 @@ mod codex_team_driver;
 mod dispatch;
 mod driver_factory;
 mod launch;
+mod runtime_adapter;
 mod runtime_event;
 mod team_runner;
 
 pub use acp_worker::{
-    AcpCancellation, AcpCancellationListener, AcpSessionStartedObserver, AcpWorkerConfig,
-    AcpWorkerDriver, AcpWorkerError, PersistedAcpWorkerDriver,
+    AcpCancellation, AcpCancellationListener, AcpPermissionPolicy, AcpRuntimeAdapter,
+    AcpSessionStartedObserver, AcpWorkerConfig, AcpWorkerDriver, AcpWorkerError,
+    PersistedAcpWorkerDriver,
 };
 pub use agent::{AgentConfig, AgentError, AgentLoop, Delivery};
 pub use codex_app_server::{
@@ -38,6 +40,11 @@ pub use driver_factory::{
     DEFAULT_ACP_MAX_RESULT_BYTES, DEFAULT_ACP_TIMEOUT_SECONDS, DEFAULT_CODEX_MAX_EVENTS,
 };
 pub use launch::LaunchSpec;
+pub use runtime_adapter::{
+    NoopRuntimeEventSink, RuntimeAdapter, RuntimeAgentDriver, RuntimeBinding, RuntimeCapabilities,
+    RuntimeCheckpoint, RuntimeDescriptor, RuntimeDriverRun, RuntimeError, RuntimeEventSink,
+    RuntimeExecution, RuntimeExecutionRequest, RuntimeKind, RuntimeOutcome,
+};
 pub use runtime_event::{
     DurableRuntimeEventWriter, LiveRuntimeEventSink, NoopLiveRuntimeEventSink,
     RuntimeEventDispatcher, SqliteRuntimeEventWriter,
