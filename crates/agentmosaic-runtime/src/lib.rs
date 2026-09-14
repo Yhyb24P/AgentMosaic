@@ -13,6 +13,7 @@ mod codex_app_server;
 #[path = "bin/am-codex-mcp.rs"]
 mod codex_bridge;
 mod codex_exec;
+mod codex_exec_driver;
 mod codex_lead;
 mod codex_team_driver;
 mod dispatch;
@@ -37,6 +38,7 @@ pub use codex_exec::{
     normalize_event as normalize_codex_exec_event, run_invocation as run_codex_exec_invocation,
     CodexExecInvocation, CodexExecResult,
 };
+pub use codex_exec_driver::{CodexExecDriverConfig, PersistedCodexExecDriver};
 pub use codex_lead::{CodexLeadBrain, CodexLeadConfig};
 pub use codex_team_driver::{CodexTeamDriverConfig, PersistedCodexTeamDriver};
 pub use dispatch::{dispatch, ToolOutcome};

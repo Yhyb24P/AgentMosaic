@@ -66,6 +66,8 @@ pub enum DriverKind {
     /// A Codex CLI driven through its `app-server --stdio` protocol. It is an
     /// explicit kind, never inferred from an executable name.
     CodexAppServer,
+    /// A Codex CLI driven through its stable `exec --json` machine interface.
+    CodexExec,
 }
 
 impl DriverKind {
@@ -76,6 +78,7 @@ impl DriverKind {
             DriverKind::Acp => "acp",
             DriverKind::Cli => "cli",
             DriverKind::CodexAppServer => "codex-app-server",
+            DriverKind::CodexExec => "codex-exec",
         }
     }
 
@@ -87,6 +90,7 @@ impl DriverKind {
             "acp" => DriverKind::Acp,
             "cli" => DriverKind::Cli,
             "codex-app-server" => DriverKind::CodexAppServer,
+            "codex-exec" => DriverKind::CodexExec,
             _ => return None,
         })
     }
