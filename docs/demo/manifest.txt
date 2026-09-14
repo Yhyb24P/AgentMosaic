@@ -22,7 +22,7 @@ result_content="alpha 1 / beta 2 / gamma 1 (3 lines, no other lines or whitespac
 result_sha256=4297addc01e4f608b07fc9e71c6e8bb9ba836a12019da73bc219d97dd44a95d6
 artifact_record=task=2 path=result.txt sha256=4297addc01e4f608b07fc9e71c6e8bb9ba836a12019da73bc219d97dd44a95d6
 durable_final=root task 1 final result persisted in .agentmosaic/state.db (retrieved via "am final", re-played byte-identically on 2026-09-14)
-state_db=.agentmosaic/state.db (deliberally NOT committed in this repo)
+state_db=.agentmosaic/state.db (deliberately NOT committed in this repo)
 run_completed=2026-09-14T02:29:27Z
 evidence_source_directory=/tmp/agentmosaic-v021-fresh.R5N9NH (demo-*.txt launcher captures; demo-success/ run repo)
 secrets=none present in demo repo, demo state, or this evidence set
