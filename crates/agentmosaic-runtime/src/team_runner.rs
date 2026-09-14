@@ -40,7 +40,7 @@ use rusqlite::Connection;
 use crate::driver_factory::{
     codex_option_values, launch_spec, parse_agent_options, DriverFactory, DriverFactoryError,
 };
-use crate::{CodexLeadBrain, CodexLeadConfig, LaunchSpec};
+use crate::{CodexExecLeadBrain, CodexExecLeadConfig, CodexLeadBrain, CodexLeadConfig, LaunchSpec};
 
 /// Default bound for one automatic team run.
 pub const DEFAULT_MAX_ROUNDS: u32 = 8;
@@ -207,7 +207,23 @@ impl LeadBrainFactory for DefaultLeadBrainFactory {
     ) -> Result<Box<dyn LeadBrain>, TeamRunnerError> {
         ensure_supported_lead_runtime(record)?;
         let config = lead_config(record, &self.repo)?;
-        Ok(Box::new(CodexLeadBrain::new(config, candidates)?))
+        match record.driver_kind.as_deref().and_then(DriverKind::restore) {
+            Some(DriverKind::CodexAppServer) => {
+                Ok(Box::new(CodexLeadBrain::new(config, candidates)?))
+            }
+            Some(DriverKind::CodexExec) => Ok(Box::new(CodexExecLeadBrain::new(
+                CodexExecLeadConfig {
+                    launch: config.launch,
+                    working_directory: config.working_directory,
+                    max_prompt_bytes: config.max_prompt_bytes,
+                    max_answer_bytes: config.max_answer_bytes,
+                    timeout: std::time::Duration::from_secs(300),
+                    isolate: false,
+                },
+                candidates,
+            )?)),
+            _ => unreachable!("lead runtime was validated"),
+        }
     }
 }
 
@@ -534,7 +550,7 @@ fn ensure_supported_lead_runtime(record: &AgentRegistryRecord) -> Result<(), Tea
         .filter(|kind| !kind.is_empty())
         .unwrap_or("<missing>");
     match DriverKind::restore(kind) {
-        Some(DriverKind::CodexAppServer) => Ok(()),
+        Some(DriverKind::CodexAppServer | DriverKind::CodexExec) => Ok(()),
         _ => Err(TeamRunnerError::UnsupportedLeadRuntime {
             agent: record.id.clone(),
             kind: kind.to_string(),

@@ -221,7 +221,7 @@ impl CodexLeadBrain {
     /// The single correction turn's input: why the reply was rejected, then the
     /// contract again. The reason is bounded so this prompt also stays within
     /// `max_prompt_bytes`.
-    fn correction_prompt(&self, reason: &str) -> String {
+    pub(crate) fn correction_prompt(&self, reason: &str) -> String {
         let head_budget = self
             .config
             .max_prompt_bytes
@@ -237,7 +237,7 @@ impl CodexLeadBrain {
     /// instruction. Only durable board facts are rendered (task ids, bounded
     /// result summaries, artifact digests, bounded errors, messages) — never
     /// hidden model reasoning.
-    fn render_prompt(&self, ctx: &LeadContext) -> String {
+    pub(crate) fn render_prompt(&self, ctx: &LeadContext) -> String {
         let budget = self
             .config
             .max_prompt_bytes
@@ -308,7 +308,7 @@ impl CodexLeadBrain {
     /// be exactly one JSON object in the contract, and every field must survive
     /// the contract's validation. No fence stripping, no prose scanning, no
     /// substring extraction.
-    fn parse_reply(&self, reply: &str) -> Result<LeadDecision, String> {
+    pub(crate) fn parse_reply(&self, reply: &str) -> Result<LeadDecision, String> {
         let trimmed = reply.trim_matches(|c: char| c.is_ascii_whitespace());
         if trimmed.is_empty() {
             return Err("the reply was empty".into());

@@ -14,6 +14,7 @@ mod codex_app_server;
 mod codex_bridge;
 mod codex_exec;
 mod codex_exec_driver;
+mod codex_exec_lead;
 mod codex_lead;
 mod codex_team_driver;
 mod dispatch;
@@ -39,6 +40,7 @@ pub use codex_exec::{
     CodexExecInvocation, CodexExecResult,
 };
 pub use codex_exec_driver::{CodexExecDriverConfig, PersistedCodexExecDriver};
+pub use codex_exec_lead::{CodexExecLeadBrain, CodexExecLeadConfig};
 pub use codex_lead::{CodexLeadBrain, CodexLeadConfig};
 pub use codex_team_driver::{CodexTeamDriverConfig, PersistedCodexTeamDriver};
 pub use dispatch::{dispatch, ToolOutcome};
