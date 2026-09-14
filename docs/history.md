@@ -48,3 +48,29 @@ names, the old repository URL and the old branch name are not retained as aliase
 artifact/final-reference semantics are unchanged, persistence and protocol wire strings
 are unchanged, and a board created by the published v0.1.0 `agent-code-cli` remains
 readable by the new `am` command.
+
+## Archived development lines
+
+Four draft pull requests on retired pre-AgentMosaic development lines were
+closed unmerged on 2026-09-14. They belong to a product line that is no
+longer developed; none of that code was merged, requalified, or carried
+into the current product. Their branches and commits remain in the
+repository as development history — preserved exactly, not deleted.
+
+| PR | Historical purpose | Head SHA | Disposition |
+|---|---|---|---|
+| #10 “feat: complete trusted multi-agent productization” (`next/agent-workspace-launcher`) | trusted multi-agent productization line | `2b56aa7a705c4a6b44246c3217b975d7f58e9909` | closed unmerged · superseded |
+| #11 “feat: product hardening baseline (unqualified candidate)” (`next/product-hardening`) | product hardening baseline stacked on top of #10 | `cb1475202acfffdc52bcf83410b1f69b37f1c0ff` | closed unmerged · superseded |
+| #12 “chore: candidate contract repair and requalification preflight” (`next/candidate-requalification`) | candidate requalification line; head pinned by the immutable tag `v1.0.0-rc.82` | `ca67f55acf95afd114e5af3059bd224ce45adf29` | closed unmerged · superseded |
+| #13 “Infrastructure hardening for Agent collaboration” (`preview/agent-control-closure`) | historical control-plane / communication infrastructure preview | `dcdef968d1aa2de8beb3461304beb704a81685b3` | closed unmerged · superseded |
+
+The historical line `#10 -> #11 -> #12` is stacked: the #10 head and the #11
+head are ancestors of the #12 head (verified with `git merge-base
+--is-ancestor` on 2026-09-14), and the `v1.0.0-rc.82` annotated tag points
+at exactly that #12 head commit. The tag is never moved or deleted, and
+#10/#11/#12 history is retained by the immutable tag chain.
+
+The current product boundary is documented in `AGENTS.md`, `README.md`, and
+this file. The former control-plane/communication preview and all other
+archived product lines are **not** the current architecture; content of
+those lines was not reintroduced into current docs or code.
