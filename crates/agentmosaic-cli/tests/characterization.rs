@@ -334,11 +334,10 @@ fn legacy_command_is_not_treated_as_unknown() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-// Documents current behaviour that TASK01 must fix: matching an unknown command
-// still creates a database file at argv[1], because the eager open runs before
-// the command is matched. TASK01 should update this test.
+// H1 (fixed in TASK01): parsing has no side effects, so an unknown command
+// fails before any database file is opened or created at argv[1].
 #[test]
-fn unknown_command_creates_the_database_file_before_matching() {
+fn unknown_command_does_not_create_a_database_file() {
     let root = unique_dir("unknown_command");
     let database = root.join("created-by-unknown-command.db");
     assert!(!database.exists());
@@ -348,9 +347,119 @@ fn unknown_command_creates_the_database_file_before_matching() {
     assert!(!output.status.success());
     assert!(!stderr(&output).is_empty());
     assert!(
-        database.is_file(),
-        "current behaviour creates the database before matching the command"
+        !database.exists(),
+        "an unknown command must not create {}",
+        database.display()
     );
 
     let _ = std::fs::remove_dir_all(root);
+}
+
+// TASK01: the help surface. The normal path is visible; the compatibility
+// commands are callable but are not advertised as onboarding.
+
+const NORMAL_COMMANDS: [&str; 9] = [
+    "init", "agent", "doctor", "run", "status", "final", "artifact", "tui", "advanced",
+];
+
+const COMPATIBILITY_COMMANDS: [&str; 13] = [
+    "register",
+    "registry",
+    "run-acp",
+    "continue-acp",
+    "run-team",
+    "resume-team",
+    "submit",
+    "cancel",
+    "override",
+    "recover",
+    "recover-all",
+    "resume",
+    "binding",
+];
+
+#[test]
+fn top_level_help_lists_the_normal_path_and_omits_compatibility_commands() {
+    for flag in ["-h", "--help"] {
+        let output = run_cli(&[flag]);
+        assert!(output.status.success(), "{flag} exited non-zero");
+        let help_text = stdout(&output);
+        for command in NORMAL_COMMANDS {
+            assert!(
+                help_text.contains(command),
+                "{flag} must document the normal command `{command}`"
+            );
+        }
+        for command in COMPATIBILITY_COMMANDS {
+            assert!(
+                !help_text.contains(command),
+                "{flag} must not advertise the compatibility command `{command}`"
+            );
+        }
+    }
+}
+
+#[test]
+fn advanced_lists_every_compatibility_command() {
+    let output = run_cli(&["advanced"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    for command in COMPATIBILITY_COMMANDS {
+        assert!(
+            text.contains(command),
+            "`am advanced` must list `{command}`"
+        );
+    }
+}
+
+#[test]
+fn help_subcommand_works_for_a_normal_command() {
+    for args in [vec!["help"], vec!["help", "run"], vec!["help", "advanced"]] {
+        let output = run_cli(&args);
+        assert!(output.status.success(), "{args:?} exited non-zero");
+        assert!(!stdout(&output).is_empty(), "{args:?} printed nothing");
+    }
+}
+
+#[test]
+fn invalid_invocations_exit_non_zero() {
+    for args in [
+        vec!["definitely-not-a-command"],
+        vec!["--definitely-not-an-option"],
+        vec!["agent", "definitely-not-a-subcommand"],
+    ] {
+        let output = run_cli(&args);
+        assert!(!output.status.success(), "{args:?} exited zero");
+        assert!(
+            !stderr(&output).is_empty(),
+            "{args:?} said nothing on stderr"
+        );
+    }
+}
+
+#[test]
+fn help_and_version_output_contains_no_ansi_escape() {
+    for args in [
+        vec!["--help"],
+        vec!["-h"],
+        vec!["--version"],
+        vec!["help"],
+        vec!["advanced"],
+        vec!["agent", "add", "--help"],
+    ] {
+        let output = run_cli(&args);
+        assert!(
+            !output.stdout.contains(&0x1b),
+            "{args:?} wrote an escape byte to stdout"
+        );
+        assert!(
+            !output.stderr.contains(&0x1b),
+            "{args:?} wrote an escape byte to stderr"
+        );
+    }
+    let version = run_cli(&["--version"]);
+    assert_eq!(
+        stdout(&version),
+        format!("am {}\n", env!("CARGO_PKG_VERSION"))
+    );
 }

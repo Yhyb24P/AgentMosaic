@@ -16,12 +16,20 @@ fn public_interface_is_am() {
     assert!(version.status.success());
     assert_eq!(String::from_utf8_lossy(&version.stdout), "am 0.2.1\n");
 
+    // The default help centers the normal path.
     let help = cli().arg("--help").output().unwrap();
     assert!(help.status.success());
     let help_text = String::from_utf8_lossy(&help.stdout);
-    assert!(help_text.starts_with("usage: am "));
-    assert!(help_text.contains("am tui <database>"));
-    for subcommand in [
+    for command in [
+        "init", "agent", "doctor", "run", "status", "final", "artifact", "tui", "advanced",
+    ] {
+        assert!(
+            help_text.contains(command),
+            "help must document `{command}`"
+        );
+    }
+    // The 13 compatibility commands stay callable but are not advertised.
+    let compatibility = [
         "register",
         "registry",
         "run-acp",
@@ -29,22 +37,33 @@ fn public_interface_is_am() {
         "run-team",
         "resume-team",
         "submit",
-        "status",
         "cancel",
         "override",
         "recover",
         "recover-all",
         "resume",
-        "artifact",
         "binding",
-        "final",
-        "tui",
-    ] {
+    ];
+    for command in compatibility {
         assert!(
-            help_text.contains(subcommand),
-            "help must document `{subcommand}`"
+            !help_text.contains(command),
+            "`{command}` must not be advertised by the default help"
         );
     }
+
+    // `am advanced` is where they are named.
+    let advanced = cli().arg("advanced").output().unwrap();
+    assert!(advanced.status.success());
+    let advanced_text = String::from_utf8_lossy(&advanced.stdout);
+    for command in compatibility {
+        assert!(
+            advanced_text.contains(command),
+            "`am advanced` must list `{command}`"
+        );
+    }
+
+    let invalid = cli().arg("definitely-not-a-command").output().unwrap();
+    assert!(!invalid.status.success());
 }
 
 #[test]
