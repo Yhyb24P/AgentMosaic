@@ -136,3 +136,70 @@ async fn exec_lead_persists_its_foreign_thread_on_the_running_root_attempt() {
     );
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[tokio::test]
+#[cfg(unix)]
+async fn new_exec_lead_instance_resumes_the_root_binding() {
+    let root = std::env::temp_dir().join(format!("am_exec_resume_{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let database = root.join("board.db");
+    let task = {
+        let mut board = SqliteTaskBoard::open(Connection::open(&database).unwrap()).unwrap();
+        let task = board
+            .create_task("root", None, TaskKind::Reasoning, Some("lead".into()))
+            .unwrap();
+        board
+            .record_attempt(&TaskAttempt {
+                task_id: task,
+                attempt: 1,
+                agent_id: "lead".into(),
+                status: TaskStatus::Running,
+                result: None,
+                error: None,
+            })
+            .unwrap();
+        board.set_status(task, TaskStatus::Running).unwrap();
+        board
+            .upsert_external_binding(&agentmosaic_storage::ExternalRuntimeBinding {
+                team_task_id: task,
+                attempt: 1,
+                agent_id: "lead".into(),
+                runtime_kind: "codex-exec".into(),
+                native_thread_id: Some("saved-thread".into()),
+                native_turn_id: None,
+                lifecycle_state: "running".into(),
+            })
+            .unwrap();
+        task
+    };
+    let script = r#"if [ "$1" = resume ]; then printf '%s\n' '{"type":"thread.started","thread_id":"saved-thread"}' '{"type":"item.completed","item":{"type":"agent_message","text":"{\"action\":\"delegate\",\"tasks\":[{\"kind\":\"bulk\",\"target\":\"worker\",\"objective\":\"resumed\"}]}"}}'; else exit 9; fi"#;
+    let mut lead = CodexExecLeadBrain::new(
+        CodexExecLeadConfig {
+            launch: LaunchSpec::new("sh", vec!["-c".into(), script.into()]).unwrap(),
+            working_directory: root.clone(),
+            max_prompt_bytes: 1024,
+            max_answer_bytes: 1024,
+            timeout: Duration::from_secs(1),
+            isolate: false,
+            binding_database: Some(database),
+            binding_agent_id: Some("lead".into()),
+        },
+        vec!["worker".into()],
+    )
+    .unwrap();
+    let decision = lead
+        .decide(&LeadContext {
+            root_task_id: task,
+            objective: "root".into(),
+            round: 0,
+            candidates: vec!["worker".into()],
+            results: Vec::new(),
+            artifacts: Vec::new(),
+            failures: Vec::new(),
+            messages: Vec::new(),
+        })
+        .await
+        .unwrap();
+    assert!(matches!(decision, LeadDecision::Delegate(tasks) if tasks[0].objective == "resumed"));
+    let _ = std::fs::remove_dir_all(root);
+}
