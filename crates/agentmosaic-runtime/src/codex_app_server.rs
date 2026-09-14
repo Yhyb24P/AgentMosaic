@@ -3,6 +3,8 @@
 
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use serde_json::{json, Value};
@@ -90,6 +92,10 @@ impl CodexAppServer {
         for override_value in overrides {
             command.args(["-c", override_value]);
         }
+        // Own a process group so shutdown never leaves app-server helpers
+        // behind.  This mirrors the workspace command runner's Unix policy.
+        #[cfg(unix)]
+        command.process_group(0);
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -316,6 +322,13 @@ impl CodexAppServer {
     }
 
     pub fn close(mut self) -> Result<(), CodexBridgeError> {
+        #[cfg(unix)]
+        unsafe {
+            // The child is the process-group leader established at spawn.
+            // ESRCH simply means it already exited.
+            let _ = libc::killpg(self.child.id() as i32, libc::SIGKILL);
+        }
+        #[cfg(not(unix))]
         let _ = self.child.kill();
         self.child
             .wait()

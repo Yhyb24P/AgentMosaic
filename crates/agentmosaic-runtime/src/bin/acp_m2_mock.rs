@@ -8,6 +8,7 @@
 
 use std::io::{self, BufRead, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 use serde_json::{json, Value};
 
@@ -16,6 +17,7 @@ const HANG_FOREVER: u64 = 3600;
 const SLOW_CHUNK_DELAY_MS: u64 = 2000;
 
 static PROMPT_TURNS: AtomicU64 = AtomicU64::new(0);
+static GRANDCHILD_PID_FILE: OnceLock<String> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy)]
 enum Mode {
@@ -28,12 +30,14 @@ enum Mode {
     Repair,
     Permission,
     Resume,
+    WrapperHang,
 }
 
 fn parse_mode(args: &[String]) -> Result<Mode, String> {
     let mut i = 0;
     let mut mode = Mode::Sync;
     let mut pid_file: Option<String> = None;
+    let mut grandchild_pid_file: Option<String> = None;
     while i < args.len() {
         match args[i].as_str() {
             "--mode" => {
@@ -49,12 +53,21 @@ fn parse_mode(args: &[String]) -> Result<Mode, String> {
                     "repair" => Mode::Repair,
                     "permission" => Mode::Permission,
                     "resume" => Mode::Resume,
+                    "wrapper-hang" => Mode::WrapperHang,
                     other => return Err(format!("unknown mode: {other}")),
                 };
             }
             "--pid-file" => {
                 i += 1;
                 pid_file = Some(args.get(i).ok_or("--pid-file requires a value")?.clone());
+            }
+            "--grandchild-pid-file" => {
+                i += 1;
+                grandchild_pid_file = Some(
+                    args.get(i)
+                        .ok_or("--grandchild-pid-file requires a value")?
+                        .clone(),
+                );
             }
             other => return Err(format!("unknown argument: {other}")),
         }
@@ -63,6 +76,9 @@ fn parse_mode(args: &[String]) -> Result<Mode, String> {
     if let Some(path) = pid_file {
         std::fs::write(path, std::process::id().to_string().as_bytes())
             .map_err(|e| format!("write pid file: {e}"))?;
+    }
+    if let Some(path) = grandchild_pid_file {
+        let _ = GRANDCHILD_PID_FILE.set(path);
     }
     Ok(mode)
 }
@@ -144,6 +160,18 @@ fn handle_line(line: &str, mode: Mode, pending_prompt: &mut Option<Value>) -> Li
                 write_response(&id, json!({ "stopReason": "end_turn" }));
                 return LineOutcome::Done;
             }
+            if matches!(mode, Mode::WrapperHang) {
+                #[allow(clippy::zombie_processes)]
+                // fixture proves parent process-group teardown reaps this child externally.
+                let child = std::process::Command::new("sh")
+                    .args(["-c", "exec sleep 3600"])
+                    .spawn()
+                    .expect("spawn fixture grandchild");
+                if let Some(path) = GRANDCHILD_PID_FILE.get() {
+                    let _ = std::fs::write(path, child.id().to_string());
+                }
+                std::thread::sleep(std::time::Duration::from_secs(HANG_FOREVER));
+            }
             write_notification(&json!({
                 "sessionId": MOCK_SESSION,
                 "update": {
@@ -170,7 +198,8 @@ fn handle_line(line: &str, mode: Mode, pending_prompt: &mut Option<Value>) -> Li
                 | Mode::Crash
                 | Mode::Repair
                 | Mode::Resume
-                | Mode::SlowDrip => {}
+                | Mode::SlowDrip
+                | Mode::WrapperHang => {}
             }
             if !matches!(mode, Mode::Hang) {
                 write_response(&id, json!({ "stopReason": "end_turn" }));

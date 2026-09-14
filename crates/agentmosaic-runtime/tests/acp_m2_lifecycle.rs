@@ -418,6 +418,35 @@ async fn slow_drip_does_not_extend_the_absolute_execution_deadline() {
 }
 
 #[tokio::test]
+async fn timeout_reaps_the_acp_wrapper_process_group_and_its_grandchild() {
+    let cwd = mock_cwd("wrapper-grandchild");
+    let grandchild_pid_file = cwd.join("grandchild.pid");
+    let mut cfg = valid_config(&cwd, "wrapper-hang");
+    cfg.args.extend([
+        "--grandchild-pid-file".into(),
+        grandchild_pid_file.display().to_string(),
+    ]);
+    cfg.timeout = Duration::from_millis(500);
+    let driver = AcpWorkerDriver::new(cfg).expect("bounded wrapper fixture");
+    assert!(matches!(
+        driver.run(&task_for(34)).await,
+        Err(AcpWorkerError::TimedOut)
+    ));
+
+    let pid =
+        std::fs::read_to_string(&grandchild_pid_file).expect("wrapper recorded grandchild pid");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while kill0(pid.trim()) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        !kill0(pid.trim()),
+        "ACP timeout left wrapper grandchild {pid} alive"
+    );
+    let _ = std::fs::remove_dir_all(&cwd);
+}
+
+#[tokio::test]
 async fn caller_cancellation_sends_session_cancel_and_requires_peer_confirmation() {
     let cwd = mock_cwd("cancel");
     let pid_file = mock_pid_file(&cwd);
