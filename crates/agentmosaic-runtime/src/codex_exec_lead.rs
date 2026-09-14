@@ -3,7 +3,9 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use agentmosaic_storage::{ExternalRuntimeBinding, SqliteTaskBoard};
 use agentmosaic_team::{LeadBrain, LeadBrainError, LeadContext, LeadDecision};
+use agentmosaic_team::{TaskBoard, TaskStatus};
 use async_trait::async_trait;
 
 use crate::{
@@ -18,6 +20,8 @@ pub struct CodexExecLeadConfig {
     pub max_answer_bytes: usize,
     pub timeout: Duration,
     pub isolate: bool,
+    pub binding_database: Option<PathBuf>,
+    pub binding_agent_id: Option<String>,
 }
 
 impl CodexExecLeadConfig {
@@ -28,6 +32,9 @@ impl CodexExecLeadConfig {
         }
         if self.max_prompt_bytes < 1024 || self.max_answer_bytes == 0 {
             return Err("Codex exec lead prompt and answer bounds are invalid".into());
+        }
+        if self.binding_database.is_some() != self.binding_agent_id.is_some() {
+            return Err("Codex exec lead binding database and agent id must be paired".into());
         }
         Ok(())
     }
@@ -66,7 +73,42 @@ impl CodexExecLeadBrain {
         })
     }
 
-    fn run_turn(&mut self, prompt: &str) -> Result<String, LeadBrainError> {
+    fn persist_binding(&self, root: u64, thread: &str) -> Result<(), LeadBrainError> {
+        let (Some(database), Some(agent_id)) =
+            (&self.config.binding_database, &self.config.binding_agent_id)
+        else {
+            return Ok(());
+        };
+        let board = SqliteTaskBoard::open(
+            rusqlite::Connection::open(database)
+                .map_err(|error| LeadBrainError::Unavailable(error.to_string()))?,
+        )
+        .map_err(|error| LeadBrainError::Unavailable(error.to_string()))?;
+        let attempt = board
+            .attempts(root)
+            .map_err(|error| LeadBrainError::Unavailable(format!("{error:?}")))?
+            .into_iter()
+            .rev()
+            .find(|attempt| attempt.agent_id == *agent_id && attempt.status == TaskStatus::Running)
+            .ok_or_else(|| {
+                LeadBrainError::Unavailable(
+                    "root Lead attempt is not running before Codex exec binding".into(),
+                )
+            })?;
+        board
+            .upsert_external_binding(&ExternalRuntimeBinding {
+                team_task_id: root,
+                attempt: attempt.attempt,
+                agent_id: agent_id.clone(),
+                runtime_kind: "codex-exec".into(),
+                native_thread_id: Some(thread.into()),
+                native_turn_id: None,
+                lifecycle_state: "running".into(),
+            })
+            .map_err(|error| LeadBrainError::Unavailable(error.to_string()))
+    }
+
+    fn run_turn(&mut self, root: u64, prompt: &str) -> Result<String, LeadBrainError> {
         let invocation = match &self.thread_id {
             Some(thread) => CodexExecInvocation::resume(
                 self.config.launch.clone(),
@@ -87,7 +129,14 @@ impl CodexExecLeadBrain {
             prompt,
             self.config.timeout,
             self.config.max_answer_bytes,
-            |_| Ok(()),
+            |event| {
+                if let agentmosaic_team::RuntimeEvent::SessionStarted { native_session_id } = event
+                {
+                    self.persist_binding(root, &native_session_id)
+                        .map_err(|error| crate::RuntimeError::Persistence(error.to_string()))?;
+                }
+                Ok(())
+            },
         )
         .map_err(|error| LeadBrainError::Unavailable(error.to_string()))?;
         self.thread_id = Some(result.thread_id);
@@ -98,12 +147,12 @@ impl CodexExecLeadBrain {
 #[async_trait]
 impl LeadBrain for CodexExecLeadBrain {
     async fn decide(&mut self, ctx: &LeadContext) -> Result<LeadDecision, LeadBrainError> {
-        let reply = self.run_turn(&self.contract.render_prompt(ctx))?;
+        let reply = self.run_turn(ctx.root_task_id, &self.contract.render_prompt(ctx))?;
         match self.contract.parse_reply(&reply) {
             Ok(decision) => Ok(decision),
             Err(first) => {
                 let correction = self.contract.correction_prompt(&first);
-                let second = self.run_turn(&correction)?;
+                let second = self.run_turn(ctx.root_task_id, &correction)?;
                 self.contract.parse_reply(&second).map_err(|second_reason| {
                     LeadBrainError::InvalidDecision(format!(
                         "codex exec lead reply rejected: {first}; correction reply rejected: {second_reason}"

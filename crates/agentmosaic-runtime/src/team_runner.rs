@@ -191,11 +191,20 @@ pub trait LeadBrainFactory: Send + Sync {
 /// dispatch table; role selection itself remains independent of any vendor.
 pub struct DefaultLeadBrainFactory {
     repo: PathBuf,
+    database: Option<PathBuf>,
 }
 
 impl DefaultLeadBrainFactory {
     pub fn new(repo: impl Into<PathBuf>) -> Self {
-        Self { repo: repo.into() }
+        Self {
+            repo: repo.into(),
+            database: None,
+        }
+    }
+
+    pub fn with_database(mut self, database: impl Into<PathBuf>) -> Self {
+        self.database = Some(database.into());
+        self
     }
 }
 
@@ -219,6 +228,8 @@ impl LeadBrainFactory for DefaultLeadBrainFactory {
                     max_answer_bytes: config.max_answer_bytes,
                     timeout: std::time::Duration::from_secs(300),
                     isolate: false,
+                    binding_database: self.database.clone(),
+                    binding_agent_id: self.database.as_ref().map(|_| record.id.clone()),
                 },
                 candidates,
             )?)),
@@ -272,9 +283,12 @@ impl TeamRunner {
         options: TeamRunOptions,
     ) -> Self {
         let repo = repo.into();
+        let database = database.into();
         Self {
-            database: database.into(),
-            lead_factory: Arc::new(DefaultLeadBrainFactory::new(repo.clone())),
+            database: database.clone(),
+            lead_factory: Arc::new(
+                DefaultLeadBrainFactory::new(repo.clone()).with_database(database),
+            ),
             repo,
             options,
             bridge_host: None,

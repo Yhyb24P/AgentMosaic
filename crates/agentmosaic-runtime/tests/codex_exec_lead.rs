@@ -1,7 +1,11 @@
 use std::time::Duration;
 
 use agentmosaic_runtime::{CodexExecLeadBrain, CodexExecLeadConfig, LaunchSpec};
-use agentmosaic_team::{LeadBrain, LeadContext, LeadDecision};
+use agentmosaic_storage::SqliteTaskBoard;
+use agentmosaic_team::{
+    LeadBrain, LeadContext, LeadDecision, TaskAttempt, TaskBoard, TaskKind, TaskStatus,
+};
+use rusqlite::Connection;
 
 #[tokio::test]
 #[cfg(unix)]
@@ -20,6 +24,8 @@ async fn exec_lead_turn_uses_the_shared_strict_decision_contract() {
             max_answer_bytes: 1024,
             timeout: Duration::from_secs(1),
             isolate: false,
+            binding_database: None,
+            binding_agent_id: None,
         },
         vec!["worker".into()],
     )
@@ -55,6 +61,8 @@ async fn rejected_reply_is_repaired_once_through_exec_resume() {
             max_answer_bytes: 1024,
             timeout: Duration::from_secs(1),
             isolate: false,
+            binding_database: None,
+            binding_agent_id: None,
         },
         vec!["worker".into()],
     )
@@ -73,4 +81,58 @@ async fn rejected_reply_is_repaired_once_through_exec_resume() {
         .await
         .unwrap();
     assert!(matches!(decision, LeadDecision::Delegate(tasks) if tasks[0].objective == "repair"));
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn exec_lead_persists_its_foreign_thread_on_the_running_root_attempt() {
+    let root = std::env::temp_dir().join(format!("am_exec_lead_{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let database = root.join("board.db");
+    let task = {
+        let mut board = SqliteTaskBoard::open(Connection::open(&database).unwrap()).unwrap();
+        let task = board
+            .create_task("root", None, TaskKind::Reasoning, Some("lead".into()))
+            .unwrap();
+        board
+            .record_attempt(&TaskAttempt {
+                task_id: task,
+                attempt: 1,
+                agent_id: "lead".into(),
+                status: TaskStatus::Running,
+                result: None,
+                error: None,
+            })
+            .unwrap();
+        board.set_status(task, TaskStatus::Running).unwrap();
+        task
+    };
+    let mut lead = CodexExecLeadBrain::new(CodexExecLeadConfig {
+        launch: LaunchSpec::new("sh", vec!["-c".into(), "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"lead-thread\"}' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"action\\\":\\\"delegate\\\",\\\"tasks\\\":[{\\\"kind\\\":\\\"bulk\\\",\\\"target\\\":\\\"worker\\\",\\\"objective\\\":\\\"work\\\"}]}\"}}'".into()]).unwrap(),
+        working_directory: root.clone(), max_prompt_bytes: 1024, max_answer_bytes: 1024, timeout: Duration::from_secs(1), isolate: false,
+        binding_database: Some(database.clone()), binding_agent_id: Some("lead".into()),
+    }, vec!["worker".into()]).unwrap();
+    lead.decide(&LeadContext {
+        root_task_id: task,
+        objective: "root".into(),
+        round: 0,
+        candidates: vec!["worker".into()],
+        results: Vec::new(),
+        artifacts: Vec::new(),
+        failures: Vec::new(),
+        messages: Vec::new(),
+    })
+    .await
+    .unwrap();
+    let board = SqliteTaskBoard::open(Connection::open(database).unwrap()).unwrap();
+    assert_eq!(
+        board
+            .external_binding(task, 1)
+            .unwrap()
+            .unwrap()
+            .native_thread_id
+            .as_deref(),
+        Some("lead-thread")
+    );
+    let _ = std::fs::remove_dir_all(root);
 }
