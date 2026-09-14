@@ -1,6 +1,6 @@
 //! Stable Codex `exec --json` event normalization.
 
-use agentmosaic_team::{RuntimeEvent, RuntimeFileChangeKind};
+use agentmosaic_team::{RuntimeEvent, RuntimeFileChangeKind, RuntimePlanItem};
 use serde_json::Value;
 
 use crate::RuntimeError;
@@ -11,6 +11,15 @@ pub fn normalize_event(value: &Value) -> Result<Vec<RuntimeEvent>, RuntimeError>
         .get("type")
         .and_then(Value::as_str)
         .ok_or_else(|| RuntimeError::Protocol("Codex exec event missing type".into()))?;
+    if matches!(kind, "error" | "turn.failed") {
+        return Err(RuntimeError::Protocol(
+            value
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Codex exec failed")
+                .into(),
+        ));
+    }
     let event = match kind {
         "thread.started" => {
             value
@@ -70,6 +79,38 @@ pub fn normalize_event(value: &Value) -> Result<Vec<RuntimeEvent>, RuntimeError>
                     change: RuntimeFileChangeKind::Modified,
                 })
         }
+        "item.updated"
+            if value.pointer("/item/type").and_then(Value::as_str) == Some("todo_list") =>
+        {
+            value
+                .pointer("/item/items")
+                .and_then(Value::as_array)
+                .map(|items| RuntimeEvent::PlanUpdated {
+                    items: items
+                        .iter()
+                        .filter_map(|item| {
+                            Some(RuntimePlanItem {
+                                text: item.get("text")?.as_str()?.into(),
+                                status: item
+                                    .get("status")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_owned),
+                            })
+                        })
+                        .collect(),
+                })
+        }
+        "turn.completed" => Some(RuntimeEvent::UsageUpdated {
+            input_tokens: value.pointer("/usage/input_tokens").and_then(Value::as_u64),
+            cached_input_tokens: value
+                .pointer("/usage/cached_input_tokens")
+                .and_then(Value::as_u64),
+            output_tokens: value
+                .pointer("/usage/output_tokens")
+                .and_then(Value::as_u64),
+            reasoning_tokens: None,
+            estimated_cost_usd: None,
+        }),
         _ => None,
     };
     Ok(event.into_iter().collect())
