@@ -197,5 +197,23 @@ mod tests {
             matches!(&tool[0], RuntimeEvent::ToolCallStarted { input_summary, .. } if input_summary == "tool started")
         );
         assert!(normalize_stream_event(&json!({"type":"assistant","message":{"content":[{"type":"thinking","thinking":"private"}]}})).unwrap().is_empty());
+        let result = normalize_stream_event(&json!({
+            "type":"result",
+            "session_id":"s",
+            "usage":{"input_tokens":1,"cache_read_input_tokens":2,"output_tokens":3},
+            "total_cost_usd":0.1
+        }))
+        .unwrap();
+        assert!(matches!(result[0], RuntimeEvent::SessionStarted { .. }));
+        assert!(matches!(
+            result[1],
+            RuntimeEvent::UsageUpdated {
+                input_tokens: Some(1),
+                cached_input_tokens: Some(2),
+                output_tokens: Some(3),
+                estimated_cost_usd: Some(cost),
+                ..
+            } if (cost - 0.1).abs() < f64::EPSILON
+        ));
     }
 }
