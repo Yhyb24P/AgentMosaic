@@ -1,4 +1,4 @@
-//! `am agent add` and `am agent list`.
+//! `am agent add`, `am agent list` and `am agent remove`.
 
 use agentmosaic_storage::{AgentRegistryRecord, SqliteAgentRegistry};
 
@@ -34,29 +34,74 @@ pub fn add(spec: AgentAdd) -> Result<String, String> {
     } else {
         Some(serde_json::json!({"artifact_paths": spec.artifacts}).to_string())
     };
+    let record = AgentRegistryRecord {
+        id: spec.id.clone(),
+        name: spec.name.unwrap_or_else(|| spec.id.clone()),
+        tier: spec.role,
+        driver_kind: Some(spec.adapter),
+        executable: Some(program.clone()),
+        driver_args_json: Some(serde_json::to_string(args).map_err(|e| e.to_string())?),
+        max_concurrency: Some(spec.concurrency),
+        tags_json: Some(serde_json::to_string(&spec.tags).map_err(|e| e.to_string())?),
+        runtime_version: None,
+        driver_config_json: config,
+    };
     let (_, database) = project::project_database()?;
-    SqliteAgentRegistry::open(&database)
-        .map_err(|e| e.to_string())?
-        .upsert_agent(&AgentRegistryRecord {
-            id: spec.id.clone(),
-            name: spec.name.unwrap_or_else(|| spec.id.clone()),
-            tier: spec.role,
-            driver_kind: Some(spec.adapter),
-            executable: Some(program.clone()),
-            driver_args_json: Some(serde_json::to_string(args).map_err(|e| e.to_string())?),
-            max_concurrency: Some(spec.concurrency),
-            tags_json: Some(serde_json::to_string(&spec.tags).map_err(|e| e.to_string())?),
-            runtime_version: None,
-            driver_config_json: config,
-        })
+    let registry = SqliteAgentRegistry::open(&database).map_err(|e| e.to_string())?;
+    // The registry itself answers whether the row already existed: no second
+    // pass over the input decides which verb is printed.
+    let created = registry
+        .get_agent(&record.id)
+        .map_err(|e| format!("agent add: {e}"))?
+        .is_none();
+    registry
+        .upsert_agent(&record)
         .map_err(|e| format!("agent add: {e}"))?;
-    Ok(format!("added agent={}", spec.id))
+    Ok(output::render_agent_registration(
+        &record.id,
+        created,
+        &record.tier,
+        record.driver_kind.as_deref().unwrap_or("-"),
+        &output::bounded_launch(&record),
+    ))
 }
 
+/// List the durable registrations. This surface reads the registry only: it
+/// starts no runtime and performs no readiness handshake, so an Agent whose
+/// launch program is not installed still lists.
 pub fn list() -> Result<String, String> {
     let (_, database) = project::project_database()?;
-    output::registry_list(
-        database.to_str().ok_or("project state path is not UTF-8")?,
-        None,
-    )
+    let registry = SqliteAgentRegistry::open(&database).map_err(|e| format!("registry: {e}"))?;
+    let agents = registry
+        .list_agents()
+        .map_err(|e| format!("registry: {e}"))?;
+    Ok(output::render_agent_table(&agents))
+}
+
+/// Remove one registration. Only the registry entry is deleted: the tasks,
+/// attempts, results, artifacts and bindings the Agent produced are history.
+pub fn remove(id: &str) -> Result<String, String> {
+    let (_, database) = project::project_database()?;
+    let registry =
+        SqliteAgentRegistry::open(&database).map_err(|e| format!("agent remove: {e}"))?;
+    if !registry
+        .delete_agent(id)
+        .map_err(|e| format!("agent remove: {e}"))?
+    {
+        return Err(format!("no agent `{id}` is registered"));
+    }
+    // The team rule is evaluated from the registry as it is *after* the
+    // deletion, so the warning is about the team the user now has.
+    let agents = registry
+        .list_agents()
+        .map_err(|e| format!("agent remove: {e}"))?;
+    let reasoners = agents
+        .iter()
+        .filter(|agent| agent.tier == "reasoner")
+        .count();
+    let workers = agents.iter().filter(|agent| agent.tier == "worker").count();
+    Ok(output::render_agent_removed(
+        id,
+        reasoners == 1 && workers >= 1,
+    ))
 }

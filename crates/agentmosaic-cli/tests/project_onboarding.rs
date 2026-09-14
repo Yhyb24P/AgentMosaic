@@ -2,6 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+use agentmosaic_storage::SqliteAgentRegistry;
+
 fn cli() -> Command {
     Command::new(env!("CARGO_BIN_EXE_am"))
 }
@@ -110,14 +112,33 @@ fn project_onboarding_discovers_git_root_and_preserves_launch_argv() {
     assert!(list.status.success());
     let list = String::from_utf8_lossy(&list.stdout);
     assert!(list.contains("wrapper"));
-    assert!(list.contains("args=[\"qw\",\"-ds\",\"--acp\",\"--unknown-flag\"]"));
+    // `agent list` renders a bounded LAUNCH column now, so the intent of this
+    // test — the opaque argv survives end-to-end through CLI registration — is
+    // read back from the durable registry instead.
+    let registered = SqliteAgentRegistry::open(root.join(".agentmosaic/state.db"))
+        .unwrap()
+        .get_agent("wrapper")
+        .unwrap()
+        .expect("the wrapper Agent is registered");
+    assert_eq!(
+        serde_json::from_str::<Vec<String>>(registered.driver_args_json.as_deref().unwrap())
+            .unwrap(),
+        vec!["qw", "-ds", "--acp", "--unknown-flag"]
+    );
 
     let doctor = cli().current_dir(&nested).arg("doctor").output().unwrap();
     assert!(!doctor.status.success());
+    // The default doctor report is a decision on stderr: the decision lines and
+    // the remediation, not the bounded diagnostic stages.
+    assert!(doctor.stdout.is_empty(), "the report belongs on stderr");
     let doctor = String::from_utf8_lossy(&doctor.stderr);
-    assert!(doctor.contains("project   READY"));
-    assert!(doctor.contains("PROGRAM_NOT_FOUND"));
-    assert!(doctor.contains("team      READY reasoner=1 worker=1 utility=0"));
+    assert!(doctor.contains("project   ready"));
+    assert!(doctor.contains("lead      not ready"));
+    assert!(doctor.contains("wrapper   not ready"));
+    assert!(doctor.contains("team      not ready  1 lead · 1 worker"));
+    assert!(doctor.contains("\nReason\n"));
+    assert!(doctor.contains("\nFix\n"));
+    assert!(!doctor.contains("PROGRAM_"));
 
     fs::remove_dir_all(root).unwrap();
 }

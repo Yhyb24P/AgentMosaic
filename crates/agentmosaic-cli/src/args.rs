@@ -44,7 +44,11 @@ pub enum Command {
         command: AgentCommand,
     },
     /// Check whether the team is ready
-    Doctor,
+    Doctor {
+        /// Also print the bounded per-Agent diagnostic stages
+        #[arg(long)]
+        verbose: bool,
+    },
     /// Give one objective to the team
     Run {
         /// The objective, as one or more words
@@ -234,6 +238,11 @@ pub enum AgentCommand {
     },
     /// List the Agents of this project
     List,
+    /// Remove an Agent from this project
+    Remove {
+        /// Agent id
+        id: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]

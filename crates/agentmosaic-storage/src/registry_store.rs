@@ -96,6 +96,18 @@ impl SqliteAgentRegistry {
         }
     }
 
+    /// Remove one registration, reporting whether a row was deleted.
+    ///
+    /// Deletion is deliberately narrow: it touches `agent_registry` only. The
+    /// durable task board, attempts, results, artifacts, bindings and final
+    /// references are history and outlive the Agent registration.
+    pub fn delete_agent(&self, id: &str) -> Result<bool, rusqlite::Error> {
+        let removed = self
+            .conn
+            .execute("DELETE FROM agent_registry WHERE id = ?1", params![id])?;
+        Ok(removed > 0)
+    }
+
     /// List all registrations in id order.
     pub fn list_agents(&self) -> Result<Vec<AgentRegistryRecord>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
@@ -339,6 +351,85 @@ mod tests {
         let old = registry.get_agent("old").expect("get").expect("preserved");
         assert_eq!(old.runtime_version, None);
         assert_eq!(registry.schema_version().expect("version"), SCHEMA_VERSION);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Deletion removes exactly the named row, and reports a missing id
+    /// instead of failing.
+    #[test]
+    fn delete_agent_removes_only_the_named_row() {
+        let path = temp_db("delete");
+        let _ = std::fs::remove_file(&path);
+        let registry = SqliteAgentRegistry::open(&path).expect("open registry");
+        let mut second = record();
+        second.id = "b-agent".into();
+        registry.upsert_agent(&record()).expect("upsert first");
+        registry.upsert_agent(&second).expect("upsert second");
+
+        assert!(registry.delete_agent("acp-worker").expect("delete"));
+        assert!(registry
+            .get_agent("acp-worker")
+            .expect("get removed")
+            .is_none());
+        let remaining = registry.list_agents().expect("list");
+        assert_eq!(
+            remaining
+                .iter()
+                .map(|agent| agent.id.as_str())
+                .collect::<Vec<_>>(),
+            ["b-agent"]
+        );
+        assert!(!registry.delete_agent("acp-worker").expect("delete again"));
+        assert!(!registry
+            .delete_agent("never-registered")
+            .expect("delete missing"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A registration deletion never reaches into durable team history: the
+    /// tasks, attempts and artifacts the Agent produced stay readable.
+    #[test]
+    fn delete_agent_leaves_task_history_untouched() {
+        let path = temp_db("delete-history");
+        let _ = std::fs::remove_file(&path);
+        let registry = SqliteAgentRegistry::open(&path).expect("open registry");
+        registry.upsert_agent(&record()).expect("upsert");
+        registry
+            .conn()
+            .execute(
+                "INSERT INTO team_tasks (id, objective, kind, assignee, status)
+                 VALUES (1, 'historic objective', 'bulk', 'acp-worker', 'succeeded')",
+                params![],
+            )
+            .expect("insert task");
+        registry
+            .conn()
+            .execute(
+                "INSERT INTO team_task_runs (task_id, attempt, agent_id, status, result)
+                 VALUES (1, 1, 'acp-worker', 'succeeded', 'historic result')",
+                params![],
+            )
+            .expect("insert attempt");
+        registry
+            .conn()
+            .execute(
+                "INSERT INTO artifacts (task_id, path, sha256) VALUES (1, 'out/result.txt', 'hash')",
+                params![],
+            )
+            .expect("insert artifact");
+
+        assert!(registry.delete_agent("acp-worker").expect("delete"));
+        let history: (i64, i64, i64) = registry
+            .conn()
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM team_tasks),
+                        (SELECT COUNT(*) FROM team_task_runs),
+                        (SELECT COUNT(*) FROM artifacts)",
+                params![],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("history survives");
+        assert_eq!(history, (1, 1, 1));
         let _ = std::fs::remove_file(&path);
     }
 

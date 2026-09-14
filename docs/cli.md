@@ -24,7 +24,7 @@ usage: am <init|agent|doctor|run|register|registry|run-acp|continue-acp|run-team
 | `init` | Create/open `.agentmosaic/state.db` at the project root. |
 | `agent add` | Persist an Agent identity, role, adapter and opaque LaunchSpec argv. |
 | `agent list` | Render the discovered project registry. |
-| `doctor` | Safely inspect project, team and runtime readiness without authentication. It reports `PROGRAM_FOUND`, `SPAWN_OK`, `PROTOCOL_OK`, `SESSION_OK`, and `READY`, or the first bounded failure. |
+| `doctor` | Decide whether the project and team can run. The default report is decision-oriented: `project`, `lead`, `worker` and `team` lines, and — when it is not ready — a `Reason` and a `Fix`. `am doctor --verbose` adds the bounded diagnostic stages (`PROGRAM_FOUND`, `LAUNCHSPEC_VALID`, `SPAWN_OK`, `PROTOCOL_OK`, `SESSION_OK`, `READY`, or the first bounded failure). It never authenticates. |
 | `run` | Discover project state and delegate to the existing TeamRunner. |
 | `register` | Insert/update one Agent registry row. |
 | `registry` | List persisted Agent registrations. |
