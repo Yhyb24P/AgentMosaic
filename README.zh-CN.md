@@ -66,11 +66,16 @@ utility Agent 的注册方式相同，用于有边界的工具型工作。它是
 am agent add utility --role utility --adapter acp -- <program> --acp
 ```
 
-本地 launcher 保留自己的 argv，例如：
+本地 launcher 保留自己的 argv，但注册给 `codex-app-server` 的启动命令，必须在
+AgentMosaic 追加 `app-server --stdio` 之后依然有效。命名 Codex profile 目前并不是可移植的
+app-server 配置方式；请改用 app-server 能接受的 `-c` 覆盖，或用一个展开成这些覆盖的
+wrapper。单独一个 `codex` 就是有效的 launcher：
 
 ```bash
-am agent add lead-ds --role reasoner --adapter codex-app-server -- codex -ds
+am agent add lead --role reasoner --adapter codex-app-server -- codex
 ```
+
+当真实运行触达默认上限时，`am agent add --max-events N` 可以调高单轮 Codex 事件预算。
 
 ## 为什么需要 AgentMosaic？
 

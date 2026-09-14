@@ -71,11 +71,17 @@ exactly one `reasoner` and at least one `worker`. `utility` Agents are optional;
 work falls back to the Worker tier when none is registered.
 
 `am agent list` prints the registry as a role-first table, `am agent remove <id>` deletes
-one Agent, and local launcher flags remain opaque LaunchSpec argv:
+one Agent, and local launcher flags remain opaque LaunchSpec argv.
+
+The launch command registered for `codex-app-server` must remain valid when AgentMosaic
+appends `app-server --stdio`. Named Codex profiles are not currently a portable
+app-server configuration mechanism; use app-server-compatible `-c` overrides, or a
+wrapper that expands to them. When a real run hits the default event bound, tune it with
+`--max-events N` (see [Tuning the Codex event budget](#tuning-the-codex-event-budget)).
 
 ```bash
-am agent add lead-ds --role reasoner --adapter codex-app-server -- codex -ds
-am agent add utility --role utility --adapter acp -- aweswitch qw --acp
+am agent add lead --role reasoner --adapter codex-app-server -- codex
+am agent add utility --role utility --adapter acp -- <program> --acp
 ```
 
 ### Tuning the Codex event budget

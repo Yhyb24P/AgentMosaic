@@ -26,8 +26,10 @@
 //! One additional set of keys configures a `codex-app-server` agent when it is
 //! the run's Lead: `model` (the resident thread's model), `max_prompt_bytes`
 //! (default 32768), `max_answer_bytes` (default 16384), and `max_events`
-//! (default 200). The Lead's `driver_args` are not used: the Lead brain speaks
-//! the `app-server --stdio` protocol itself.
+//! (default 200). The stored `driver_args` are the program's own argv and are
+//! placed before the adapter-appended `app-server --stdio`, so the Lead brain
+//! does not shell out to a separate helper: it speaks that protocol over the
+//! spawned process' stdio.
 //!
 //! The run's repository is the working directory of every driver built here.
 

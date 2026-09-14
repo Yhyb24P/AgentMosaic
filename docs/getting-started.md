@@ -38,7 +38,10 @@ am agent add worker --role worker --adapter acp -- qwen --acp
 ```
 
 Everything after `--` is persisted opaque argv. Do not put credentials in it. A local
-custom launcher keeps its exact argv, for example `codex -ds` or `aweswitch qw --acp`.
+launcher keeps its exact argv, but the launch command registered for `codex-app-server`
+must remain valid when AgentMosaic appends `app-server --stdio`. Named Codex profiles are
+not currently a portable app-server configuration mechanism; use app-server-compatible
+`-c` overrides, or a wrapper that expands to them.
 
 `--adapter` accepts `acp` or `codex-app-server`. A `utility` Agent is registered the same
 way with `--role utility`. `am agent list` prints the registry as a role-first table

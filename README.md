@@ -71,11 +71,18 @@ When no Utility is registered, utility work falls back to the Worker tier:
 am agent add utility --role utility --adapter acp -- <program> --acp
 ```
 
-A local launcher keeps its own argv, for example:
+A local launcher keeps its own argv, but the launch command registered for
+`codex-app-server` must remain valid when AgentMosaic appends `app-server --stdio`. Named
+Codex profiles are not currently a portable app-server configuration mechanism; use
+app-server-compatible `-c` overrides, or a wrapper that expands to them. `codex` on its
+own is a valid launcher:
 
 ```bash
-am agent add lead-ds --role reasoner --adapter codex-app-server -- codex -ds
+am agent add lead --role reasoner --adapter codex-app-server -- codex
 ```
+
+`am agent add --max-events N` raises the per-turn Codex event budget when a real run has
+hit the default bound.
 
 ## Why AgentMosaic?
 
