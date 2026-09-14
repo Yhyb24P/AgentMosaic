@@ -281,7 +281,14 @@ impl DriverFactory {
             timeout: Duration::from_secs(values.timeout_seconds),
             max_prompt_bytes: values.max_prompt_bytes,
             max_result_bytes: values.max_result_bytes,
-            output_schema: None,
+            output_schema: options
+                .output_schema
+                .as_deref()
+                .map(|path| {
+                    validate_artifact_path(&agent, path)?;
+                    Ok(self.repo.join(path).display().to_string())
+                })
+                .transpose()?,
             artifact_paths: options.artifact_paths.clone(),
             isolate: false,
         };
@@ -332,6 +339,7 @@ pub(crate) struct AgentOptions {
     pub(crate) overrides: Vec<String>,
     pub(crate) model: Option<String>,
     pub(crate) max_answer_bytes: Option<usize>,
+    pub(crate) output_schema: Option<String>,
 }
 
 /// Parse and validate one `driver_config_json` body. A missing body is an empty
@@ -377,6 +385,7 @@ pub(crate) fn parse_agent_options(
         overrides: string_array(agent, &map, "overrides")?,
         model: optional_string(agent, &map, "model")?,
         max_answer_bytes: optional_usize(agent, &map, "max_answer_bytes")?,
+        output_schema: optional_string(agent, &map, "output_schema")?,
     })
 }
 

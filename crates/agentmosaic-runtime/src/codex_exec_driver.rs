@@ -40,6 +40,14 @@ impl CodexExecDriverConfig {
         if self.timeout.is_zero() || self.max_prompt_bytes == 0 || self.max_result_bytes == 0 {
             return Err("Codex exec bounds must be positive".into());
         }
+        if let Some(schema) = &self.output_schema {
+            if !std::fs::metadata(schema)
+                .map_err(|error| error.to_string())?
+                .is_file()
+            {
+                return Err("Codex exec output_schema must name a regular file".into());
+            }
+        }
         for relative in &self.artifact_paths {
             let path = Path::new(relative);
             if path.as_os_str().is_empty()
