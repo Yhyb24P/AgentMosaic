@@ -43,7 +43,8 @@ pub use runtime_event::{
     RuntimeEventDispatcher, SqliteRuntimeEventWriter,
 };
 pub use team_runner::{
-    validate_lead_config, validate_registry_row, TeamRunOptions, TeamRunOutcome, TeamRunner,
-    TeamRunnerError, DEFAULT_LEAD_MAX_ANSWER_BYTES, DEFAULT_LEAD_MAX_EVENTS,
-    DEFAULT_LEAD_MAX_PROMPT_BYTES, DEFAULT_MAX_RETRIES, DEFAULT_MAX_ROUNDS, DEFAULT_MAX_TASKS,
+    validate_lead_config, validate_registry_row, DefaultLeadBrainFactory, LeadBrainFactory,
+    TeamRunOptions, TeamRunOutcome, TeamRunner, TeamRunnerError, DEFAULT_LEAD_MAX_ANSWER_BYTES,
+    DEFAULT_LEAD_MAX_EVENTS, DEFAULT_LEAD_MAX_PROMPT_BYTES, DEFAULT_MAX_RETRIES,
+    DEFAULT_MAX_ROUNDS, DEFAULT_MAX_TASKS,
 };

@@ -102,7 +102,7 @@ fn resolved_lead(agents: &[AgentRegistryRecord]) -> Option<&str> {
 /// itself states it, or None when a run's own configuration checks accept it.
 ///
 /// The checks run in the order a run builds them — every registry row, then
-/// every driver, then the Lead's brain — so the operator sees the same first
+/// the Lead's brain, then every driver — so the operator sees the same first
 /// failure a run would report. All of them construct nothing and start no
 /// process.
 fn configuration_problem(
@@ -115,11 +115,13 @@ fn configuration_problem(
     if let Err(detail) = validate_registry_row(agent) {
         return Some(detail);
     }
+    if lead == Some(agent.id.as_str()) {
+        if let Err(detail) = validate_lead_config(agent, root) {
+            return Some(detail);
+        }
+    }
     if let Err(detail) = validate_driver_config(agent) {
         return Some(detail);
-    }
-    if lead == Some(agent.id.as_str()) {
-        return validate_lead_config(agent, root).err();
     }
     None
 }

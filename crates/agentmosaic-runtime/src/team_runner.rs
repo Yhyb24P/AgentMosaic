@@ -31,13 +31,15 @@ use std::sync::Arc;
 use agentmosaic_storage::{AgentRegistryRecord, SqliteAgentRegistry, SqliteTaskBoard};
 use agentmosaic_team::{
     bounded_event_text, reconstruct_team_result, AgentConfig, AgentDriver, AgentRegistry,
-    AgentTier, BoardError, DriverKind, Lead, LeadBrainError, LeadError, NoopRunEventSink,
-    RegistryError, RunEvent, RunEventSink, Scheduler, TaskAttempt, TaskBoard, TaskKind, TaskStatus,
-    TeamResult,
+    AgentTier, BoardError, DriverKind, Lead, LeadBrain, LeadBrainError, LeadError,
+    NoopRunEventSink, RegistryError, RunEvent, RunEventSink, Scheduler, TaskAttempt, TaskBoard,
+    TaskKind, TaskStatus, TeamResult,
 };
 use rusqlite::Connection;
 
-use crate::driver_factory::{launch_spec, parse_agent_options, DriverFactory, DriverFactoryError};
+use crate::driver_factory::{
+    codex_option_values, launch_spec, parse_agent_options, DriverFactory, DriverFactoryError,
+};
 use crate::{CodexLeadBrain, CodexLeadConfig, LaunchSpec};
 
 /// Default bound for one automatic team run.
@@ -102,6 +104,8 @@ pub enum TeamRunnerError {
     LeadSelection(String),
     /// The Lead has no executable, so no Lead brain can be built.
     MissingLeadExecutable(String),
+    /// The selected reasoner's runtime has no conforming Lead adapter.
+    UnsupportedLeadRuntime { agent: String, kind: String },
     /// A driver could not be constructed.
     Driver(DriverFactoryError),
     /// The Lead brain could not be built or failed.
@@ -147,6 +151,10 @@ impl std::fmt::Display for TeamRunnerError {
             Self::MissingLeadExecutable(agent) => {
                 write!(f, "lead agent `{agent}` has no executable")
             }
+            Self::UnsupportedLeadRuntime { agent, kind } => write!(
+                f,
+                "lead agent `{agent}` has runtime `{kind}`, which is not supported for the Lead role"
+            ),
             Self::Driver(error) => write!(f, "{error}"),
             Self::LeadBrain(error) => write!(f, "{error}"),
             Self::Lead(error) => write!(f, "the lead run failed: {error}"),
@@ -162,6 +170,44 @@ impl std::fmt::Display for TeamRunnerError {
                 "the lead run failed ({cause}) and the root task could not be settled as failed: {settle}"
             ),
         }
+    }
+}
+
+/// Constructs the selected reasoner's stateful Lead implementation.
+///
+/// The factory is a runtime composition concern: the team crate owns the
+/// vendor-neutral [`LeadBrain`] contract, while durable registry rows select a
+/// concrete runtime here. Implementations must validate without starting a
+/// process so a rejected Lead never leaves a root task behind.
+pub trait LeadBrainFactory: Send + Sync {
+    fn build(
+        &self,
+        record: &AgentRegistryRecord,
+        candidates: Vec<String>,
+    ) -> Result<Box<dyn LeadBrain>, TeamRunnerError>;
+}
+
+/// The product Lead factory. More conforming Lead runtimes are added to this
+/// dispatch table; role selection itself remains independent of any vendor.
+pub struct DefaultLeadBrainFactory {
+    repo: PathBuf,
+}
+
+impl DefaultLeadBrainFactory {
+    pub fn new(repo: impl Into<PathBuf>) -> Self {
+        Self { repo: repo.into() }
+    }
+}
+
+impl LeadBrainFactory for DefaultLeadBrainFactory {
+    fn build(
+        &self,
+        record: &AgentRegistryRecord,
+        candidates: Vec<String>,
+    ) -> Result<Box<dyn LeadBrain>, TeamRunnerError> {
+        ensure_supported_lead_runtime(record)?;
+        let config = lead_config(record, &self.repo)?;
+        Ok(Box::new(CodexLeadBrain::new(config, candidates)?))
     }
 }
 
@@ -199,6 +245,7 @@ pub struct TeamRunner {
     repo: PathBuf,
     options: TeamRunOptions,
     bridge_host: Option<LaunchSpec>,
+    lead_factory: Arc<dyn LeadBrainFactory>,
     sink: Arc<dyn RunEventSink>,
 }
 
@@ -208,9 +255,11 @@ impl TeamRunner {
         repo: impl Into<PathBuf>,
         options: TeamRunOptions,
     ) -> Self {
+        let repo = repo.into();
         Self {
             database: database.into(),
-            repo: repo.into(),
+            lead_factory: Arc::new(DefaultLeadBrainFactory::new(repo.clone())),
+            repo,
             options,
             bridge_host: None,
             sink: Arc::new(NoopRunEventSink),
@@ -219,6 +268,13 @@ impl TeamRunner {
 
     pub fn with_bridge_host(mut self, host: LaunchSpec) -> Self {
         self.bridge_host = Some(host);
+        self
+    }
+
+    /// Override runtime construction while preserving the product's existing
+    /// Lead loop and all of its durable scheduling semantics.
+    pub fn with_lead_brain_factory(mut self, factory: Arc<dyn LeadBrainFactory>) -> Self {
+        self.lead_factory = factory;
         self
     }
 
@@ -241,10 +297,17 @@ impl TeamRunner {
         let records = self.records()?;
         let registry = agent_registry(&records)?;
         let lead = resolve_lead(&records, self.options.lead_agent.as_deref())?;
-        let drivers = self.drivers(&records)?;
         // The brain is built before the board is touched: constructing it starts
         // no process, and a configuration error must never leave a root behind.
-        let brain = self.lead_brain(&lead, registry.agent_ids())?;
+        let brain = self.lead_factory.build(
+            &lead,
+            registry
+                .agent_ids()
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        )?;
+        let drivers = self.drivers(&records)?;
         // The durable root: the Lead owns it, its attempt is observable as
         // Running before the external Lead turn can have any side effect, and
         // the Lead's `persist_final` settles exactly this row.
@@ -270,7 +333,7 @@ impl TeamRunner {
         let scheduler = Scheduler::new(registry, drivers, board, self.options.max_retries)
             .with_sink(Arc::clone(&self.sink));
         let mut lead_loop = Lead::new(
-            Box::new(brain),
+            brain,
             scheduler,
             self.options.max_rounds,
             self.options.max_tasks,
@@ -320,8 +383,15 @@ impl TeamRunner {
         // Every fallible configuration step happens before the board is
         // mutated, so a configuration error leaves the recoverable state for a
         // later resume instead of a half-driven run.
+        let brain = self.lead_factory.build(
+            &lead,
+            registry
+                .agent_ids()
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        )?;
         let drivers = self.drivers(&records)?;
-        let brain = self.lead_brain(&lead, registry.agent_ids())?;
         // Close every descendant attempt a process interruption left Running.
         // Recovery never replays the external work; the Lead decides what to do
         // next from the durable state.
@@ -331,7 +401,7 @@ impl TeamRunner {
         let scheduler = Scheduler::new(registry, drivers, board, self.options.max_retries)
             .with_sink(Arc::clone(&self.sink));
         let mut lead_loop = Lead::new(
-            Box::new(brain),
+            brain,
             scheduler,
             self.options.max_rounds,
             self.options.max_tasks,
@@ -454,21 +524,21 @@ impl TeamRunner {
         };
         factory.build(records).map_err(TeamRunnerError::Driver)
     }
+}
 
-    /// The resident Lead brain for `lead`, configured from the Lead's own
-    /// non-secret driver config. The Lead never runs a shell command and never
-    /// edits the workspace, so it only needs the app-server command, the model,
-    /// and the byte/event bounds.
-    fn lead_brain(
-        &self,
-        lead: &AgentRegistryRecord,
-        candidates: Vec<&str>,
-    ) -> Result<CodexLeadBrain, TeamRunnerError> {
-        let config = lead_config(lead, &self.repo)?;
-        Ok(CodexLeadBrain::new(
-            config,
-            candidates.into_iter().map(str::to_string).collect(),
-        )?)
+fn ensure_supported_lead_runtime(record: &AgentRegistryRecord) -> Result<(), TeamRunnerError> {
+    let kind = record
+        .driver_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|kind| !kind.is_empty())
+        .unwrap_or("<missing>");
+    match DriverKind::restore(kind) {
+        Some(DriverKind::CodexAppServer) => Ok(()),
+        _ => Err(TeamRunnerError::UnsupportedLeadRuntime {
+            agent: record.id.clone(),
+            kind: kind.to_string(),
+        }),
     }
 }
 
@@ -487,7 +557,12 @@ fn lead_config(
     record: &AgentRegistryRecord,
     repo: &Path,
 ) -> Result<CodexLeadConfig, TeamRunnerError> {
+    ensure_supported_lead_runtime(record)?;
     let options = parse_agent_options(&record.id, record.driver_config_json.as_deref())?;
+    // Shared options are judged by the adapter's one validator before the
+    // Lead-specific bounds, exactly as the matching team driver will judge
+    // them later in construction.
+    codex_option_values(&record.id, &options)?;
     let launch = launch_spec(record).map_err(|error| match error {
         DriverFactoryError::MissingExecutable(_) => {
             TeamRunnerError::MissingLeadExecutable(record.id.clone())
@@ -765,13 +840,16 @@ mod tests {
     #[test]
     fn a_lead_configuration_is_built_and_judged_the_way_a_run_does() {
         let repo = std::env::temp_dir();
-        let good = AgentRegistryRecord {
+        let lead_record = || AgentRegistryRecord {
             driver_kind: Some("codex-app-server".into()),
+            ..record("lead", "reasoner")
+        };
+        let good = AgentRegistryRecord {
             driver_config_json: Some(
                 r#"{"model":"gpt","overrides":["x=1"],"max_prompt_bytes":4096,"max_answer_bytes":2048,"max_events":4000}"#
                     .into(),
             ),
-            ..record("lead", "reasoner")
+            ..lead_record()
         };
         let config = validate_lead_config(&good, &repo).unwrap();
         assert_eq!(config.model.as_deref(), Some("gpt"));
@@ -783,7 +861,7 @@ mod tests {
         assert_eq!(config.launch.program, std::path::Path::new("agent"));
 
         // An absent body is the documented defaults, exactly as a run reads it.
-        let defaults = validate_lead_config(&record("lead", "reasoner"), &repo).unwrap();
+        let defaults = validate_lead_config(&lead_record(), &repo).unwrap();
         assert_eq!(defaults.model, None);
         assert!(defaults.overrides.is_empty());
         assert_eq!(defaults.max_prompt_bytes, DEFAULT_LEAD_MAX_PROMPT_BYTES);
@@ -798,7 +876,10 @@ mod tests {
                 r#"{"max_events":"not-a-number"}"#,
                 "`max_events` must be a number",
             ),
-            (r#"{"max_events":0}"#, "max_events must be positive"),
+            (
+                r#"{"max_events":0}"#,
+                "max_events must be greater than zero",
+            ),
             (r#"{"max_prompt_bytes":16}"#, "at least 1024"),
             (
                 r#"{"max_answer_bytes":0}"#,
@@ -808,7 +889,7 @@ mod tests {
         ] {
             let row = AgentRegistryRecord {
                 driver_config_json: Some(config.into()),
-                ..record("lead", "reasoner")
+                ..lead_record()
             };
             let detail = validate_lead_config(&row, &repo).unwrap_err();
             assert!(detail.contains(expected), "{config}: {detail}");
@@ -817,16 +898,42 @@ mod tests {
         // No executable: the run's own launch error, verbatim.
         let no_program = AgentRegistryRecord {
             executable: None,
-            ..record("lead", "reasoner")
+            ..lead_record()
         };
         assert!(validate_lead_config(&no_program, &repo)
             .unwrap_err()
             .contains("has no executable"));
         // A repository that is not a directory is not one a run works in.
         let missing = repo.join("agentmosaic-lead-config-must-not-exist");
-        assert!(validate_lead_config(&record("lead", "reasoner"), &missing)
+        assert!(validate_lead_config(&lead_record(), &missing)
             .unwrap_err()
             .contains("working directory must exist"));
+    }
+
+    #[test]
+    fn the_default_factory_dispatches_by_runtime_and_rejects_unsupported_leads() {
+        let repo = std::env::temp_dir();
+        let factory = DefaultLeadBrainFactory::new(&repo);
+
+        let unsupported = record("lead", "reasoner");
+        let error = match factory.build(&unsupported, vec!["worker".into()]) {
+            Ok(_) => panic!("ACP is not a conforming Lead runtime"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            TeamRunnerError::UnsupportedLeadRuntime {
+                ref agent,
+                ref kind
+            } if agent == "lead" && kind == "acp"
+        ));
+
+        let missing = AgentRegistryRecord {
+            driver_kind: None,
+            ..record("lead", "reasoner")
+        };
+        let error = validate_lead_config(&missing, &repo).unwrap_err();
+        assert!(error.contains("runtime `<missing>`"), "{error}");
     }
 
     /// One registry row is judged by the run's own construction, so the verdict

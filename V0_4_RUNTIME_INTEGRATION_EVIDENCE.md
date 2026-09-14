@@ -24,7 +24,7 @@ v8_to_v12=PASS (authentic checked-in v8 fixture)
 
 ```text
 runtime_event_foundation=PASS
-role_runtime_decoupled=IN_PROGRESS
+role_runtime_decoupled=PASS (LeadBrainFactory; unsupported Lead runtimes fail before root creation)
 generic_acp=IN_PROGRESS
 absolute_deadline=IN_PROGRESS
 process_tree_cleanup=IN_PROGRESS
@@ -40,15 +40,15 @@ recovery_no_replay=IN_PROGRESS
 ## Deterministic tests
 
 ```text
-fmt=PASS (G1 full gate)
-clippy=PASS (G1 full gate)
-test=PASS (G1 full gate)
-test_discovered=454
-test_passed=437
+fmt=PASS (G2 full gate)
+clippy=PASS (G2 full gate)
+test=PASS (G2 full gate)
+test_discovered=456
+test_passed=439
 test_failed=0
 test_ignored=17
-release_build=PASS (G1 full gate)
-diff_check=PASS (G1 full gate)
+release_build=PASS (G2 full gate)
+diff_check=PASS (G2 full gate)
 ```
 
 ## Runtime matrix
@@ -77,7 +77,7 @@ manual_agent_to_agent_copy_paste=false
 ## Compatibility
 
 ```text
-codex_app_server_compat=pending
+codex_app_server_compat=PASS (G2 deterministic product path)
 v0.3_release_untouched=pending final verification
 old_driver_strings_restorable=pending
 ```

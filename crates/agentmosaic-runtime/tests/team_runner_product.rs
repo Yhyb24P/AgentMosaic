@@ -540,6 +540,35 @@ async fn an_unsupported_driver_kind_fails_the_run() {
     assert!(error.to_string().contains("has no driver kind"), "{error}");
 }
 
+// Selecting a reasoner no longer implies Codex app-server construction. The
+// Lead factory dispatches on the durable runtime kind and rejects runtimes that
+// have not passed the Lead contract before the root task can be created.
+#[tokio::test]
+async fn an_unsupported_reasoner_runtime_fails_before_root_creation() {
+    let fixture = Fixture::new("unsupported-lead-runtime");
+    fixture.register(&acp_agent("worker", "worker", &[]));
+    fixture.register(&acp_agent("lead", "reasoner", &[]));
+
+    let error = runner(&fixture)
+        .run("deliver the objective")
+        .await
+        .expect_err("ACP is supported for workers, not for the Lead role");
+    assert!(
+        matches!(
+            error,
+            TeamRunnerError::UnsupportedLeadRuntime {
+                ref agent,
+                ref kind
+            } if agent == "lead" && kind == "acp"
+        ),
+        "unexpected error: {error}"
+    );
+    assert!(
+        fixture.open_board().task_ids().unwrap().is_empty(),
+        "an unsupported reasoner must fail before root creation"
+    );
+}
+
 // A Lead that never satisfies the decision contract fails the run and leaves
 // the durable root observably not succeeded.
 #[tokio::test]
