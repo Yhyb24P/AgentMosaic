@@ -5,6 +5,7 @@
 //! deliberately cheap and non-invasive: no prompt, no model, no login.
 
 use std::path::Path;
+use std::process::Command;
 use std::time::Duration;
 
 use agentmosaic_runtime::{
@@ -202,6 +203,7 @@ fn probe_agent(agent: &AgentRegistryRecord, root: &Path) -> AgentProbe {
     let probe = match agent.driver_kind.as_deref() {
         Some("acp") => probe_acp(launch, args, root),
         Some("codex-app-server") => probe_codex(launch, root),
+        Some("codex-exec") => probe_codex_exec(launch),
         _ => AgentProbe::new(ReadinessStage::ProtocolUnavailable, "PROTOCOL_UNAVAILABLE"),
     };
     AgentProbe::new(
@@ -276,6 +278,25 @@ fn probe_codex(launch: LaunchSpec, root: &Path) -> AgentProbe {
             }
             Err(_) => AgentProbe::new(ReadinessStage::ProtocolUnavailable, "PROTOCOL_UNAVAILABLE"),
         },
+    }
+}
+
+/// Verify the supported Codex machine-interface surface without sending a
+/// prompt, selecting a model, or attempting authentication.
+fn probe_codex_exec(launch: LaunchSpec) -> AgentProbe {
+    let output = Command::new(&launch.program)
+        .args(&launch.args)
+        .args(["exec", "--help"])
+        .output();
+    match output {
+        Ok(output)
+            if output.status.success()
+                && String::from_utf8_lossy(&output.stdout).contains("--json") =>
+        {
+            AgentProbe::new(ReadinessStage::Ready, "SPAWN_OK PROTOCOL_OK READY")
+        }
+        Ok(_) => AgentProbe::new(ReadinessStage::ProtocolUnavailable, "PROTOCOL_UNAVAILABLE"),
+        Err(_) => AgentProbe::new(ReadinessStage::SpawnFailed, "SPAWN_FAILED"),
     }
 }
 
