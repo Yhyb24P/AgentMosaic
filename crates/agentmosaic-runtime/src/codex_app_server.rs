@@ -363,6 +363,10 @@ impl CodexAppServer {
     }
 
     pub fn close(mut self) -> Result<(), CodexBridgeError> {
+        self.terminate()
+    }
+
+    fn terminate(&mut self) -> Result<(), CodexBridgeError> {
         #[cfg(unix)]
         unsafe {
             // The child is the process-group leader established at spawn.
@@ -454,9 +458,12 @@ impl CodexAppServer {
             Ok(Ok(line)) => line,
             Ok(Err(error)) => return Err(CodexBridgeError::Io(error)),
             Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Deadline expiry is terminal: do not strand a live process
+                // group merely because the caller received an error.
+                let _ = self.terminate();
                 return Err(CodexBridgeError::Io(
                     "Codex app-server request deadline exceeded".into(),
-                ))
+                ));
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => return Err(CodexBridgeError::Closed),
         };
