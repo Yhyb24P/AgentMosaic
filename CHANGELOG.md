@@ -5,6 +5,44 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-09-14
+
+The interface milestone: `am` becomes a team interface rather than an engineering
+surface, without a schema migration and with durable data, wire formats and the Lead
+decision contract unchanged.
+
+### Added
+
+- Live team lifecycle during `am run`: run chrome, the Lead's rounds, each delegated
+  task, worker attempts, artifact notices and next-command suggestions.
+- Project-aware inspection: `am status [RUN]`, `am status --all`, `am final [RUN]`,
+  `am artifact [TASK]` and `am tui` need no database path.
+- `am agent remove <ID>`, which removes only the registry entry and preserves all
+  historical tasks, results, artifacts and bindings.
+- Machine-readable output: `--json` on `run`, `doctor`, `agent list`, `status`,
+  `status <RUN>`, `status --all`, `final`, `final <RUN>`, `artifact` and
+  `artifact <TASK>`.
+- `--quiet` for `am run`, and `--verbose` for `am doctor`.
+- `am advanced`, which lists the compatibility and low-level commands.
+- A live-refresh read-only TUI that redraws on a bounded tick and reloads the
+  registry on every refresh.
+- A non-authoritative run-event projection over the durable task board.
+
+### Changed
+
+- Default help centers the normal workflow; the compatibility commands are hidden
+  but remain callable at their current spellings.
+- `am init`, `am agent add`, `am agent list` and `am doctor` are user-oriented,
+  decision-first, and no longer print the SQLite state path.
+- `am run` writes the final answer to stdout and all progress to stderr.
+
+### Fixed
+
+- The first Lead round accepts a single delegated task, matching the checked-in
+  decision contract and the Lead's own instructions.
+- Directed messages use the actual resolved Lead agent id instead of the literal
+  `lead`.
+
 ## [0.2.1] - 2026-09-14
 
 ### Fixed

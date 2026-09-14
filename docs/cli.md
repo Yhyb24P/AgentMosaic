@@ -19,7 +19,7 @@ usage: am <init|agent|doctor|run|status|final|artifact|tui|advanced> [fields]
        am advanced
 ```
 
-`am --version` prints `am 0.2.1`.
+`am --version` prints `am 0.3.0`.
 
 ## Commands
 
