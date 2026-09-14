@@ -129,6 +129,7 @@ dependencies = [
  "async-trait",
  "rusqlite",
  "serde_json",
+ "sha2",
  "tokio",
 ]
 

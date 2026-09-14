@@ -7,7 +7,7 @@ branch=feat/v0.4-runtime-integration
 start_sha=c90ec9560f80cc8f956057e686fd20d96efb93a4
 end_sha=IN_PROGRESS
 workspace_version=0.4.0-dev
-schema_version=11 (G1 target: 12)
+schema_version=12
 dirty_state_preserved=true (baseline was clean)
 baseline_canonical_gates=PASS
 ```
@@ -15,15 +15,15 @@ baseline_canonical_gates=PASS
 ## Migration
 
 ```text
-v11_to_v12=IN_PROGRESS
-v0.3_db_compat=IN_PROGRESS
-v8_to_v12=IN_PROGRESS
+v11_to_v12=PASS (additive binding columns + runtime_events)
+v0.3_db_compat=PASS (published am 0.3.0 fixture SHA-256 e7b430ad17b8c2be3704f540ca921c77b2ba063c9661300411fbda51334adc3b)
+v8_to_v12=PASS (authentic checked-in v8 fixture)
 ```
 
 ## Architecture gates
 
 ```text
-runtime_event_foundation=IN_PROGRESS
+runtime_event_foundation=PASS
 role_runtime_decoupled=IN_PROGRESS
 generic_acp=IN_PROGRESS
 absolute_deadline=IN_PROGRESS
@@ -40,15 +40,15 @@ recovery_no_replay=IN_PROGRESS
 ## Deterministic tests
 
 ```text
-fmt=PASS (baseline)
-clippy=PASS (baseline)
-test=PASS (baseline)
-test_discovered=445
-test_passed=428
+fmt=PASS (G1 full gate)
+clippy=PASS (G1 full gate)
+test=PASS (G1 full gate)
+test_discovered=454
+test_passed=437
 test_failed=0
 test_ignored=17
-release_build=PASS (baseline)
-diff_check=PASS (baseline)
+release_build=PASS (G1 full gate)
+diff_check=PASS (G1 full gate)
 ```
 
 ## Runtime matrix
@@ -93,3 +93,11 @@ AGENT_RUNTIME_INTEGRATION_READY=false
 ## Remaining blockers
 
 Implementation is in progress; no STOP-HARD condition has been observed.
+
+The v0.3 compatibility fixture was created by the published `am 0.3.0`
+binary (`f8a683bb9eb00bd8d1f932cc27808192e45ff223afc613aab37e0eaf01c7bbf0`)
+against deterministic Codex app-server and ACP peers. Before migration it is
+schema v11 and contains a completed root/worker run, two attempts, one
+artifact, final task/artifact references, two registry rows and an ACP foreign
+binding. The migration test copies it before opening, so the frozen fixture is
+never modified by v0.4 code.

@@ -17,6 +17,7 @@ mod codex_team_driver;
 mod dispatch;
 mod driver_factory;
 mod launch;
+mod runtime_event;
 mod team_runner;
 
 pub use acp_worker::{
@@ -37,6 +38,10 @@ pub use driver_factory::{
     DEFAULT_ACP_MAX_RESULT_BYTES, DEFAULT_ACP_TIMEOUT_SECONDS, DEFAULT_CODEX_MAX_EVENTS,
 };
 pub use launch::LaunchSpec;
+pub use runtime_event::{
+    DurableRuntimeEventWriter, LiveRuntimeEventSink, NoopLiveRuntimeEventSink,
+    RuntimeEventDispatcher, SqliteRuntimeEventWriter,
+};
 pub use team_runner::{
     validate_lead_config, validate_registry_row, TeamRunOptions, TeamRunOutcome, TeamRunner,
     TeamRunnerError, DEFAULT_LEAD_MAX_ANSWER_BYTES, DEFAULT_LEAD_MAX_EVENTS,

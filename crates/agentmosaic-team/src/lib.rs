@@ -11,6 +11,7 @@ mod board;
 mod lead;
 mod registry;
 mod run_event;
+mod runtime_event;
 mod scheduler;
 
 #[cfg(test)]
@@ -31,5 +32,12 @@ pub use registry::{
 };
 pub use run_event::{
     bounded_event_text, LeadPhase, NoopRunEventSink, RunEvent, RunEventSink, MAX_EVENT_TEXT_BYTES,
+};
+pub use runtime_event::{
+    PrivateRuntimeInput, RuntimeEvent, RuntimeEventPolicy, RuntimeEventRecord,
+    RuntimeFileChangeKind, RuntimePermissionDecision, RuntimePermissionOption, RuntimePlanItem,
+    MAX_ASSISTANT_MESSAGE_BYTES, MAX_COMMAND_BYTES, MAX_DURABLE_RUNTIME_PAYLOAD_BYTES,
+    MAX_PERMISSION_OPTIONS, MAX_PLAN_ITEMS, MAX_PLAN_ITEM_BYTES, MAX_RUNTIME_ID_BYTES,
+    MAX_RUNTIME_SUMMARY_BYTES,
 };
 pub use scheduler::{ScheduleError, ScheduledResult, Scheduler, TaskSpec};

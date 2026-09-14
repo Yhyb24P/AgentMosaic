@@ -5,8 +5,10 @@
 /// Version 8 adds the durable runtime agent registry (agent_registry). Version
 /// 9 adds explicit Lead-selected final task/artifact references. Version 10
 /// adds non-secret runtime version metadata to the durable agent registry.
-/// Version 11 adds durable non-secret driver options to that registry.
-pub const SCHEMA_VERSION: i32 = 11;
+/// Version 11 adds durable non-secret driver options to that registry. Version
+/// 12 adds bounded runtime observation events and capability metadata to the
+/// existing per-attempt external runtime binding.
+pub const SCHEMA_VERSION: i32 = 12;
 
 /// The durable journal schema. Deliberately small; it does not reproduce the
 /// legacy qualification/audit schema.
@@ -116,6 +118,13 @@ CREATE TABLE IF NOT EXISTS external_runtime_bindings (
     native_thread_id TEXT,
     native_turn_id TEXT,
     lifecycle_state TEXT NOT NULL,
+    runtime_name TEXT,
+    runtime_version TEXT,
+    protocol_kind TEXT,
+    protocol_version TEXT,
+    capabilities_json TEXT,
+    started_at TEXT,
+    finished_at TEXT,
     PRIMARY KEY (team_task_id, attempt)
 );
 CREATE TABLE IF NOT EXISTS runtime_collaboration_records (
@@ -128,6 +137,16 @@ CREATE TABLE IF NOT EXISTS runtime_collaboration_records (
     payload_summary TEXT NOT NULL,
     response_summary TEXT,
     UNIQUE (runtime_kind, native_call_id)
+);
+CREATE TABLE IF NOT EXISTS runtime_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_task_id INTEGER NOT NULL REFERENCES team_tasks(id),
+    attempt INTEGER NOT NULL,
+    sequence INTEGER NOT NULL,
+    event_kind TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(team_task_id, attempt, sequence)
 );
 CREATE TABLE IF NOT EXISTS agent_registry (
     id TEXT PRIMARY KEY,
@@ -239,6 +258,32 @@ pub fn migrate(conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error> {
     // non-secret options; a token, API key, endpoint, or credential must never
     // be written here.
     ensure_column(&tx, "agent_registry", "driver_config_json", "TEXT")?;
+    // v11 -> v12: enrich the existing one-row-per-attempt foreign binding and
+    // add a bounded observation journal. These rows never become task truth.
+    ensure_column(&tx, "external_runtime_bindings", "runtime_name", "TEXT")?;
+    ensure_column(&tx, "external_runtime_bindings", "runtime_version", "TEXT")?;
+    ensure_column(&tx, "external_runtime_bindings", "protocol_kind", "TEXT")?;
+    ensure_column(&tx, "external_runtime_bindings", "protocol_version", "TEXT")?;
+    ensure_column(
+        &tx,
+        "external_runtime_bindings",
+        "capabilities_json",
+        "TEXT",
+    )?;
+    ensure_column(&tx, "external_runtime_bindings", "started_at", "TEXT")?;
+    ensure_column(&tx, "external_runtime_bindings", "finished_at", "TEXT")?;
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS runtime_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            team_task_id INTEGER NOT NULL REFERENCES team_tasks(id),
+            attempt INTEGER NOT NULL,
+            sequence INTEGER NOT NULL,
+            event_kind TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(team_task_id, attempt, sequence)
+         );",
+    )?;
     // `artifacts` gains a nullable `task_id` and a nullable `session_id`, so a
     // team task's artifacts and a single-agent session's coexist. SQLite cannot
     // relax a NOT NULL constraint in place, so the table is rebuilt.
