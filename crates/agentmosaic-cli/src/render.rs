@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 
 use agentmosaic_team::{bounded_event_text, LeadPhase, RunEvent, RunEventSink};
 
+use crate::json::{self, RunJson};
+
 /// The widest human text one progress line carries, once the whitespace of a
 /// multi-line objective or error is collapsed to single spaces.
 const MAX_LINE_TEXT_BYTES: usize = 72;
@@ -48,11 +50,15 @@ impl RunMode {
 
     /// The stdout payload of a finished run.
     ///
-    /// Every surface prints the answer the Lead persisted, so the machine
-    /// surface's payload is the answer today; this is the only line that has to
-    /// change when the machine surface carries a typed run result instead.
-    pub fn payload(self, answer: String) -> String {
-        answer
+    /// The human and quiet surfaces print the answer the Lead persisted. The
+    /// machine surface prints the typed run result — the whole answer, the
+    /// completed tasks and the exact artifact digests, never an abbreviation.
+    /// This is the one place the machine stdout contract changes.
+    pub fn payload(self, run: &RunJson) -> Result<String, String> {
+        match self {
+            RunMode::Machine => json::encode(run),
+            RunMode::Human | RunMode::Quiet => Ok(run.answer.clone()),
+        }
     }
 }
 

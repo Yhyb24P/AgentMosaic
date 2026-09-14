@@ -363,7 +363,7 @@ fn quiet_prints_the_answer_and_no_routine_progress() {
 }
 
 #[test]
-fn json_prints_the_answer_and_no_human_text() {
+fn json_prints_the_typed_object_and_no_human_text() {
     let project = TeamProject::ready("json");
     let run = project.run(&["--json", "deliver the objective"]);
     assert!(
@@ -373,7 +373,11 @@ fn json_prints_the_answer_and_no_human_text() {
         stderr(&run)
     );
 
-    assert_eq!(stdout(&run), format!("{LEAD_ANSWER}\n"));
+    // TASK07 replaced TASK05's reserved placeholder with the typed object.
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&run).trim()).expect("one JSON object on stdout");
+    assert_eq!(value["answer"], serde_json::json!(LEAD_ANSWER));
+    assert_eq!(value["status"], serde_json::json!("succeeded"));
     assert_eq!(stderr(&run), "", "the machine surface wrote human text");
 }
 

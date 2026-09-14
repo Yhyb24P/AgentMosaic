@@ -48,13 +48,16 @@ pub enum Command {
         /// Also print the bounded per-Agent diagnostic stages
         #[arg(long)]
         verbose: bool,
+        /// Print the decision as one JSON object instead of human text
+        #[arg(long)]
+        json: bool,
     },
     /// Give one objective to the team
     Run {
         /// Do not print routine progress or the next-step footer
         #[arg(long)]
         quiet: bool,
-        /// Print only the answer, with no human text on any stream
+        /// Print one JSON object for scripts, with no human text on any stream
         #[arg(long)]
         json: bool,
         /// The objective, as one or more words
@@ -69,6 +72,9 @@ pub enum Command {
         /// List every run of this project, newest first
         #[arg(long)]
         all: bool,
+        /// Print the runs as one JSON object instead of human text
+        #[arg(long)]
+        json: bool,
     },
     /// Show a durable final result
     Final {
@@ -78,6 +84,9 @@ pub enum Command {
         /// Root task, for the legacy `<database> <root>` form
         #[arg(value_name = "ROOT")]
         root: Option<String>,
+        /// Print the result as one JSON object instead of human text
+        #[arg(long)]
+        json: bool,
     },
     /// Show recorded artifacts
     Artifact {
@@ -87,6 +96,9 @@ pub enum Command {
         /// Task, for the legacy `<database> <task>` form
         #[arg(value_name = "TASK")]
         task: Option<String>,
+        /// Print the artifacts as one JSON object instead of human text
+        #[arg(long)]
+        json: bool,
     },
     /// Open the live read-only team board
     Tui {
@@ -243,7 +255,11 @@ pub enum AgentCommand {
         launch: Vec<String>,
     },
     /// List the Agents of this project
-    List,
+    List {
+        /// Print the registry as one JSON object instead of a table
+        #[arg(long)]
+        json: bool,
+    },
     /// Remove an Agent from this project
     Remove {
         /// Agent id

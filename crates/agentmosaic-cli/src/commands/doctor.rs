@@ -10,39 +10,87 @@ use std::time::Duration;
 use agentmosaic_runtime::{AcpWorkerConfig, AcpWorkerDriver, CodexAppServer, LaunchSpec};
 use agentmosaic_storage::{AgentRegistryRecord, SqliteAgentRegistry};
 
+use crate::json::{self, DoctorAgentJson, DoctorJson, TeamJson};
 use crate::output::{DoctorAgent, DoctorReport, ReadinessStage};
 use crate::project;
 
-pub fn run(verbose: bool) -> Result<String, String> {
+/// `am doctor`'s answer: the text the surface prints, and whether the team is
+/// ready. `main` turns the readiness into the exit code, and the JSON surface
+/// keeps its object even when the answer is "no".
+pub fn run(verbose: bool, machine: bool) -> Result<(String, bool), String> {
     let (root, database) = project::project_database()?;
     let registry = SqliteAgentRegistry::open(&database).map_err(|e| format!("doctor: {e}"))?;
     let schema_version = registry
         .schema_version()
         .map_err(|e| format!("doctor: {e}"))?;
     let agents = registry.list_agents().map_err(|e| format!("doctor: {e}"))?;
+    let described = agents
+        .iter()
+        .map(|agent| describe(agent, &root))
+        .collect::<Vec<_>>();
     let report = DoctorReport {
         project_root: root.display().to_string(),
         schema_version,
-        agents: agents.iter().map(|agent| describe(agent, &root)).collect(),
+        agents: described.iter().map(|agent| agent.view.clone()).collect(),
     };
-    let rendered = report.render(verbose);
-    if report.ready() {
-        Ok(rendered)
+    let ready = report.ready();
+    let text = if machine {
+        json::encode(&doctor_json(&report, &described))?
     } else {
-        Err(rendered)
-    }
+        report.render(verbose)
+    };
+    Ok((text, ready))
+}
+
+/// One registered Agent, as the report renders it, plus the adapter the machine
+/// surface names.
+struct DescribedAgent {
+    view: DoctorAgent,
+    adapter: Option<String>,
 }
 
 /// One registered Agent, as the report renders it.
-fn describe(agent: &AgentRegistryRecord, root: &Path) -> DoctorAgent {
+fn describe(agent: &AgentRegistryRecord, root: &Path) -> DescribedAgent {
     let probe = probe_agent(agent, root);
-    DoctorAgent {
-        id: agent.id.clone(),
-        role: agent.tier.clone(),
-        program: agent.executable.clone().unwrap_or_else(|| "-".into()),
-        launch: crate::output::bounded_launch(agent),
-        stage: probe.stage,
-        stages: probe.stages,
+    DescribedAgent {
+        view: DoctorAgent {
+            id: agent.id.clone(),
+            role: agent.tier.clone(),
+            program: agent.executable.clone().unwrap_or_else(|| "-".into()),
+            launch: crate::output::bounded_launch(agent),
+            stage: probe.stage,
+            stages: probe.stages,
+        },
+        adapter: agent.driver_kind.clone(),
+    }
+}
+
+/// The decision as one typed object: what is registered, whether each runtime
+/// answered, and — when the team is not ready — the reason and the fix.
+fn doctor_json(report: &DoctorReport, described: &[DescribedAgent]) -> DoctorJson {
+    let tiers = report.tiers();
+    let decision = report.decision();
+    DoctorJson {
+        ready: report.ready(),
+        project: report.project_root.clone(),
+        schema_version: report.schema_version,
+        agents: described
+            .iter()
+            .map(|agent| DoctorAgentJson {
+                id: agent.view.id.clone(),
+                role: agent.view.role.clone(),
+                adapter: agent.adapter.clone(),
+                ready: agent.view.stage.is_ready(),
+                stage: agent.view.stage.as_str().to_string(),
+            })
+            .collect(),
+        team: TeamJson {
+            lead: tiers[0],
+            worker: tiers[1],
+            utility: tiers[2],
+        },
+        reason: decision.as_ref().map(|(reason, _)| reason.clone()),
+        fix: decision.map(|(_, fix)| fix).unwrap_or_default(),
     }
 }
 

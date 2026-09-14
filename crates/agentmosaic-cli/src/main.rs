@@ -5,6 +5,7 @@
 
 mod args;
 mod commands;
+mod json;
 mod output;
 mod project;
 mod render;
@@ -23,9 +24,15 @@ fn main() {
         Ok(cli) => cli,
         Err(error) => error.exit(),
     };
-    match commands::dispatch(cli.command) {
-        Ok(Some(payload)) => println!("{payload}"),
-        Ok(None) => {}
+    match commands::dispatch_status(cli.command) {
+        Ok(dispatch) => {
+            if let Some(payload) = dispatch.payload {
+                println!("{payload}");
+            }
+            if dispatch.exit != 0 {
+                std::process::exit(dispatch.exit);
+            }
+        }
         Err(error) => {
             eprintln!("{error}");
             std::process::exit(2);

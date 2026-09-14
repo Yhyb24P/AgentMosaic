@@ -4,8 +4,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use agentmosaic_runtime::{LaunchSpec, TeamRunOptions, TeamRunner};
-use agentmosaic_team::RunEventSink;
+use agentmosaic_team::{RunEventSink, TaskStatus};
 
+use crate::json::{ArtifactJson, RunJson};
 use crate::project;
 use crate::render::{self, HumanRunEventSink, RunMode};
 use crate::target::{self, TuiTarget};
@@ -15,7 +16,8 @@ use crate::target::{self, TuiTarget};
 ///
 /// This is the product's own run rendering: the compatibility `run-team`
 /// spelling keeps its documented, scriptable stdout, and the two never share a
-/// payload. Here stdout carries the final answer and nothing else.
+/// payload. Here stdout carries the final answer — or, with `--json`, the one
+/// typed run object — and nothing else.
 pub fn run(objective: &[String], quiet: bool, json: bool) -> Result<String, String> {
     let invocation = Invocation::parse(objective, quiet, json)?;
     let (root, database) = project::project_database()?;
@@ -46,8 +48,25 @@ pub fn run(objective: &[String], quiet: bool, json: bool) -> Result<String, Stri
             ));
         }
     };
+    let run = RunJson {
+        run_id: outcome.root_task_id,
+        lead_agent: outcome.lead_agent.clone(),
+        status: TaskStatus::Succeeded.as_str().to_string(),
+        answer: outcome.result.answer.clone(),
+        task_refs: outcome.result.task_refs.clone(),
+        artifact_refs: outcome
+            .result
+            .artifact_refs
+            .iter()
+            .map(|selected| ArtifactJson {
+                task_id: selected.task_id,
+                path: selected.artifact.path.clone(),
+                sha256: selected.artifact.sha256.clone(),
+            })
+            .collect(),
+    };
     sink.finish(outcome.root_task_id);
-    Ok(invocation.mode.payload(outcome.result.answer))
+    invocation.mode.payload(&run)
 }
 
 /// `am tui [<DATABASE>]`: the live read-only board of this project, or of an

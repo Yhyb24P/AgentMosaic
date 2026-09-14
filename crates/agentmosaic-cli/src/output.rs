@@ -393,6 +393,19 @@ impl ReadinessStage {
     pub fn is_ready(self) -> bool {
         matches!(self, Self::Ready)
     }
+
+    /// The classification as one stable machine token. The human surface keeps
+    /// its own wording; a consumer keys on this.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::ProgramMissing => "program_missing",
+            Self::LaunchSpecInvalid => "launch_spec_invalid",
+            Self::SpawnFailed => "spawn_failed",
+            Self::ProtocolUnavailable => "protocol_unavailable",
+            Self::RuntimePreparationRequired => "runtime_preparation_required",
+        }
+    }
 }
 
 /// One Agent's line in the doctor report: what is registered, and whether its
@@ -532,6 +545,13 @@ impl DoctorReport {
             });
         }
         self.agents.iter().find_map(DoctorAgent::remediation)
+    }
+
+    /// [`DoctorReport::remediation`] as data: the reason and its fix lines, for
+    /// the machine surface. `None` means the team is ready.
+    pub fn decision(&self) -> Option<(String, Vec<String>)> {
+        self.remediation()
+            .map(|remediation| (remediation.reason, remediation.fix))
     }
 }
 

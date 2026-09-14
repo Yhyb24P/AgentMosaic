@@ -7,10 +7,19 @@
 //! never guesses. A user-visible run is a root reasoning task: a failed or
 //! incomplete newest run is reported as it is and never skipped for an older
 //! successful one.
+//!
+//! `--json` is additive: it replaces the human rendering of the project-aware
+//! spellings with one typed object and leaves every other surface alone. The
+//! legacy `<database>` spellings keep their historical text and have no JSON
+//! form, so asking for one is refused by name rather than guessed at.
 
 use agentmosaic_storage::SqliteTaskBoard;
 use agentmosaic_team::{TaskBoard, TaskKind, TaskRecord, TaskStatus};
 
+use crate::json::{
+    self, ArtifactJson, ArtifactListJson, FinalJson, RunListJson, RunSummaryJson, StatusJson,
+    TaskJson,
+};
 use crate::project::ProjectContext;
 use crate::target::{self, ArtifactTarget, FinalTarget, StatusTarget};
 use crate::{output, project};
@@ -18,20 +27,32 @@ use crate::{output, project};
 /// What the project-aware spellings print when the project has no run yet.
 const NO_RUNS: &str = "no runs in this project yet; start one with `am run \"<objective>\"`";
 
-pub fn status(first: Option<String>, all: bool) -> Result<String, String> {
+pub fn status(first: Option<String>, all: bool, machine: bool) -> Result<String, String> {
     let tokens: Vec<String> = first.into_iter().collect();
     match target::status_target(&tokens, all)? {
         // The legacy whole-board listing keeps its exact historical shape.
-        StatusTarget::LegacyBoard(database) => output::render_status(&project::open(&database)?),
+        StatusTarget::LegacyBoard(database) => {
+            legacy_refuses_json("status", machine)?;
+            output::render_status(&project::open(&database)?)
+        }
         StatusTarget::LatestRun => {
             let board = open_project()?;
             let Some(run) = board.latest_root_task().map_err(|e| format!("{e:?}"))? else {
-                return Ok(NO_RUNS.to_string());
+                // There is no run to describe; a machine consumer gets the same
+                // refusal a human does, not an object with invented fields.
+                return if machine {
+                    Err(NO_RUNS.to_string())
+                } else {
+                    Ok(NO_RUNS.to_string())
+                };
             };
-            output::render_run_status(&board, &run)
+            run_status(&board, &run, machine)
         }
         StatusTarget::AllRuns => {
             let board = open_project()?;
+            if machine {
+                return json::encode(&run_list_json(&board)?);
+            }
             let listing = output::render_run_list(&board)?;
             Ok(if listing.is_empty() {
                 NO_RUNS.to_string()
@@ -42,7 +63,7 @@ pub fn status(first: Option<String>, all: bool) -> Result<String, String> {
         StatusTarget::Run(id) => {
             let board = open_project()?;
             let run = require_run(&board, id)?;
-            output::render_run_status(&board, &run)
+            run_status(&board, &run, machine)
         }
     }
 }
@@ -50,44 +71,70 @@ pub fn status(first: Option<String>, all: bool) -> Result<String, String> {
 /// The durable final result of one run. Never replayed and never substituted:
 /// the persisted successful attempt is read straight from the board, and a run
 /// without one is reported as it is.
-pub fn final_result(first: Option<String>, second: Option<String>) -> Result<String, String> {
+pub fn final_result(
+    first: Option<String>,
+    second: Option<String>,
+    machine: bool,
+) -> Result<String, String> {
     let tokens: Vec<String> = first.into_iter().chain(second).collect();
     match target::final_target(&tokens)? {
-        FinalTarget::Legacy { database, root } => legacy_final(&database, root),
+        FinalTarget::Legacy { database, root } => {
+            legacy_refuses_json("final", machine)?;
+            legacy_final(&database, root)
+        }
         FinalTarget::LatestRun => {
             let board = open_project()?;
             let run = latest_run(&board)?;
-            run_final(&board, &run)
+            run_final(&board, &run, machine)
         }
         FinalTarget::Run(id) => {
             let board = open_project()?;
             let run = require_run(&board, id)?;
-            run_final(&board, &run)
+            run_final(&board, &run, machine)
         }
     }
 }
 
-pub fn artifact(first: Option<String>, second: Option<String>) -> Result<String, String> {
+pub fn artifact(
+    first: Option<String>,
+    second: Option<String>,
+    machine: bool,
+) -> Result<String, String> {
     let tokens: Vec<String> = first.into_iter().chain(second).collect();
     match target::artifact_target(&tokens)? {
-        ArtifactTarget::Legacy { database, task } => legacy_artifact(&database, task),
+        ArtifactTarget::Legacy { database, task } => {
+            legacy_refuses_json("artifact", machine)?;
+            legacy_artifact(&database, task)
+        }
         ArtifactTarget::LatestRun => {
             let board = open_project()?;
             let run = latest_run(&board)?;
-            let mut lines = Vec::new();
+            let mut items = Vec::new();
             for id in subtree(&board, &run)? {
-                lines.extend(artifact_lines(&board, id)?);
+                items.extend(artifacts_of(&board, id)?);
             }
-            Ok(lines.join("\n"))
+            artifact_payload(items, machine)
         }
         ArtifactTarget::Task(id) => {
             let board = open_project()?;
             if board.task(id).map_err(|e| format!("{e:?}"))?.is_none() {
                 return Err(format!("no task #{id} in this project"));
             }
-            Ok(artifact_lines(&board, id)?.join("\n"))
+            artifact_payload(artifacts_of(&board, id)?, machine)
         }
     }
+}
+
+/// The legacy spellings name a database, not a project: they keep their exact
+/// historical text, and no JSON shape was ever defined for them.
+fn legacy_refuses_json(command: &str, machine: bool) -> Result<(), String> {
+    if machine {
+        return Err(format!(
+            "`{command} --json` describes this project's runs, and the legacy \
+             `<database>` form has no JSON output"
+        ));
+    }
+    Ok(())
 }
 
 fn open_project() -> Result<SqliteTaskBoard, String> {
@@ -129,17 +176,84 @@ fn subtree(board: &SqliteTaskBoard, run: &TaskRecord) -> Result<Vec<u64>, String
     Ok(ids)
 }
 
-fn artifact_lines(board: &SqliteTaskBoard, task: u64) -> Result<Vec<String>, String> {
+/// Every artifact of one task, with its whole path and whole digest.
+fn artifacts_of(board: &SqliteTaskBoard, task: u64) -> Result<Vec<ArtifactJson>, String> {
     Ok(board
         .artifacts(task)
         .map_err(|e| format!("artifact: {e:?}"))?
         .into_iter()
-        .map(|item| format!("task={task} path={} sha256={}", item.path, item.sha256))
+        .map(|item| ArtifactJson {
+            task_id: task,
+            path: item.path,
+            sha256: item.sha256,
+        })
         .collect())
 }
 
-fn run_final(board: &SqliteTaskBoard, run: &TaskRecord) -> Result<String, String> {
-    board
+fn artifact_payload(items: Vec<ArtifactJson>, machine: bool) -> Result<String, String> {
+    if machine {
+        return json::encode(&ArtifactListJson { artifacts: items });
+    }
+    Ok(items
+        .into_iter()
+        .map(|item| {
+            format!(
+                "task={} path={} sha256={}",
+                item.task_id, item.path, item.sha256
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+/// One run with its subtree and every artifact recorded below it.
+fn run_status(board: &SqliteTaskBoard, run: &TaskRecord, machine: bool) -> Result<String, String> {
+    if !machine {
+        return output::render_run_status(board, run);
+    }
+    let mut tasks = Vec::new();
+    let mut artifacts = Vec::new();
+    for id in subtree(board, run)? {
+        let task = board
+            .task(id)
+            .map_err(|e| format!("{e:?}"))?
+            .ok_or_else(|| format!("missing task {id}"))?;
+        tasks.push(TaskJson {
+            id: task.id,
+            assignee: task.assignee.clone(),
+            status: task.status.as_str().to_string(),
+            objective: task.objective.clone(),
+        });
+        artifacts.extend(artifacts_of(board, id)?);
+    }
+    json::encode(&StatusJson {
+        run_id: run.id,
+        status: run.status.as_str().to_string(),
+        objective: run.objective.clone(),
+        lead: run.assignee.clone(),
+        tasks,
+        artifacts,
+    })
+}
+
+/// Every run of the project, newest first.
+fn run_list_json(board: &SqliteTaskBoard) -> Result<RunListJson, String> {
+    let mut runs = board.root_tasks().map_err(|e| format!("{e:?}"))?;
+    runs.reverse();
+    Ok(RunListJson {
+        runs: runs
+            .into_iter()
+            .map(|run| RunSummaryJson {
+                run_id: run.id,
+                status: run.status.as_str().to_string(),
+                objective: run.objective,
+            })
+            .collect(),
+    })
+}
+
+fn run_final(board: &SqliteTaskBoard, run: &TaskRecord, machine: bool) -> Result<String, String> {
+    let answer = board
         .attempts(run.id)
         .map_err(|e| format!("final: {e:?}"))?
         .into_iter()
@@ -152,7 +266,14 @@ fn run_final(board: &SqliteTaskBoard, run: &TaskRecord) -> Result<String, String
                 run.id,
                 run.status.as_str()
             )
-        })
+        })?;
+    if machine {
+        return json::encode(&FinalJson {
+            run_id: run.id,
+            answer,
+        });
+    }
+    Ok(answer)
 }
 
 fn legacy_final(database: &str, root: u64) -> Result<String, String> {
@@ -168,5 +289,5 @@ fn legacy_final(database: &str, root: u64) -> Result<String, String> {
 }
 
 fn legacy_artifact(database: &str, task: u64) -> Result<String, String> {
-    Ok(artifact_lines(&project::open(database)?, task)?.join("\n"))
+    artifact_payload(artifacts_of(&project::open(database)?, task)?, false)
 }

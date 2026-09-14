@@ -2,6 +2,7 @@
 
 use agentmosaic_storage::{AgentRegistryRecord, SqliteAgentRegistry};
 
+use crate::json::{self, AgentJson, AgentListJson};
 use crate::{output, project};
 
 pub struct AgentAdd {
@@ -69,13 +70,43 @@ pub fn add(spec: AgentAdd) -> Result<String, String> {
 /// List the durable registrations. This surface reads the registry only: it
 /// starts no runtime and performs no readiness handshake, so an Agent whose
 /// launch program is not installed still lists.
-pub fn list() -> Result<String, String> {
+///
+/// The machine form carries the registry's own fields, with the same bounded,
+/// credential-redacted launch rendering the table prints: raw argv and the
+/// driver config never reach a payload.
+pub fn list(machine: bool) -> Result<String, String> {
     let (_, database) = project::project_database()?;
     let registry = SqliteAgentRegistry::open(&database).map_err(|e| format!("registry: {e}"))?;
     let agents = registry
         .list_agents()
         .map_err(|e| format!("registry: {e}"))?;
+    if machine {
+        return json::encode(&AgentListJson {
+            agents: agents.iter().map(agent_json).collect(),
+        });
+    }
     Ok(output::render_agent_table(&agents))
+}
+
+fn agent_json(agent: &AgentRegistryRecord) -> AgentJson {
+    AgentJson {
+        id: agent.id.clone(),
+        name: agent.name.clone(),
+        role: agent.tier.clone(),
+        adapter: agent.driver_kind.clone(),
+        launch: output::bounded_launch(agent),
+        concurrency: agent.max_concurrency,
+        tags: string_list(agent.tags_json.as_deref()),
+        version: agent.runtime_version.clone(),
+    }
+}
+
+/// A registry list field as the strings it holds. The registry writes JSON
+/// string arrays; anything else contributes nothing rather than echoing raw
+/// stored text.
+fn string_list(raw: Option<&str>) -> Vec<String> {
+    raw.and_then(|raw| serde_json::from_str::<Vec<String>>(raw).ok())
+        .unwrap_or_default()
 }
 
 /// Remove one registration. Only the registry entry is deleted: the tasks,
