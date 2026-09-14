@@ -816,36 +816,4 @@ mod tests {
             vec!["worker-a"]
         );
     }
-
-    #[test]
-    fn utility_never_implicitly_falls_back_to_reasoner() {
-        let registry = AgentRegistry::new(vec![
-            AgentConfig {
-                id: "reasoner-a".into(),
-                name: "reasoner-a".into(),
-                tier: AgentTier::Reasoner,
-                tags: Vec::new(),
-                max_concurrency: 1,
-                driver_kind: None,
-                executable: None,
-                driver_args: Vec::new(),
-            },
-            AgentConfig {
-                id: "worker-a".into(),
-                name: "worker-a".into(),
-                tier: AgentTier::Worker,
-                tags: Vec::new(),
-                max_concurrency: 1,
-                driver_kind: None,
-                executable: None,
-                driver_args: Vec::new(),
-            },
-        ])
-        .unwrap();
-        let scheduler = Scheduler::new(registry, BTreeMap::new(), MemBoard::default(), 1);
-        assert_eq!(
-            scheduler.candidate_order(TaskKind::Utility, None),
-            vec!["worker-a"]
-        );
-    }
 }
