@@ -21,6 +21,7 @@ static PROMPT_TURNS: AtomicU64 = AtomicU64::new(0);
 enum Mode {
     Sync,
     Slow,
+    SlowDrip,
     Hang,
     CancelWait,
     Crash,
@@ -41,6 +42,7 @@ fn parse_mode(args: &[String]) -> Result<Mode, String> {
                 mode = match value.as_str() {
                     "sync" => Mode::Sync,
                     "slow" => Mode::Slow,
+                    "slow-drip" => Mode::SlowDrip,
                     "hang" => Mode::Hang,
                     "cancel-wait" => Mode::CancelWait,
                     "crash" => Mode::Crash,
@@ -131,6 +133,17 @@ fn handle_line(line: &str, mode: Mode, pending_prompt: &mut Option<Value>) -> Li
             } else {
                 format!(r#"{{"summary":"mock-ok-{turn}"}}"#)
             };
+            if matches!(mode, Mode::SlowDrip) {
+                for chunk in ["{\"summary\":\"", "slow", "-drip", "\"}"] {
+                    write_notification(&json!({
+                        "sessionId": MOCK_SESSION,
+                        "update": { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": chunk } },
+                    }));
+                    std::thread::sleep(std::time::Duration::from_millis(150));
+                }
+                write_response(&id, json!({ "stopReason": "end_turn" }));
+                return LineOutcome::Done;
+            }
             write_notification(&json!({
                 "sessionId": MOCK_SESSION,
                 "update": {
@@ -152,7 +165,12 @@ fn handle_line(line: &str, mode: Mode, pending_prompt: &mut Option<Value>) -> Li
                     *pending_prompt = id;
                     return LineOutcome::Done;
                 }
-                Mode::Permission | Mode::Sync | Mode::Crash | Mode::Repair | Mode::Resume => {}
+                Mode::Permission
+                | Mode::Sync
+                | Mode::Crash
+                | Mode::Repair
+                | Mode::Resume
+                | Mode::SlowDrip => {}
             }
             if !matches!(mode, Mode::Hang) {
                 write_response(&id, json!({ "stopReason": "end_turn" }));

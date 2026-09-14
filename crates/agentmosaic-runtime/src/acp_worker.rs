@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use agent_client_protocol::schema::v1::{
     AuthMethodId, AuthenticateRequest, CancelNotification, ContentBlock, ContentChunk,
@@ -226,6 +226,9 @@ enum AcpRunOutcome {
 struct RuntimeStartGate {
     binding: oneshot::Sender<RuntimeBinding>,
     release: oneshot::Receiver<()>,
+    /// One wall-clock budget spans handshake, binding persistence, and turn
+    /// execution. Streaming data never resets this deadline.
+    deadline: Instant,
 }
 
 #[derive(Clone)]
@@ -363,6 +366,10 @@ impl AcpWorkerDriver {
         attempt: u32,
         agent_id: String,
     ) -> Result<(String, String), AcpWorkerError> {
+        let deadline = start_gate
+            .as_ref()
+            .map(|gate| gate.deadline)
+            .unwrap_or_else(|| Instant::now() + self.config.timeout);
         let prompt = bounded_prompt(task, self.config.max_prompt_bytes);
         let agent =
             AcpAgent::new(AcpAgentConfig::new(&self.config.command).args(self.config.args.clone()));
@@ -484,7 +491,7 @@ impl AcpWorkerDriver {
                     })
                     .await
             });
-        match tokio::time::timeout(self.config.timeout, run)
+        match tokio::time::timeout(deadline.saturating_duration_since(Instant::now()), run)
             .await
             .map_err(|_| AcpWorkerError::TimedOut)?
             .map_err(|e| AcpWorkerError::Protocol(e.to_string()))?
@@ -843,6 +850,7 @@ impl RuntimeAdapter for AcpRuntimeAdapter {
     ) -> Result<Box<dyn RuntimeExecution>, RuntimeError> {
         let worker = self.worker.clone().with_event_sink(events);
         let timeout = worker.config.timeout;
+        let deadline = Instant::now() + timeout;
         let (cancellation, mut listener) = AcpCancellation::new();
         let (binding_sender, binding_receiver) = oneshot::channel();
         let (release_sender, release_receiver) = oneshot::channel();
@@ -860,6 +868,7 @@ impl RuntimeAdapter for AcpRuntimeAdapter {
                     Some(RuntimeStartGate {
                         binding: binding_sender,
                         release: release_receiver,
+                        deadline,
                     }),
                     attempt,
                     agent_id,

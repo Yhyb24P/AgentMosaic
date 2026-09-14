@@ -402,6 +402,22 @@ async fn hang_is_mapped_to_timed_out() {
 }
 
 #[tokio::test]
+async fn slow_drip_does_not_extend_the_absolute_execution_deadline() {
+    let cwd = mock_cwd("slow-drip-deadline");
+    let mut cfg = valid_config(&cwd, "slow-drip");
+    cfg.timeout = Duration::from_millis(350);
+    let driver = AcpWorkerDriver::new(cfg).expect("bounded slow-drip driver");
+    let started = Instant::now();
+    let outcome = driver.run(&task_for(33)).await;
+    assert!(matches!(outcome, Err(AcpWorkerError::TimedOut)));
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "absolute deadline must not reset on each streamed chunk"
+    );
+    let _ = std::fs::remove_dir_all(&cwd);
+}
+
+#[tokio::test]
 async fn caller_cancellation_sends_session_cancel_and_requires_peer_confirmation() {
     let cwd = mock_cwd("cancel");
     let pid_file = mock_pid_file(&cwd);
