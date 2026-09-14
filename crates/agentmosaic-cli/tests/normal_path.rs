@@ -14,7 +14,7 @@ fn cli() -> Command {
 fn public_interface_is_am() {
     let version = cli().arg("--version").output().unwrap();
     assert!(version.status.success());
-    assert_eq!(String::from_utf8_lossy(&version.stdout), "am 0.2.0\n");
+    assert_eq!(String::from_utf8_lossy(&version.stdout), "am 0.2.1\n");
 
     let help = cli().arg("--help").output().unwrap();
     assert!(help.status.success());

@@ -59,7 +59,8 @@ launcher 专有参数，凭据也不应写在这里。
 
 ### 可选：增加一个 utility worker
 
-utility Agent 的注册方式相同，用于有边界的工具型工作：
+utility Agent 的注册方式相同，用于有边界的工具型工作。它是可选的：正常团队只需要
+恰好一个 Reasoner 和至少一个 Worker。没有 Utility 时，utility 工作会回退到 Worker tier：
 
 ```bash
 am agent add utility --role utility --adapter acp -- <program> --acp

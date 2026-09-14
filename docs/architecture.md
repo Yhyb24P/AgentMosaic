@@ -81,9 +81,11 @@ control-plane product.
 ## Team layer
 
 The team layer only divides work and moves results between Agents. Agents have a tier
-(`Reasoner`, `Worker`, `Utility`), a driver, and a concurrency bound. Routing is
-deterministic: reasoning/review goes to a Reasoner, bulk/tool work goes to a Worker or
-Utility, an explicit target wins, otherwise the configured default. A worker result
+(`Reasoner`, `Worker`, `Utility`), a driver, and a concurrency bound. A normal team has
+exactly one Reasoner and at least one Worker; Utility Agents are optional. Routing is
+deterministic: reasoning/review goes to a Reasoner, bulk/tool work goes to a Worker, and
+utility work prefers a Utility then falls back to a Worker. An explicit valid target wins;
+utility work never implicitly falls back to a Reasoner. A worker result
 automatically becomes context for its parent task, the Lead, and any explicitly
 addressed Agent.
 

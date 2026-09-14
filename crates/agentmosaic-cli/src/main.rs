@@ -188,6 +188,7 @@ fn doctor() -> Result<String, String> {
         "state     READY schema=11".into(),
     ];
     let mut tiers = [0usize; 3];
+    let mut agents_ready = true;
     for agent in agents {
         match agent.tier.as_str() {
             "reasoner" => tiers[0] += 1,
@@ -215,6 +216,9 @@ fn doctor() -> Result<String, String> {
                 doctor_probe(&agent, &root)
             )
         };
+        if !stages.ends_with(" READY") {
+            agents_ready = false;
+        }
         lines.push(format!(
             "{}      {}    {}",
             agent.id,
@@ -222,14 +226,26 @@ fn doctor() -> Result<String, String> {
             stages
         ));
     }
+    let team_ready = tiers[0] == 1 && tiers[1] >= 1;
     lines.push(format!(
-        "team      reasoner={} worker={} utility={}",
-        tiers[0], tiers[1], tiers[2]
+        "team      {} reasoner={} worker={} utility={}",
+        if team_ready { "READY" } else { "NOT_READY" },
+        tiers[0],
+        tiers[1],
+        tiers[2]
     ));
     if tiers[0] != 1 {
         lines.push("lead      LEAD_SELECTION_AMBIGUOUS_OR_MISSING".into());
     }
-    Ok(lines.join("\n"))
+    if tiers[1] == 0 {
+        lines.push("team      MISSING_WORKER".into());
+    }
+    let report = lines.join("\n");
+    if team_ready && agents_ready {
+        Ok(report)
+    } else {
+        Err(report)
+    }
 }
 
 /// Probe the configured adapter without a prompt, model selection, or login.

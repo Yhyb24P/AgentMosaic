@@ -62,7 +62,9 @@ registered. `am run` needs that single Lead to start.
 
 ### Optional: add a utility worker
 
-A utility Agent is registered the same way and is used for bounded tool-heavy work:
+A utility Agent is registered the same way and is used for bounded tool-heavy work.
+It is optional: a normal team needs exactly one Reasoner and at least one Worker.
+When no Utility is registered, utility work falls back to the Worker tier:
 
 ```bash
 am agent add utility --role utility --adapter acp -- <program> --acp

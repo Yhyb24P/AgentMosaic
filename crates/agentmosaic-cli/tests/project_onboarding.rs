@@ -81,6 +81,27 @@ fn project_onboarding_discovers_git_root_and_preserves_launch_argv() {
         String::from_utf8_lossy(&added.stderr)
     );
 
+    let lead = cli()
+        .current_dir(&nested)
+        .args([
+            "agent",
+            "add",
+            "lead",
+            "--role",
+            "reasoner",
+            "--adapter",
+            "codex-app-server",
+            "--",
+            "agentmosaic-lead-not-installed",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        lead.status.success(),
+        "{}",
+        String::from_utf8_lossy(&lead.stderr)
+    );
+
     let list = cli()
         .current_dir(&nested)
         .args(["agent", "list"])
@@ -92,10 +113,11 @@ fn project_onboarding_discovers_git_root_and_preserves_launch_argv() {
     assert!(list.contains("args=[\"qw\",\"-ds\",\"--acp\",\"--unknown-flag\"]"));
 
     let doctor = cli().current_dir(&nested).arg("doctor").output().unwrap();
-    assert!(doctor.status.success());
-    let doctor = String::from_utf8_lossy(&doctor.stdout);
+    assert!(!doctor.status.success());
+    let doctor = String::from_utf8_lossy(&doctor.stderr);
     assert!(doctor.contains("project   READY"));
     assert!(doctor.contains("PROGRAM_NOT_FOUND"));
+    assert!(doctor.contains("team      READY reasoner=1 worker=1 utility=0"));
 
     fs::remove_dir_all(root).unwrap();
 }

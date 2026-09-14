@@ -129,7 +129,7 @@ impl std::fmt::Display for TeamRunnerError {
             Self::Registry(error) => match error {
                 RegistryError::MissingTier(tier) => write!(
                     f,
-                    "no agent is registered for the {tier:?} tier; a team run needs at least one reasoner, one worker, and one utility"
+                    "no agent is registered for the {tier:?} tier; a team run needs at least one reasoner and one worker; utility agents are optional"
                 ),
                 other => write!(f, "the agent registry is not runnable: {other:?}"),
             },

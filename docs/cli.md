@@ -15,7 +15,7 @@ usage: am <init|agent|doctor|run|register|registry|run-acp|continue-acp|run-team
        am tui <database>
 ```
 
-`am --version` prints `am 0.2.0`.
+`am --version` prints `am 0.2.1`.
 
 ## Commands
 
@@ -59,6 +59,10 @@ by the external runtime. Everything after `--` is stored as opaque argv; do
 not put credentials in it.
 `doctor` initializes each configured adapter and opens only its smallest safe
 readiness session; it sends no task prompt and never opens a login flow.
+
+A normal `am run` requires exactly one `reasoner` and at least one `worker`.
+`utility` Agents are optional; utility work falls back to the Worker tier when
+none is registered.
 
 Local launcher flags remain opaque LaunchSpec argv. For example:
 

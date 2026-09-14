@@ -17,7 +17,9 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 
 use crate::board::{BoardError, TaskAttempt, TaskBoard, TaskStatus};
-use crate::registry::{AgentDriver, AgentRegistry, AgentTask, AgentTaskResult, TaskKind};
+use crate::registry::{
+    AgentDriver, AgentRegistry, AgentTask, AgentTaskResult, AgentTier, TaskKind,
+};
 
 /// A structured subtask to create and run.
 #[derive(Debug, Clone)]
@@ -216,7 +218,9 @@ impl<B: TaskBoard + Send + 'static> Scheduler<B> {
 
     /// The candidate agent order for a task: the explicit target first (if it
     /// names a registered agent), then the task tier's agents in stable id
-    /// order. Deterministic and independent of transient completion order.
+    /// order. Utility work falls back to Workers when no Utility is
+    /// registered; it never implicitly targets a Reasoner. Deterministic and
+    /// independent of transient completion order.
     fn candidate_order(&self, kind: TaskKind, target: Option<&str>) -> Vec<String> {
         let mut order: Vec<String> = Vec::new();
         if let Some(t) = target {
@@ -233,6 +237,18 @@ impl<B: TaskBoard + Send + 'static> Scheduler<B> {
                 .unwrap_or(false)
             {
                 order.push(id.to_string());
+            }
+        }
+        if kind == TaskKind::Utility && order.is_empty() {
+            for id in self.registry.agent_ids() {
+                if self
+                    .registry
+                    .get(id)
+                    .map(|c| c.tier == AgentTier::Worker)
+                    .unwrap_or(false)
+                {
+                    order.push(id.to_string());
+                }
             }
         }
         let mut seen = BTreeSet::new();
@@ -758,5 +774,78 @@ mod tests {
         // The override wins: the first (and only) attempt is on worker-b.
         assert_eq!(results[0].attempts[0].agent_id, "worker-b");
         assert_eq!(results[0].attempts[0].status, TaskStatus::Succeeded);
+    }
+
+    #[test]
+    fn utility_prefers_utility_when_present() {
+        let scheduler = Scheduler::new(trio_registry(), BTreeMap::new(), MemBoard::default(), 1);
+        assert_eq!(
+            scheduler.candidate_order(TaskKind::Utility, None),
+            vec!["utility-a"]
+        );
+    }
+
+    #[test]
+    fn utility_falls_back_to_worker_when_no_utility() {
+        let registry = AgentRegistry::new(vec![
+            AgentConfig {
+                id: "reasoner-a".into(),
+                name: "reasoner-a".into(),
+                tier: AgentTier::Reasoner,
+                tags: Vec::new(),
+                max_concurrency: 1,
+                driver_kind: None,
+                executable: None,
+                driver_args: Vec::new(),
+            },
+            AgentConfig {
+                id: "worker-a".into(),
+                name: "worker-a".into(),
+                tier: AgentTier::Worker,
+                tags: Vec::new(),
+                max_concurrency: 1,
+                driver_kind: None,
+                executable: None,
+                driver_args: Vec::new(),
+            },
+        ])
+        .unwrap();
+        let scheduler = Scheduler::new(registry, BTreeMap::new(), MemBoard::default(), 1);
+        assert_eq!(
+            scheduler.candidate_order(TaskKind::Utility, None),
+            vec!["worker-a"]
+        );
+    }
+
+    #[test]
+    fn utility_never_implicitly_falls_back_to_reasoner() {
+        let registry = AgentRegistry::new(vec![
+            AgentConfig {
+                id: "reasoner-a".into(),
+                name: "reasoner-a".into(),
+                tier: AgentTier::Reasoner,
+                tags: Vec::new(),
+                max_concurrency: 1,
+                driver_kind: None,
+                executable: None,
+                driver_args: Vec::new(),
+            },
+            AgentConfig {
+                id: "worker-a".into(),
+                name: "worker-a".into(),
+                tier: AgentTier::Worker,
+                tags: Vec::new(),
+                max_concurrency: 1,
+                driver_kind: None,
+                executable: None,
+                driver_args: Vec::new(),
+            },
+        ])
+        .unwrap();
+        let scheduler = Scheduler::new(registry, BTreeMap::new(), MemBoard::default(), 1);
+        assert_eq!(
+            scheduler.candidate_order(TaskKind::Utility, None),
+            vec!["worker-a"]
+        );
     }
 }

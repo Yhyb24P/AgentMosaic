@@ -158,8 +158,8 @@ pub struct AgentRegistry {
 
 impl AgentRegistry {
     /// Build a registry from `agents`, validating the invariants: unique ids,
-    /// `max_concurrency > 0`, and at least one agent per tier
-    /// (Reasoner/Worker/Utility).
+    /// `max_concurrency > 0`, exactly the runnable minimum tiers
+    /// (Reasoner/Worker). Utility agents remain optional.
     pub fn new(agents: Vec<AgentConfig>) -> Result<Self, RegistryError> {
         let mut seen = BTreeSet::new();
         for a in &agents {
@@ -174,7 +174,7 @@ impl AgentRegistry {
             }
             map.insert(a.id.clone(), a);
         }
-        for tier in [AgentTier::Reasoner, AgentTier::Worker, AgentTier::Utility] {
+        for tier in [AgentTier::Reasoner, AgentTier::Worker] {
             if !map.values().any(|c| c.tier == tier) {
                 return Err(RegistryError::MissingTier(tier));
             }
@@ -225,6 +225,17 @@ impl AgentRegistry {
         {
             return Some(id);
         }
+        // Utility agents are optional. A utility task uses a Worker when no
+        // Utility is registered; it never implicitly falls back to a
+        // Reasoner/default/overall agent.
+        if kind == TaskKind::Utility {
+            return self
+                .agents
+                .iter()
+                .filter(|(_, c)| c.tier == AgentTier::Worker)
+                .map(|(id, _)| id.as_str())
+                .next();
+        }
         // Rule 3: the configured default, if it names a registered agent.
         if let Some(d) = self
             .default
@@ -255,7 +266,7 @@ mod tests {
         }
     }
 
-    /// One agent per tier (T01: at least one Reasoner and one local Worker).
+    /// One agent per tier, useful for routing coverage.
     fn trio() -> AgentRegistry {
         AgentRegistry::new(vec![
             cfg("reasoner-a", AgentTier::Reasoner),
@@ -265,19 +276,38 @@ mod tests {
         .expect("a full tier set is valid")
     }
 
-    // T01: a full tier set validates; a missing tier is rejected.
     #[test]
-    fn registry_validates_a_full_tier_set() {
-        let reg = trio();
-        assert_eq!(reg.agent_ids(), vec!["reasoner-a", "utility-a", "worker-a"]);
-        let err = AgentRegistry::new(vec![
+    fn registry_accepts_reasoner_and_worker_without_utility() {
+        let registry = AgentRegistry::new(vec![
             cfg("reasoner-a", AgentTier::Reasoner),
             cfg("worker-a", AgentTier::Worker),
-        ]);
+        ])
+        .expect("reasoner and worker are the runnable minimum");
+        assert_eq!(registry.agent_ids(), vec!["reasoner-a", "worker-a"]);
+    }
+
+    #[test]
+    fn registry_rejects_missing_reasoner() {
+        let err = AgentRegistry::new(vec![cfg("worker-a", AgentTier::Worker)]);
         assert!(matches!(
             err,
-            Err(RegistryError::MissingTier(AgentTier::Utility))
+            Err(RegistryError::MissingTier(AgentTier::Reasoner))
         ));
+    }
+
+    #[test]
+    fn registry_rejects_missing_worker() {
+        let err = AgentRegistry::new(vec![cfg("reasoner-a", AgentTier::Reasoner)]);
+        assert!(matches!(
+            err,
+            Err(RegistryError::MissingTier(AgentTier::Worker))
+        ));
+    }
+
+    #[test]
+    fn registry_accepts_optional_utility() {
+        let reg = trio();
+        assert_eq!(reg.agent_ids(), vec!["reasoner-a", "utility-a", "worker-a"]);
     }
 
     #[test]
@@ -310,13 +340,35 @@ mod tests {
         assert_eq!(reg.route(TaskKind::Review, None), Some("reasoner-a"));
     }
 
-    // T05: bulk/tool work routes to a Worker; utility work to a Utility.
+    // T05: bulk/tool work routes to a Worker; utility work prefers Utility.
     #[test]
     fn bulk_tool_route_to_worker_and_utility() {
         let reg = trio();
         assert_eq!(reg.route(TaskKind::Bulk, None), Some("worker-a"));
         assert_eq!(reg.route(TaskKind::Tool, None), Some("worker-a"));
         assert_eq!(reg.route(TaskKind::Utility, None), Some("utility-a"));
+    }
+
+    #[test]
+    fn utility_falls_back_to_worker_when_no_utility() {
+        let reg = AgentRegistry::new(vec![
+            cfg("reasoner-a", AgentTier::Reasoner),
+            cfg("worker-a", AgentTier::Worker),
+        ])
+        .unwrap();
+        assert_eq!(reg.route(TaskKind::Utility, None), Some("worker-a"));
+    }
+
+    #[test]
+    fn utility_never_implicitly_falls_back_to_reasoner() {
+        let registry = AgentRegistry {
+            agents: BTreeMap::from([(
+                String::from("reasoner-a"),
+                cfg("reasoner-a", AgentTier::Reasoner),
+            )]),
+            default: Some("reasoner-a".into()),
+        };
+        assert_eq!(registry.route(TaskKind::Utility, None), None);
     }
 
     // T13: an explicit user target overrides the tier routing.

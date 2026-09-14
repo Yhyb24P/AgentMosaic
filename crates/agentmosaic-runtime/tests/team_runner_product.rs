@@ -172,6 +172,45 @@ fn register_trio(fixture: &Fixture, replies: &[String], lead_id: &str) {
     fixture.register(&codex_agent(lead_id, fixture, replies));
 }
 
+fn register_lead_and_worker(fixture: &Fixture, replies: &[String], lead_id: &str) {
+    fixture.register(&acp_agent("worker", "worker", &[WORKER_ARTIFACT]));
+    fixture.register(&codex_agent(lead_id, fixture, replies));
+}
+
+fn delegate_two_worker_tasks_reply() -> String {
+    json!({
+        "action": "delegate",
+        "tasks": [
+            {"kind": "bulk", "target": "worker", "objective": "produce the worker artifact"},
+            {"kind": "tool", "target": "worker", "objective": "perform the worker check"},
+        ],
+    })
+    .to_string()
+}
+
+#[tokio::test]
+async fn lead_and_worker_without_utility_reaches_the_team_runner() {
+    let fixture = Fixture::new("lead-worker-only");
+    let sha256 = fixture.write_worker_artifact();
+    register_lead_and_worker(
+        &fixture,
+        &[
+            delegate_two_worker_tasks_reply(),
+            complete_reply(2, Some(WORKER_ARTIFACT), &sha256),
+        ],
+        "lead",
+    );
+
+    let outcome = runner(&fixture)
+        .run("deliver the objective")
+        .await
+        .expect("a Lead and Worker are a runnable team");
+    assert_eq!(outcome.root_task_id, 1);
+    let board = fixture.open_board();
+    assert_eq!(board.attempts(2).unwrap()[0].agent_id, "worker");
+    assert_eq!(board.attempts(3).unwrap()[0].agent_id, "worker");
+}
+
 // The whole product path: one objective in, one durable team result out, with
 // the delegated task executed by the registered worker driver and the Lead's
 // exact selection persisted on the root.

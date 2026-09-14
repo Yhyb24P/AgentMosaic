@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-09-14
+
+### Fixed
+
+- A Lead + Worker team is now a valid runnable team; Utility Agents are optional.
+- Utility tasks fall back to Worker Agents when no Utility Agent is registered.
+- `am doctor` now validates the same minimum-team requirements used by `am run`.
+
 ## [0.2.0] - 2026-09-13
 
 First public release under the AgentMosaic identity. The workspace was renamed to one
