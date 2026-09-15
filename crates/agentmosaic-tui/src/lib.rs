@@ -659,8 +659,8 @@ mod tests {
         AgentRegistryRecord, ExternalRuntimeBinding, SqliteAgentRegistry, SqliteTaskBoard,
     };
     use agentmosaic_team::{
-        AgentMessage, ArtifactMeta, SelectedArtifactRef, TaskAttempt, TaskBoard, TaskKind,
-        TaskStatus,
+        AgentMessage, ArtifactMeta, RuntimeEvent, RuntimeEventRecord, SelectedArtifactRef,
+        TaskAttempt, TaskBoard, TaskKind, TaskStatus,
     };
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     use rusqlite::Connection;
@@ -853,6 +853,55 @@ mod tests {
             vec!["qwen-worker worker running 1/2"]
         );
         assert!(!text.contains("opaque-session"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn dashboard_projects_bounded_privacy_filtered_runtime_events() {
+        let path = temp_database("runtime_events");
+        let mut board = board_on(&path);
+        let root = board
+            .create_task("run the team", None, TaskKind::Reasoning, None)
+            .unwrap();
+        let task = board
+            .create_task("worker task", Some(root), TaskKind::Bulk, None)
+            .unwrap();
+        board
+            .record_attempt(&TaskAttempt {
+                task_id: task,
+                attempt: 1,
+                agent_id: "qwen-worker".into(),
+                status: TaskStatus::Running,
+                result: None,
+                error: None,
+            })
+            .unwrap();
+        board
+            .append_runtime_event(RuntimeEventRecord {
+                task_id: task,
+                attempt: 1,
+                agent_id: "qwen-worker".into(),
+                runtime_name: Some("acp".into()),
+                native_session_id: Some("foreign-session-must-not-render".into()),
+                event: RuntimeEvent::AssistantMessageCompleted {
+                    text: "a completed, bounded worker summary".into(),
+                },
+            })
+            .unwrap();
+
+        let snapshot = load_snapshot(&path).unwrap();
+        assert_eq!(snapshot.runtime_events.len(), 1);
+        assert_eq!(snapshot.runtime_events[0].task_id, task);
+        assert_eq!(snapshot.runtime_events[0].attempt, 1);
+        assert_eq!(snapshot.runtime_events[0].agent, "qwen-worker");
+        assert_eq!(snapshot.runtime_events[0].runtime.as_deref(), Some("acp"));
+        assert_eq!(
+            snapshot.runtime_events[0].summary,
+            "a completed, bounded worker summary"
+        );
+        let text = board_text(&path);
+        assert!(text.contains(&format!("#{task} a1 qwen-worker acp")));
+        assert!(!text.contains("foreign-session-must-not-render"));
         let _ = std::fs::remove_file(&path);
     }
 

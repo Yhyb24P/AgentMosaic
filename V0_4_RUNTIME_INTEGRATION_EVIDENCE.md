@@ -33,7 +33,7 @@ codex_exec_lead=PARTIAL (strict shared decision parser/validator; root running-a
 claude_cli_runtime=PARTIAL (verified stream-json argv; bounded JSONL supervisor; durable worker driver/session binding/resume; permission and parent-tool topology normalization; deterministic SQLite integration test; CLI registration and non-invasive doctor probe)
 claude_cli_lead=NOT_SUPPORTED (worker runtime is intentionally not accepted as a Lead until a strict structured decision contract is implemented and tested)
 cli_observability=PASS (`am events <TASK_OR_RUN> [--json] [--follow]` provides bounded durable replay/live handoff with privacy-filtered summaries and short binding IDs)
-tui_observability=PARTIAL (read-only board projects recent normalized runtime observations without foreign identifiers; richer task detail remains)
+tui_observability=PASS (read-only board projects bounded durable task/attempt/agent/runtime observations with privacy-filtered summaries; direct projection test proves foreign session IDs never render)
 recovery_no_replay=IN_PROGRESS
 ```
 
