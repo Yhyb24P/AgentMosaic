@@ -85,6 +85,26 @@ pub struct ArtifactListJson {
     pub artifacts: Vec<ArtifactJson>,
 }
 
+/// One privacy-filtered durable runtime event. Native session identifiers and
+/// raw runtime payloads intentionally do not cross this public boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeEventJson {
+    pub task_id: u64,
+    pub attempt: u32,
+    pub sequence: u64,
+    pub timestamp: String,
+    pub agent: String,
+    pub runtime: Option<String>,
+    pub event: String,
+    pub summary: String,
+}
+
+/// The additive `am events --json` envelope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeEventListJson {
+    pub events: Vec<RuntimeEventJson>,
+}
+
 /// One registered Agent.
 ///
 /// `launch` is the same bounded, credential-redacted rendering the human

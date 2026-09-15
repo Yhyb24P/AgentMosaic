@@ -5,6 +5,7 @@
 pub mod advanced;
 pub mod agent;
 pub mod doctor;
+pub mod events;
 pub mod init;
 pub mod inspect;
 pub mod run;
@@ -113,6 +114,7 @@ pub fn dispatch_status(command: Command) -> Result<Dispatch, String> {
         Command::Status { target, all, json } => {
             Dispatch::stdout(inspect::status(target, all, json)?)
         }
+        Command::Events { target, json } => Dispatch::stdout(events::list(target, json)?),
         Command::Final { target, root, json } => {
             Dispatch::stdout(inspect::final_result(target, root, json)?)
         }

@@ -76,6 +76,15 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Show normalized runtime events for a task or run
+    Events {
+        /// Task or run id (defaults to the latest run)
+        #[arg(value_name = "TASK_OR_RUN")]
+        target: Option<String>,
+        /// Print a stable machine-readable event projection
+        #[arg(long)]
+        json: bool,
+    },
     /// Show a durable final result
     Final {
         /// Run id, or a state database path for the legacy `<database> <root>`
