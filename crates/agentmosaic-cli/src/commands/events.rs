@@ -2,6 +2,9 @@
 
 use agentmosaic_storage::{StoredRuntimeEvent, MAX_RUNTIME_EVENT_QUERY};
 use agentmosaic_team::{RuntimeEvent, TaskBoard, TaskKind};
+use std::collections::BTreeMap;
+use std::io::Write;
+use std::time::Duration;
 
 use crate::{
     json::{self, RuntimeEventJson, RuntimeEventListJson},
@@ -11,6 +14,51 @@ use crate::{
 /// Render the latest run's subtree or one exact task. Events are observations:
 /// this command never writes the board and never launches a runtime.
 pub fn list(target: Option<String>, machine: bool) -> Result<String, String> {
+    let events = read(target)?;
+    if machine {
+        return json::encode(&RuntimeEventListJson { events });
+    }
+    Ok(events
+        .into_iter()
+        .map(render)
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+/// Poll durable observations using bounded per-attempt cursors. This performs
+/// no task mutation; the OS default Ctrl-C terminates this reader only.
+pub fn follow(target: Option<String>, machine: bool, mut output: impl Write) -> Result<(), String> {
+    // Per-attempt monotonic cursors bound memory for a long-lived reader. If
+    // the cap is exceeded this observer may replay a line, never task state.
+    let mut cursors = BTreeMap::<(u64, u32), u64>::new();
+    loop {
+        for event in read(target.clone())? {
+            let key = (event.task_id, event.attempt);
+            if cursors
+                .get(&key)
+                .is_none_or(|sequence| event.sequence > *sequence)
+            {
+                let sequence = event.sequence;
+                let line = if machine {
+                    json::encode(&event)?
+                } else {
+                    render(event)
+                };
+                writeln!(output, "{line}").map_err(|error| format!("write events: {error}"))?;
+                cursors.insert(key, sequence);
+            }
+        }
+        if cursors.len() > 1024 {
+            cursors.clear();
+        }
+        output
+            .flush()
+            .map_err(|error| format!("flush events: {error}"))?;
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+fn read(target: Option<String>) -> Result<Vec<RuntimeEventJson>, String> {
     let board = ProjectContext::discover()?.open_board()?;
     let task_ids = match target {
         Some(value) => vec![value
@@ -56,26 +104,20 @@ pub fn list(target: Option<String>, machine: bool) -> Result<String, String> {
             .cmp(&right.created_at)
             .then(left.sequence.cmp(&right.sequence))
     });
-    let events = events.into_iter().map(project).collect::<Vec<_>>();
-    if machine {
-        return json::encode(&RuntimeEventListJson { events });
-    }
-    Ok(events
-        .into_iter()
-        .map(|event| {
-            format!(
-                "{} task={} attempt={} agent={} runtime={} event={} {}",
-                event.timestamp,
-                event.task_id,
-                event.attempt,
-                event.agent,
-                event.runtime.unwrap_or_else(|| "-".into()),
-                event.event,
-                event.summary
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n"))
+    Ok(events.into_iter().map(project).collect::<Vec<_>>())
+}
+
+fn render(event: RuntimeEventJson) -> String {
+    format!(
+        "{} task={} attempt={} agent={} runtime={} event={} {}",
+        event.timestamp,
+        event.task_id,
+        event.attempt,
+        event.agent,
+        event.runtime.unwrap_or_else(|| "-".into()),
+        event.event,
+        event.summary
+    )
 }
 
 fn project(stored: StoredRuntimeEvent) -> RuntimeEventJson {
@@ -147,5 +189,23 @@ mod tests {
             }),
             "tool Bash started"
         );
+    }
+
+    #[test]
+    fn machine_projection_is_one_event_without_native_session_data() {
+        let event = RuntimeEventJson {
+            task_id: 7,
+            attempt: 2,
+            sequence: 3,
+            timestamp: "2026-09-15T00:00:00Z".into(),
+            agent: "worker".into(),
+            runtime: Some("claude".into()),
+            event: "session_started".into(),
+            summary: "session started".into(),
+        };
+        let json = json::encode(&event).unwrap();
+        assert!(json.contains("\"sequence\":3"));
+        assert!(!json.contains("native_session_id"));
+        assert_eq!(render(event), "2026-09-15T00:00:00Z task=7 attempt=2 agent=worker runtime=claude event=session_started session started");
     }
 }

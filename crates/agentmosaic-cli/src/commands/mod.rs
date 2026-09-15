@@ -114,7 +114,14 @@ pub fn dispatch_status(command: Command) -> Result<Dispatch, String> {
         Command::Status { target, all, json } => {
             Dispatch::stdout(inspect::status(target, all, json)?)
         }
-        Command::Events { target, json } => Dispatch::stdout(events::list(target, json)?),
+        Command::Events {
+            target,
+            json,
+            follow,
+        } => {
+            debug_assert!(!follow, "main owns streaming event output");
+            Dispatch::stdout(events::list(target, json)?)
+        }
         Command::Final { target, root, json } => {
             Dispatch::stdout(inspect::final_result(target, root, json)?)
         }

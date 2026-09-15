@@ -84,6 +84,9 @@ pub enum Command {
         /// Print a stable machine-readable event projection
         #[arg(long)]
         json: bool,
+        /// Keep polling for new observations; Ctrl-C stops only this reader
+        #[arg(long)]
+        follow: bool,
     },
     /// Show a durable final result
     Final {
