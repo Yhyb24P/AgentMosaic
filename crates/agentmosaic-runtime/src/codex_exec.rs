@@ -181,13 +181,15 @@ where
     })
 }
 
-fn bounded_stderr(mut stderr: impl Read) -> String {
+/// Shared bounded diagnostic collector for external runtime supervisors.
+pub(crate) fn bounded_stderr(mut stderr: impl Read) -> String {
     let mut bytes = Vec::new();
     let _ = stderr.by_ref().take(16 * 1024).read_to_end(&mut bytes);
     String::from_utf8_lossy(&bytes).trim().to_owned()
 }
 
-fn truncate_utf8(value: &str, max_bytes: usize) -> String {
+/// Bound text without splitting a UTF-8 code point.
+pub(crate) fn truncate_utf8(value: &str, max_bytes: usize) -> String {
     value
         .char_indices()
         .take_while(|(index, character)| index + character.len_utf8() <= max_bytes)
@@ -195,7 +197,8 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> String {
         .collect()
 }
 
-fn terminate_group(child: &mut std::process::Child) {
+/// Reap a process and its Unix process group after timeout or protocol error.
+pub(crate) fn terminate_group(child: &mut std::process::Child) {
     #[cfg(unix)]
     unsafe {
         let _ = libc::killpg(child.id() as i32, libc::SIGKILL);
