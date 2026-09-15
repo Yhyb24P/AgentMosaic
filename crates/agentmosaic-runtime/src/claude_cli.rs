@@ -1,9 +1,166 @@
-//! Verified non-interactive Claude Code invocation construction.
+//! Verified non-interactive Claude Code invocation and supervision.
+
+use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use agentmosaic_team::RuntimeEvent;
 use serde_json::Value;
 
-use crate::{LaunchSpec, RuntimeError};
+use crate::{codex_exec, LaunchSpec, RuntimeError};
+
+/// Result of one bounded Claude `stream-json` invocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaudeCliResult {
+    /// Foreign Claude session id observed from its structured event stream.
+    pub session_id: String,
+    /// The last visible assistant message, bounded by the caller's limit.
+    pub final_message: String,
+}
+
+/// Run one Claude `stream-json` invocation under an absolute deadline.
+///
+/// The spawned process owns a Unix group so an error, callback failure, or
+/// timeout also reaps any descendant helpers. Raw stream objects, tool input,
+/// and tool output are deliberately never sent to the event callback.
+pub fn run_invocation<F>(
+    invocation: &ClaudeCliInvocation,
+    working_directory: &std::path::Path,
+    prompt: &str,
+    timeout: Duration,
+    max_final_message_bytes: usize,
+    mut emit: F,
+) -> Result<ClaudeCliResult, RuntimeError>
+where
+    F: FnMut(RuntimeEvent) -> Result<(), RuntimeError>,
+{
+    if timeout.is_zero() || max_final_message_bytes == 0 {
+        return Err(RuntimeError::InvalidConfiguration(
+            "Claude timeout and final-message limit must be positive".into(),
+        ));
+    }
+    let deadline = Instant::now() + timeout;
+    let mut command = invocation.supervised_command();
+    command.current_dir(working_directory);
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command
+        .spawn()
+        .map_err(|error| RuntimeError::Protocol(format!("spawn Claude: {error}")))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| RuntimeError::Protocol("Claude stdout unavailable".into()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| RuntimeError::Protocol("Claude stderr unavailable".into()))?;
+    let stderr_reader = std::thread::spawn(move || codex_exec::bounded_stderr(stderr));
+    let (sender, receiver) = mpsc::sync_channel(256);
+    let stdout_reader = std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if sender
+                .send(line.map_err(|error| error.to_string()))
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+    let write_result = child
+        .stdin
+        .take()
+        .ok_or_else(|| RuntimeError::Protocol("Claude stdin unavailable".into()))
+        .and_then(|mut stdin| {
+            stdin
+                .write_all(prompt.as_bytes())
+                .map_err(|error| RuntimeError::Protocol(format!("write Claude prompt: {error}")))
+        });
+    if let Err(error) = write_result {
+        codex_exec::terminate_group(&mut child);
+        let _ = stdout_reader.join();
+        let _ = stderr_reader.join();
+        return Err(error);
+    }
+
+    let mut session_id = None;
+    let mut final_message = String::new();
+    let outcome = loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break Err(RuntimeError::TimedOut);
+        }
+        match receiver.recv_timeout(remaining) {
+            Ok(Ok(line)) => {
+                let value: Value = match serde_json::from_str(&line) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        break Err(RuntimeError::Protocol(format!(
+                            "decode Claude JSONL: {error}"
+                        )))
+                    }
+                };
+                let events = match normalize_stream_event(&value) {
+                    Ok(events) => events,
+                    Err(error) => break Err(error),
+                };
+                let mut emission_error = None;
+                for event in events {
+                    if let RuntimeEvent::SessionStarted { native_session_id } = &event {
+                        session_id = Some(native_session_id.clone());
+                    }
+                    if let RuntimeEvent::AssistantMessageCompleted { text } = &event {
+                        final_message = codex_exec::truncate_utf8(text, max_final_message_bytes);
+                    }
+                    if let Err(error) = emit(event) {
+                        emission_error = Some(error);
+                        break;
+                    }
+                }
+                if let Some(error) = emission_error {
+                    break Err(error);
+                }
+            }
+            Ok(Err(error)) => {
+                break Err(RuntimeError::Protocol(format!(
+                    "read Claude JSONL: {error}"
+                )))
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => break Err(RuntimeError::TimedOut),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let status = child
+                    .wait()
+                    .map_err(|error| RuntimeError::Protocol(format!("wait Claude: {error}")))?;
+                if status.success() {
+                    break session_id
+                        .map(|session_id| ClaudeCliResult {
+                            session_id,
+                            final_message,
+                        })
+                        .ok_or_else(|| {
+                            RuntimeError::Protocol("Claude ended without session id".into())
+                        });
+                }
+                break Err(RuntimeError::Protocol(
+                    "Claude exited unsuccessfully".into(),
+                ));
+            }
+        }
+    };
+    if outcome.is_err() {
+        codex_exec::terminate_group(&mut child);
+    }
+    let _ = stdout_reader.join();
+    let diagnostics = stderr_reader.join().unwrap_or_default();
+    outcome.map_err(|error| match error {
+        RuntimeError::Protocol(message) if !diagnostics.is_empty() => {
+            RuntimeError::Protocol(format!("{message}; Claude stderr: {diagnostics}"))
+        }
+        error => error,
+    })
+}
 
 /// Normalize one supported Claude `stream-json` object without retaining raw
 /// thinking, tool input, or tool result output.
@@ -253,5 +410,51 @@ mod tests {
             normalize_stream_event(&json!({"type":"warning","code":"retrying","message":"try again"})).unwrap()[0],
             RuntimeEvent::RuntimeWarning { code: Some(ref code), .. } if code == "retrying"
         ));
+    }
+
+    #[test]
+    fn supervisor_collects_stream_events_without_a_shell() {
+        let invocation = ClaudeCliInvocation {
+            launch: LaunchSpec::new("sh", Vec::new()).unwrap(),
+            args: vec![
+                "-c".into(),
+                "printf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"session-1\"}' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}'"
+                    .into(),
+            ],
+        };
+        let mut events = Vec::new();
+        let result = run_invocation(
+            &invocation,
+            std::path::Path::new("."),
+            "ignored",
+            Duration::from_secs(1),
+            128,
+            |event| {
+                events.push(event);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(result.session_id, "session-1");
+        assert_eq!(result.final_message, "done");
+        assert_eq!(events.len(), 2);
+    }
+
+    #[test]
+    fn supervisor_enforces_an_absolute_deadline() {
+        let invocation = ClaudeCliInvocation {
+            launch: LaunchSpec::new("sh", Vec::new()).unwrap(),
+            args: vec!["-c".into(), "sleep 2".into()],
+        };
+        let error = run_invocation(
+            &invocation,
+            std::path::Path::new("."),
+            "ignored",
+            Duration::from_millis(30),
+            128,
+            |_| Ok(()),
+        )
+        .unwrap_err();
+        assert!(matches!(error, RuntimeError::TimedOut));
     }
 }
