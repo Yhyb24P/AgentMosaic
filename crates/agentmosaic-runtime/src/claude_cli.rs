@@ -571,6 +571,36 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
+    fn streamed_output_does_not_extend_the_claude_deadline() {
+        // One monotonic budget spans the whole invocation: a peer that keeps
+        // streaming frames must still be cut off at the same absolute deadline.
+        let invocation = ClaudeCliInvocation {
+            launch: LaunchSpec::new("sh", Vec::new()).unwrap(),
+            args: vec![
+                "-c".into(),
+                "i=0; while [ $i -lt 100 ]; do printf '%s\\n' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"tick\"}]}}'; i=$((i+1)); sleep 0.1; done"
+                    .into(),
+            ],
+        };
+        let started = std::time::Instant::now();
+        let error = run_invocation(
+            &invocation,
+            std::path::Path::new("."),
+            "ignored",
+            Duration::from_millis(350),
+            128,
+            |_| Ok(()),
+        )
+        .unwrap_err();
+        assert!(matches!(error, RuntimeError::TimedOut));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "streamed Claude events must not reset the absolute deadline"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn deadline_reaps_the_claude_process_group_and_its_grandchild() {
         // The Claude worker has no protocol-level cancel, so its bounded
         // termination is the process group it owns: a deadline must kill the

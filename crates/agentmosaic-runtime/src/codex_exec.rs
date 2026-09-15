@@ -646,6 +646,36 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
+    fn streamed_output_does_not_extend_the_codex_exec_deadline() {
+        // One monotonic budget spans the whole invocation: a peer that keeps
+        // streaming events must still be cut off at the same absolute deadline.
+        let invocation = CodexExecInvocation {
+            launch: LaunchSpec::new("sh", Vec::new()).unwrap(),
+            args: vec![
+                "-c".into(),
+                "i=0; while [ $i -lt 100 ]; do printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"reasoning\",\"text\":\"tick\"}}'; i=$((i+1)); sleep 0.1; done"
+                    .into(),
+            ],
+        };
+        let started = std::time::Instant::now();
+        let error = run_invocation(
+            &invocation,
+            std::path::Path::new("."),
+            "ignored",
+            Duration::from_millis(350),
+            64,
+            |_| Ok(()),
+        )
+        .unwrap_err();
+        assert_eq!(error, RuntimeError::TimedOut);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "streamed Codex events must not reset the absolute deadline"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn deadline_reaps_the_codex_exec_process_group_and_its_grandchild() {
         // A Codex exec wrapper owns one process group. A timeout must terminate
         // the wrapper *and* every descendant it started, or a supervised run
