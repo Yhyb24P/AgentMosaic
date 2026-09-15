@@ -30,7 +30,7 @@ absolute_deadline=IN_PROGRESS
 process_tree_cleanup=IN_PROGRESS
 codex_exec_runtime=PARTIAL (durable driver, JSONL normalization, bounded process group, thread binding, resume argv, and deterministic scheduler test)
 codex_exec_lead=PARTIAL (strict shared decision contract; root running-attempt binding is persisted on thread.started and restored across a new Lead instance via exec resume; one same-thread repair and deterministic fixtures pass; strict output-schema/live probe remain)
-claude_cli_runtime=PARTIAL (verified stream-json argv, bounded JSONL supervisor, durable worker driver, session binding/resume, CLI registration, and non-invasive doctor probe)
+claude_cli_runtime=PARTIAL (verified stream-json argv; bounded JSONL supervisor; durable worker driver/session binding/resume; permission and parent-tool topology normalization; deterministic SQLite integration test; CLI registration and non-invasive doctor probe)
 claude_cli_lead=NOT_SUPPORTED (worker runtime is intentionally not accepted as a Lead until a strict structured decision contract is implemented and tested)
 cli_observability=PARTIAL (`am events <TASK_OR_RUN> [--json]` replays privacy-filtered durable observations; follow handoff remains)
 tui_observability=PARTIAL (read-only board projects recent normalized runtime observations without foreign identifiers; richer task detail remains)
@@ -55,7 +55,7 @@ diff_check=PASS (full workspace canonical gate after Claude worker-driver work)
 | Qwen | `/home/yhshy/.npm-global/bin/qwen` | 0.23.3 | acp | v1 | pending | pending | pending | pending | installed version below research reference |
 | Kimi | `/home/yhshy/.local/bin/kimi` | 0.42.0 | acp | v1 | pending | pending | pending | pending | installed version below research reference |
 | OpenCode | `/home/yhshy/.opencode/bin/opencode` | 1.18.7 | acp | v1 | pending | pending | pending | pending | installed version below research reference |
-| Claude | `/home/yhshy/.local/bin/claude` | 2.1.268 | claude-cli | stream-json | PASS (2026-09-15 version/help probe) | PARTIAL (deterministic supervisor and durable-worker tests) | pending | NOT_SUPPORTED | verified `--bare -p --output-format stream-json --verbose --include-partial-messages --json-schema --resume --permission-mode --permission-prompts none`; no live prompt sent |
+| Claude | `/home/yhshy/.local/bin/claude` | 2.1.268 | claude-cli | stream-json | PASS (2026-09-15 version/help probe) | PARTIAL (deterministic supervisor, permission/topology mapping, and durable-worker SQLite tests) | PARTIAL (deterministic persisted session resume) | NOT_SUPPORTED | verified `--bare -p --output-format stream-json --verbose --include-partial-messages --json-schema --resume --permission-mode --permission-prompts none`; no live prompt sent |
 
 ## Heterogeneous E2E
 
@@ -74,8 +74,8 @@ manual_agent_to_agent_copy_paste=false
 
 ```text
 codex_app_server_compat=PASS (G2 deterministic product path)
-v0.3_release_untouched=pending final verification
-old_driver_strings_restorable=pending
+v0.3_release_untouched=PASS (local annotated tag object `0560f388c976a2a1318fd7c923e14e410d04997c`, targeting `fb8cc9080584ed2687576fba406a4cff6dbbce2c`, matches the v0.3 audit)
+old_driver_strings_restorable=PASS (registry round-trip test covers native, acp, cli, codex-app-server, codex-exec, and claude-cli)
 ```
 
 ## Final
