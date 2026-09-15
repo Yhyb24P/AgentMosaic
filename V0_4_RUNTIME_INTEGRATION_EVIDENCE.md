@@ -34,7 +34,7 @@ claude_cli_runtime=PARTIAL (verified stream-json argv; bounded JSONL supervisor;
 claude_cli_lead=NOT_SUPPORTED (worker runtime is intentionally not accepted as a Lead until a strict structured decision contract is implemented and tested)
 cli_observability=PASS (`am events <TASK_OR_RUN> [--json] [--follow]` provides bounded durable replay/live handoff with privacy-filtered summaries and short binding IDs)
 tui_observability=PASS (read-only board projects bounded durable task/attempt/agent/runtime observations with privacy-filtered summaries; direct projection test proves foreign session IDs never render)
-recovery_no_replay=IN_PROGRESS
+recovery_no_replay=PARTIAL (TeamRunner interrupted-descendant recovery and succeeded-root idempotency tests pass; `am events --follow` now fails closed rather than clearing cursors and replaying durable observations; full real-runtime cancellation/recovery matrix remains)
 ```
 
 ## Deterministic tests
@@ -66,7 +66,7 @@ root_task_id=1 (successful real run on 2026-09-15; non-secret receipt retained)
 delegated_task_ids=2 (worker), 3 (utility), both succeeded as root children
 artifact_refs=PASS (worker task 2 selected `worker.txt`; SHA-256 `54aaa002d6b8b1d91535bc3a058e739f0dba4d3c889e3418bfde1f2cc76539ba` matched the written file)
 restart_final_reconstruction=PASS (fresh `am final` and fresh `am resume-team` reproduced the answer and exact task/artifact refs)
-runtime_event_replay=pending
+runtime_event_replay=PARTIAL (durable CLI replay is task/run scoped and sequence ordered; follow observer is no-replay or fails closed at capacity)
 manual_agent_to_agent_copy_paste=false
 ```
 
