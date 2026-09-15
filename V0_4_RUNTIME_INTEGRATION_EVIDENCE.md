@@ -52,7 +52,7 @@ diff_check=PASS (full workspace canonical gate after lifecycle and observability
 | Agent | Executable | Version | Adapter | Protocol | Probe | Event conformance | Resume | Cancel | Notes |
 |---|---|---|---|---|---|---|---|---|---|
 | Codex | `/home/yhshy/.local/bin/codex` | 0.154.0 | codex-exec | JSONL | PASS (logged-in local app-server interrupt and read-only `exec --json` probes, 2026-09-15) | PARTIAL (real exec emitted thread.started, assistant message, and usage; deterministic normalizer/driver coverage) | PASS (same foreign thread successfully resumed through real `exec resume --json`) | PARTIAL (real app-server interrupt boundary passed) | exact exec contract pin; full driver/Lead live run remains pending |
-| Qwen | `/home/yhshy/.npm-global/bin/qwen` | 0.23.4 | acp | v1 | pending | pending | pending | pending | installed version matches research reference; authentication/probe pending |
+| Qwen | `/home/yhshy/.npm-global/bin/qwen` | 0.23.4 | acp | v1 | PASS (real bounded scheduler ACP task, 2026-09-15) | PARTIAL (real worker result/artifact/binding plus deterministic ACP v1 mapping suite) | PARTIAL (deterministic capability-gated resume) | PARTIAL (deterministic cancel/process-tree suite) | installed version matches research reference; real fixture cleans its temporary DB after assertions |
 | Kimi | `/home/yhshy/.local/bin/kimi` | 0.42.0 | acp | v1 | pending | pending | pending | pending | installed version below research reference |
 | OpenCode | `/home/yhshy/.opencode/bin/opencode` | 1.18.7 | acp | v1 | pending | pending | pending | pending | installed version below research reference |
 | Claude | `/home/yhshy/.local/bin/claude` | 2.1.268 | claude-cli | stream-json | PASS (real bare/dontAsk read-only stream probe, 2026-09-15) | PARTIAL (real init, nested text/thinking frames, assistant/result, usage/cost; deterministic permission/topology and durable-worker SQLite tests) | PASS (same foreign session successfully resumed through real bare/dontAsk `--resume`) | NOT_SUPPORTED | verified `--bare -p --output-format stream-json --verbose --include-partial-messages --json-schema --resume --permission-mode --permission-prompts none`; real probe confirmed thinking is observed but not persisted |
@@ -60,12 +60,12 @@ diff_check=PASS (full workspace canonical gate after lifecycle and observability
 ## Heterogeneous E2E
 
 ```text
-lead=pending
-workers=pending
-root_task_id=pending
-delegated_task_ids=pending
-artifact_refs=pending
-restart_final_reconstruction=pending
+lead=Codex app-server (real bounded scheduler fixture)
+workers=Qwen ACP + deterministic utility (real bounded scheduler fixture)
+root_task_id=not retained (fixture intentionally removes its temporary SQLite DB after final assertions)
+delegated_task_ids=not retained (same ephemeral fixture)
+artifact_refs=PASS (real Qwen worker artifact and persisted final reference asserted before cleanup)
+restart_final_reconstruction=PARTIAL (real interrupted utility recovery/resume asserted; full TeamRunner final reconstruction pending)
 runtime_event_replay=pending
 manual_agent_to_agent_copy_paste=false
 ```
