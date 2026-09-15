@@ -3,7 +3,7 @@
 //! Native IDs stay external; callers persist them through the team board.
 
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -62,6 +62,8 @@ pub struct CodexAppServer {
     stdin: ChildStdin,
     stdout: Receiver<Result<String, String>>,
     reader: Option<JoinHandle<()>>,
+    stderr_reader: Option<JoinHandle<String>>,
+    stderr_diagnostics: Option<String>,
     request_timeout: Duration,
     next_id: u64,
     /// Notifications observed while a correlated request was pending. They are
@@ -119,10 +121,11 @@ impl CodexAppServer {
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| CodexBridgeError::Io(e.to_string()))?;
         let stdout = child.stdout.take().ok_or(CodexBridgeError::Closed)?;
+        let stderr = child.stderr.take().ok_or(CodexBridgeError::Closed)?;
         let (sender, receiver) = mpsc::sync_channel(EVENT_QUEUE_CAPACITY);
         let reader = std::thread::spawn(move || {
             let mut stdout = BufReader::new(stdout);
@@ -142,10 +145,13 @@ impl CodexAppServer {
                 }
             }
         });
+        let stderr_reader = std::thread::spawn(move || bounded_stderr(stderr));
         Ok(Self {
             stdin: child.stdin.take().ok_or(CodexBridgeError::Closed)?,
             stdout: receiver,
             reader: Some(reader),
+            stderr_reader: Some(stderr_reader),
+            stderr_diagnostics: None,
             request_timeout,
             child,
             next_id: 1,
@@ -382,7 +388,22 @@ impl CodexAppServer {
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
         }
+        if let Some(reader) = self.stderr_reader.take() {
+            self.stderr_diagnostics = Some(reader.join().unwrap_or_default());
+        }
         Ok(())
+    }
+
+    fn diagnostic(&mut self, message: impl Into<String>) -> String {
+        let message = message.into();
+        match self
+            .stderr_diagnostics
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            Some(stderr) => format!("{message}; Codex app-server stderr: {stderr}"),
+            None => message,
+        }
     }
 
     fn request(&mut self, method: &str, params: Value) -> Result<Value, CodexBridgeError> {
@@ -463,7 +484,7 @@ impl CodexAppServer {
                 // group merely because the caller received an error.
                 let _ = self.terminate();
                 return Err(CodexBridgeError::Io(
-                    "Codex app-server request deadline exceeded".into(),
+                    self.diagnostic("Codex app-server request deadline exceeded"),
                 ));
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => return Err(CodexBridgeError::Closed),
@@ -471,6 +492,14 @@ impl CodexAppServer {
         serde_json::from_str(&line)
             .map_err(|_| CodexBridgeError::Protocol("malformed JSON-RPC message".into()))
     }
+}
+
+/// Consume no more than 16 KiB of a child diagnostic stream. A chatty peer
+/// therefore cannot unbound the app-server's supervisor memory.
+fn bounded_stderr(mut stderr: impl Read) -> String {
+    let mut bytes = Vec::new();
+    let _ = stderr.by_ref().take(16 * 1024).read_to_end(&mut bytes);
+    String::from_utf8_lossy(&bytes).trim().to_owned()
 }
 
 /// The turn id carried by a `turn/completed` notification.
@@ -749,5 +778,11 @@ mod tests {
             select_final_agent_message(&snapshot, "turn-1", 1024).unwrap(),
             text
         );
+    }
+
+    #[test]
+    fn stderr_capture_is_bounded_under_a_flood() {
+        let diagnostic = bounded_stderr(std::io::Cursor::new(vec![b'x'; 32 * 1024]));
+        assert_eq!(diagnostic.len(), 16 * 1024);
     }
 }
