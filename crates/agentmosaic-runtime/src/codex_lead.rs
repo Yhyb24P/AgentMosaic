@@ -246,6 +246,14 @@ impl CodexLeadBrain {
         format!("{PROMPT_PREFIX}{context}\n{PROMPT_SUFFIX}")
     }
 
+    /// `codex app-server` receives this contract once as developer
+    /// instructions, but stateless `codex exec` has no equivalent thread
+    /// configuration. Include it in every Exec Lead turn so the rendered
+    /// context never refers to instructions that were not actually sent.
+    pub(crate) fn render_exec_prompt(&self, ctx: &LeadContext) -> String {
+        format!("{DEVELOPER_INSTRUCTIONS}\n\n{}", self.render_prompt(ctx))
+    }
+
     fn render_context(&self, ctx: &LeadContext, budget: usize) -> String {
         let entries =
             ctx.results.len() + ctx.artifacts.len() + ctx.failures.len() + ctx.messages.len() + 1;
