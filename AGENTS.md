@@ -62,22 +62,16 @@ A Cargo workspace of small crates:
 ```text
 Cargo.toml
 crates/
-  agentmosaic-core/       # session state machine, Agent loop, events, recovery
-  agentmosaic-model/      # async model client (OpenAI-compatible HTTP first)
-  agentmosaic-tools/      # the five atomic tools
-  agentmosaic-workspace/  # project rules, Git worktree/checkpoint, path handling, diff/rollback
-  agentmosaic-context/    # context budget, truncation, compaction, repository map
-  agentmosaic-storage/    # small SQLite journal
-  agentmosaic-runtime/    # native Agent loop, external drivers (Codex app-server/ACP), product TeamRunner
+  agentmosaic-storage/    # SQLite task board, agent registry, runtime events, schema migration
+  agentmosaic-runtime/    # external runtime adapters (ACP, Codex, Claude), Lead brains, TeamRunner
   agentmosaic-team/       # Agent registry, lead, task board, scheduling, result flow
   agentmosaic-tui/        # ratatui/crossterm read-only board view
   agentmosaic-cli/        # the public `am` command
 ```
 
-Five atomic tools: `view_file`, `edit_file`, `write_file`, `search_dir`,
-`execute_command`. `execute_command` uses structured `program + argv + cwd + timeout +
-env` by default. `edit_file` uses exact unique matching, an expected file hash, and only
-limited line-ending/trailing-whitespace normalization.
+AgentMosaic owns the durable team layer only: it does not ship a model client or a tool
+loop of its own. Work is executed by external Agent runtimes reached through the
+registered driver adapters.
 
 Do not rename persisted data or protocol identifiers: SQLite schema stays v11, and
 task/result/artifact/final-reference semantics, `TaskKind` and `DriverKind` wire strings,

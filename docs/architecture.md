@@ -36,47 +36,32 @@ Reasoning Agent    Local Model Agent   Utility Worker
                     Deliver
 ```
 
-Each native model-backed Agent runs the same internal loop:
-
-```text
-Init -> Observe -> Model Decision -> Tool Execution -> Observe -> ...
-     -> Verify -> Deliver / Rollback
-```
+Every Agent runs inside its own external runtime (an ACP peer, a Codex CLI or a Claude
+CLI). AgentMosaic owns the durable team layer around them, not the model/tool loop.
 
 ## Cargo workspace
 
-Ten small crates under `crates/`:
+Five crates under `crates/`:
 
 | Crate | Responsibility |
 |---|---|
-| `agentmosaic-core` | session state machine, Agent loop, events, recovery |
-| `agentmosaic-model` | async model client (OpenAI-compatible HTTP first) |
-| `agentmosaic-tools` | the five atomic tools |
-| `agentmosaic-workspace` | project rules, Git worktree/checkpoint, path handling, diff/rollback |
-| `agentmosaic-context` | context budget, truncation, compaction, repository map |
-| `agentmosaic-storage` | small SQLite journal and durable board |
-| `agentmosaic-runtime` | native Agent loop, external drivers (Codex app-server / ACP), team runner |
+| `agentmosaic-storage` | SQLite task board, agent registry, runtime bindings/events, schema migration |
+| `agentmosaic-runtime` | external runtime adapters (ACP, Codex exec/app-server, Claude CLI), Lead brains, team runner |
 | `agentmosaic-team` | Agent registry, lead, task board, scheduling, result flow |
 | `agentmosaic-tui` | ratatui/crossterm read-only board view |
 | `agentmosaic-cli` | the public `am` command |
 
-## Native Coding Agent
+## External Agent runtimes
 
-The native Rust Coding Agent is a recoverable tool-calling runtime. It exposes five
-atomic tools:
+Each Agent is a registered external runtime command. AgentMosaic spawns it, bounds the
+turn, normalizes what it reports into durable runtime events, and keeps task truth on the
+board. Reliability mechanics that still apply are owned by the adapter that spawns the
+runtime: absolute deadlines, process-group termination with reaping, output bounds and
+artifact hashing.
 
-- `view_file` — workspace-contained, paginated, returns a file hash.
-- `edit_file` — exact unique match, expected file hash, limited line-ending/trailing
-  whitespace normalization, atomic write, syntax guard with rollback.
-- `write_file` — new files or explicit short-file replacement, with size bounds.
-- `search_dir` — bounded path/line/match records, never whole files.
-- `execute_command` — structured `program + argv + cwd + timeout + env` by default, with
-  process-group termination and output truncation.
-
-Reliability mechanics — path containment, command timeout, process-group termination,
-worktree isolation, output truncation, atomic writes, Git checkpoints and rollback — are
-kept because they make a Coding Agent reliable. They are runtime mechanics, not a
-control-plane product.
+Supported adapters: ACP v1 (any conforming peer), Codex `exec --json` (worker and Lead),
+Codex `app-server --stdio` (compatibility runtime, including the internal `am
+__internal codex-mcp` bridge), and Claude CLI `stream-json` (worker).
 
 ## Team layer
 
@@ -91,23 +76,24 @@ addressed Agent.
 
 Driver boundaries:
 
-- `NativeCodingAgentDriver` — the Rust state machine, model client and five tools.
-- `CodexAppServer` — bounded Codex app-server bridge with persisted external
-  thread/turn references and allowlisted collaboration tools.
 - `AcpWorkerDriver` — shared ACP boundary for external coding CLIs; it returns bounded
   structured results and configured relative artifact hashes rather than wrapping the
   runtime in a second tool loop.
-- `UtilityDriver` — deterministic worker for tests/build/search/batch.
+- `CodexExec` (worker and Lead) — `codex exec --json` with a persisted foreign thread.
+- `ClaudeCli` — Claude CLI `stream-json` worker with a persisted foreign session.
+- `CodexAppServer` — bounded Codex app-server bridge with persisted external
+  thread/turn references and allowlisted collaboration tools.
 
 The durable runtime registry (`agent_registry`) records each Agent's tier, driver kind
-(`native`, `acp`, `cli`, or `codex-app-server`), executable, driver args, concurrency,
-tags, runtime version, and an optional non-secret driver-config JSON object. The
-`am register`/`am registry` verbs record and list registrations without launching any
-driver; `am run-team` reconstructs the real drivers from these rows.
+(`acp`, `codex-exec`, `claude-cli`, or `codex-app-server`; the retired `native` and `cli`
+strings stay readable for existing rows), executable, driver args, concurrency, tags,
+runtime version, and an optional non-secret driver-config JSON object. The `am
+register`/`am registry` verbs record and list registrations without launching any driver;
+`am run` reconstructs the real drivers from these rows.
 
 ## Durability
 
-The authoritative state is one SQLite database. Storage schema version is **11**.
+The authoritative state is one SQLite database. Storage schema version is **12**.
 Task/result/artifact/final-reference semantics and the runtime wire strings
 (`TaskKind`, `DriverKind`) are stable identifiers; they are not renamed by branding
 work. The Lead's strict decision wire is checked in at

@@ -1,11 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/agentmosaic-core",
-    "crates/agentmosaic-model",
-    "crates/agentmosaic-tools",
-    "crates/agentmosaic-workspace",
-    "crates/agentmosaic-context",
     "crates/agentmosaic-storage",
     "crates/agentmosaic-runtime",
     "crates/agentmosaic-team",
