@@ -40,11 +40,11 @@ recovery_no_replay=PARTIAL (TeamRunner interrupted-descendant recovery and succe
 ## Deterministic tests
 
 ```text
-fmt=PASS (full workspace canonical gate after Exec Lead contract and observability work)
-clippy=PASS (full workspace canonical gate after Exec Lead contract and observability work)
-test=PASS (full workspace canonical gate after Exec Lead contract and observability work; authenticated live cases intentionally ignored there and are recorded separately below)
-release_build=PASS (full workspace canonical gate after Exec Lead contract and observability work)
-diff_check=PASS (full workspace canonical gate after Exec Lead contract and observability work)
+fmt=PASS (full workspace canonical gate after Kimi ACP lifecycle coverage, 2026-09-15)
+clippy=PASS (full workspace canonical gate after Kimi ACP lifecycle coverage, 2026-09-15)
+test=PASS (full workspace canonical gate after Kimi ACP lifecycle coverage, 2026-09-15; authenticated/live cases intentionally ignored there and are recorded separately below)
+release_build=PASS (full workspace canonical gate after Kimi ACP lifecycle coverage, 2026-09-15)
+diff_check=PASS (full workspace canonical gate after Kimi ACP lifecycle coverage, 2026-09-15)
 ```
 
 ## Runtime matrix
@@ -53,7 +53,7 @@ diff_check=PASS (full workspace canonical gate after Exec Lead contract and obse
 |---|---|---|---|---|---|---|---|---|---|
 | Codex | `/home/yhshy/.local/bin/codex` | 0.154.0 | codex-exec | JSONL | PASS (logged-in local app-server interrupt, fresh/resume strict schema probes, and real TeamRunner worker driver, 2026-09-15) | PASS (real strict worker results, thread/usage, durable binding, and deterministic normalizer coverage) | PASS (same foreign thread successfully resumed through real `exec resume --json --output-schema`) | PARTIAL (real app-server interrupt boundary passed) | exact exec contract pin; Codex Exec Lead is separately partial because pinned response-schema dialect cannot represent its discriminated contract |
 | Qwen | `/home/yhshy/.npm-global/bin/qwen` | 0.23.4 | acp | v1 | PASS (real TeamRunner worker/utility, isolated crash-recovery/no-replay, and same-session follow-up probes, 2026-09-15) | PARTIAL (real worker result/artifact/binding and same-session continuation, plus deterministic ACP v1 mapping suite) | PASS (real isolated Qwen ACP crash recovery resumes without replay) | PASS (real local ACP cancellation received peer-confirmed `cancelled`) | installed version matches research reference; successful TeamRunner receipt retains only non-secret assertions |
-| Kimi | `/home/yhshy/.local/bin/kimi` | 0.43.1 | acp | v1 | PASS (real read-only v1 initialize probe, 2026-09-15) | NOT_RUN (terminal login advertised; no authenticated prompt sent) | NOT_RUN (no authenticated session created) | NOT_RUN (no authenticated session created) | newer than research pin 0.43.0; probe reported loadSession plus list/resume/close/delete/fork capabilities |
+| Kimi | `/home/yhshy/.local/bin/kimi` | 0.43.1 | acp | v1 | PASS (real bounded no-tool ACP turn without an ACP Authenticate request, 2026-09-15) | PASS (strict peer-result path exercised by a real bounded turn) | PASS (real persisted-session resume plus bounded follow-up, without replay) | PASS (real local ACP cancellation received peer-confirmed `cancelled`) | newer than research pin 0.43.0; local shim loads its configured provider, so this path uses `kimi acp` with no ACP Authenticate request; initialize reported loadSession plus list/resume/close/delete/fork capabilities |
 | OpenCode | `/home/yhshy/.opencode/bin/opencode` | 1.18.7 | acp | v1 | NOT_RUN (installed below research pin 1.18.30) | NOT_RUN (version below pin) | NOT_RUN (version below pin) | NOT_RUN (version below pin) | `opencode acp` command is present, but its behavior is not accepted as pinned conformance evidence |
 | Claude | `/home/yhshy/.local/bin/claude` | 2.1.268 | claude-cli | stream-json | PASS (real bare/dontAsk read-only stream probe, 2026-09-15) | PARTIAL (real init, nested text/thinking frames, assistant/result, usage/cost; deterministic permission/topology and durable-worker SQLite tests) | PASS (same foreign session successfully resumed through real bare/dontAsk `--resume`) | NOT_SUPPORTED | verified `--bare -p --output-format stream-json --verbose --include-partial-messages --json-schema --resume --permission-mode --permission-prompts none`; real probe confirmed thinking is observed but not persisted |
 

@@ -1750,6 +1750,83 @@ mod tests {
         assert!(!response.is_empty(), "Kimi returns a bounded turn response");
     }
 
+    fn kimi_acp_driver(working_directory: PathBuf) -> AcpWorkerDriver {
+        AcpWorkerDriver::new(AcpWorkerConfig {
+            runtime_kind: "kimi-code".into(),
+            command: PathBuf::from("kimi"),
+            args: vec!["acp".into()],
+            // The local Kimi shim loads its configured model provider itself;
+            // ACP must not send an Authenticate request for this path.
+            auth_method: None,
+            working_directory,
+            timeout: Duration::from_secs(180),
+            max_prompt_bytes: 512,
+            max_result_bytes: 1024,
+            artifact_paths: Vec::new(),
+        })
+        .expect("valid local Kimi ACP profile")
+    }
+
+    #[tokio::test]
+    #[ignore = "requires locally configured Kimi Code ACP; resumes one bounded session without an ACP Authenticate request"]
+    async fn kimi_acp_resumes_a_persisted_session_for_follow_up() {
+        let cwd = acp_m2_probe_cwd("kimi_resume");
+        std::fs::create_dir_all(&cwd).expect("Kimi probe work directory");
+        let driver = kimi_acp_driver(cwd.clone());
+        let seeded = driver
+            .run(&AgentTask {
+                id: 9011,
+                objective: "Do not use tools. Return exactly this JSON peer result: {\"summary\":\"kimi resume seed\"}.".into(),
+                kind: TaskKind::Reasoning,
+                context: Vec::new(),
+            })
+            .await;
+        let result = match seeded {
+            Ok((session_id, _)) => driver
+                .resume_with_follow_up(
+                    &session_id,
+                    "Do not use tools. Return exactly this JSON peer result: {\"summary\":\"kimi resume follow-up\"}.",
+                )
+                .await,
+            Err(error) => Err(error),
+        };
+        let _ = std::fs::remove_dir_all(&cwd);
+        assert_eq!(
+            result.expect("Kimi resumes the persisted ACP session"),
+            "kimi resume follow-up"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires locally configured Kimi Code ACP; confirms cancellation on one bounded session without an ACP Authenticate request"]
+    async fn kimi_acp_confirms_active_session_cancellation() {
+        let cwd = acp_m2_probe_cwd("kimi_cancel");
+        std::fs::create_dir_all(&cwd).expect("Kimi probe work directory");
+        let driver = kimi_acp_driver(cwd.clone());
+        let (cancellation, mut listener) = AcpCancellation::new();
+        let task = AgentTask {
+            id: 9012,
+            objective:
+                "Do not use tools. Wait for the cancellation request and stop when it arrives."
+                    .into(),
+            kind: TaskKind::Reasoning,
+            context: Vec::new(),
+        };
+        let run = tokio::spawn(async move {
+            driver
+                .execute_task_with_cancellation(&task, &mut listener)
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        cancellation.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(180), run).await;
+        let _ = std::fs::remove_dir_all(&cwd);
+        assert!(
+            matches!(result, Ok(Ok(Err(AcpWorkerError::Cancelled)))),
+            "Kimi must confirm the ACP cancellation, got {result:?}"
+        );
+    }
+
     const ACP_M2_PROBE_TARGET: &str = "qwen";
     const ACP_M2_INSPECT_SHA256: &str =
         "4f9cb58fb7462cbc9d82112069421c479b28fc8bd74a2abaa7fdd899ce63914b";
