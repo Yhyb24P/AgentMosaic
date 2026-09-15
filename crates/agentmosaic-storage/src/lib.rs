@@ -1,12 +1,10 @@
 //! Durable SQLite state for the Agent team: task board, agent registry,
 //! runtime bindings/events and the one migration authority for the schema.
 
-mod acc_store;
 mod board;
 mod registry_store;
 mod schema;
 
-pub use acc_store::SqliteAccStore;
 pub use board::{
     ExtendedExternalRuntimeBinding, ExternalRuntimeBinding, RuntimeCollaborationRecord,
     RuntimeEventStoreError, SqliteTaskBoard, StoredRuntimeEvent, MAX_RUNTIME_EVENT_QUERY,

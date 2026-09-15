@@ -6,7 +6,6 @@
 //! (commit 2), concurrent scheduling with retry/reassignment (commit 3), and
 //! the Lead plan-follow-up-synthesis loop (commit 4).
 
-mod acc;
 mod board;
 mod lead;
 mod registry;
@@ -17,7 +16,6 @@ mod scheduler;
 #[cfg(test)]
 mod testutil;
 
-pub use acc::*;
 pub use board::{
     AgentMessage, ArtifactMeta, BoardError, SelectedArtifactRef, TaskAttempt, TaskBoard,
     TaskRecord, TaskStatus,

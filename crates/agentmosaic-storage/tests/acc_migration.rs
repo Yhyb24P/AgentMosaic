@@ -1,15 +1,14 @@
 //! Upgrade a pre-ACC journal through the real SQLite versioning path.
-
-use std::collections::BTreeSet;
+//!
+//! The ACC *implementation* is retired: nothing in the current product reads or
+//! writes the ACC tables. What remains is a representation contract, so this
+//! test drives the real migration and asserts the preserved representation
+//! through the current board, never through the retired store or graph API.
 
 use agentmosaic_storage::{
-    ExternalRuntimeBinding, RuntimeCollaborationRecord, SqliteAccStore, SqliteTaskBoard,
-    SCHEMA_VERSION,
+    ExternalRuntimeBinding, RuntimeCollaborationRecord, SqliteTaskBoard, SCHEMA_VERSION,
 };
-use agentmosaic_team::{
-    AcceptanceCriterion, AgentCapability, TaskBoard, TaskContract, TaskGraph, TaskGraphProposal,
-    TaskKind,
-};
+use agentmosaic_team::{TaskBoard, TaskKind};
 use rusqlite::Connection;
 
 const PRE_ACC_V4: &str = r#"
@@ -25,24 +24,17 @@ CREATE TABLE transitions (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT
 CREATE TABLE observations (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
 "#;
 
-fn task() -> TaskContract {
-    TaskContract {
-        task_id: "acc-task".into(),
-        objective: "upgrade journal".into(),
-        required_agent_capabilities: BTreeSet::from([AgentCapability("code.implement".into())]),
-        requested_capabilities: BTreeSet::new(),
-        expected_outputs: vec!["artifact".into()],
-        acceptance: vec![AcceptanceCriterion {
-            criterion_id: "c".into(),
-            requirement: "works".into(),
-            independent_review: true,
-        }],
-        idempotency_key: "upgrade-key".into(),
-    }
-}
+/// The ACC tables a v4 database gains when it is upgraded.
+const ACC_TABLES: [&str; 5] = [
+    "acc_tasks",
+    "acc_dependencies",
+    "acc_context_manifests",
+    "acc_artifacts",
+    "acc_events",
+];
 
 #[test]
-fn pre_acc_journal_migrates_preserves_existing_rows_and_recovers_acc_state() {
+fn pre_acc_journal_migrates_preserving_rows_and_acc_tables() {
     let path = std::env::temp_dir().join(format!("agentmosaic_pre_acc_{}.db", std::process::id()));
     let _ = std::fs::remove_file(&path);
     {
@@ -53,42 +45,22 @@ fn pre_acc_journal_migrates_preserves_existing_rows_and_recovers_acc_state() {
         conn.execute("INSERT INTO sessions (id, state, active_call, created_at) VALUES ('legacy-session', 'Observing', NULL, 'now')", []).expect("seed legacy session");
         conn.execute("INSERT INTO team_tasks (objective, kind, status) VALUES ('legacy task', 'bulk', 'succeeded')", []).expect("seed legacy task");
     }
-    {
-        let store = SqliteAccStore::open(Connection::open(&path).expect("open upgrade target"))
-            .expect("migrate v4 to current");
-        let graph = TaskGraph::validate(TaskGraphProposal {
-            proposal_id: "upgrade".into(),
-            tasks: vec![task()],
-            dependencies: vec![],
-        })
-        .expect("valid acc graph");
-        store
-            .put_graph(&graph)
-            .expect("ACC graph usable after migration");
-        assert_eq!(
-            store
-                .graph("recovered".into())
-                .expect("recover graph")
-                .tasks()
-                .len(),
-            1
-        );
-    }
-    let conn = Connection::open(&path).expect("reopen upgraded journal");
-    let version: i32 = conn
-        .pragma_query_value(None, "user_version", |row| row.get(0))
-        .expect("version");
-    assert_eq!(version, SCHEMA_VERSION);
-    let board = SqliteTaskBoard::open(conn).expect("open preserved board");
+
+    // Opening at the current version runs the real migration.
+    let board = SqliteTaskBoard::open(Connection::open(&path).expect("open upgrade target"))
+        .expect("migrate v4 to current");
     assert_eq!(
-        board
-            .task(1)
-            .expect("read legacy task")
-            .expect("legacy task exists")
-            .objective,
-        "legacy task"
+        board.schema_version().expect("schema version"),
+        SCHEMA_VERSION
     );
-    assert_eq!(board.task(1).unwrap().unwrap().kind, TaskKind::Bulk);
+
+    // The pre-ACC rows survive, and the current board is usable on the result.
+    let legacy = board
+        .task(1)
+        .expect("read legacy task")
+        .expect("legacy task exists");
+    assert_eq!(legacy.objective, "legacy task");
+    assert_eq!(legacy.kind, TaskKind::Bulk);
     board
         .upsert_external_binding(&ExternalRuntimeBinding {
             team_task_id: 1,
@@ -111,5 +83,29 @@ fn pre_acc_journal_migrates_preserves_existing_rows_and_recovers_acc_state() {
             response_summary: Some("context returned".into()),
         })
         .expect("v7 collaboration usable after v4 migration");
+
+    // The ACC tables are part of the upgraded representation even though no
+    // current implementation reads or writes them.
+    let conn = Connection::open(&path).expect("reopen migrated database for SQL assertions");
+    let legacy_session: String = conn
+        .query_row(
+            "SELECT state FROM sessions WHERE id = 'legacy-session'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("legacy session row preserved");
+    assert_eq!(legacy_session, "Observing");
+    for table in ACC_TABLES {
+        let present: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [table],
+                |row| row.get(0),
+            )
+            .expect("inspect the migrated schema");
+        assert_eq!(present, 1, "{table} must still exist after migration");
+    }
+
+    drop(board);
     let _ = std::fs::remove_file(&path);
 }
