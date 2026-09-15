@@ -586,6 +586,92 @@ fn live_run_team_produces_a_durable_worker_dependent_answer() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+#[test]
+#[ignore = "requires authenticated local Codex app-server and Codex exec; performs one live team run"]
+fn live_run_team_drives_a_strict_codex_exec_worker() {
+    let root = unique_root("codex_exec_worker");
+    let repo = root.join("repo");
+    initialize_git_repo(&repo);
+    let database = root.join("board.db");
+    let db = database.to_string_lossy().into_owned();
+    let repo_arg = repo.to_string_lossy().into_owned();
+    let mcp = runtime_binary("am-codex-mcp");
+    let lead_config = json!({
+        "mcp_command": mcp.display().to_string(),
+        "max_events": 200,
+        "model": "gpt-5.5",
+        "overrides": ["model=\"gpt-5.5\"", "model_reasoning_effort=\"low\""],
+    })
+    .to_string();
+    let worker_config = json!({"timeout_seconds": 300, "max_result_bytes": 1024}).to_string();
+    register(&[
+        "register",
+        &db,
+        "codex-lead",
+        "codex-lead",
+        "reasoner",
+        "codex-app-server",
+        "codex",
+        "-",
+        "1",
+        "-",
+        "-",
+        &lead_config,
+    ]);
+    register(&[
+        "register",
+        &db,
+        "codex-worker",
+        "codex-worker",
+        "worker",
+        "codex-exec",
+        "codex",
+        "-",
+        "1",
+        "-",
+        "-",
+        &worker_config,
+    ]);
+    let token = random_token();
+    let request = format!(
+        "Delegate exactly one bulk task to codex-worker. Its objective must require exactly the JSON result {{\"summary\":\"{token}\"}}. Do no work yourself. After it succeeds, complete with an answer containing {token} and select that worker task."
+    );
+    let run = run_cli(&["run-team", &db, &repo_arg, &request]);
+    eprintln!(
+        "--- codex-exec run-team (exit {:?}) ---\n{}\n{}",
+        run.status.code(),
+        stdout(&run),
+        stderr(&run)
+    );
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        assert!(
+            run.status.success(),
+            "run-team failed:\n{}\n{}",
+            stdout(&run),
+            stderr(&run)
+        );
+        let root_id = parse_root(&stdout(&run));
+        let status = run_ok(&["status", &db]);
+        let worker = status_lines(&status)
+            .into_iter()
+            .find(|line| line.parent == Some(root_id))
+            .expect("root has a worker")
+            .id;
+        let binding = run_ok(&["binding", &db, &worker.to_string()]);
+        assert!(binding.contains("runtime_kind=codex-exec"), "{binding}");
+        assert!(
+            binding.contains("external_reference_present=true"),
+            "{binding}"
+        );
+        let worker_result = run_ok(&["final", &db, &worker.to_string()]);
+        assert_eq!(worker_result.trim(), token);
+        let final_answer = run_ok(&["final", &db, &root_id.to_string()]);
+        assert!(final_answer.contains(&token), "{final_answer}");
+    }));
+    let _ = std::fs::remove_dir_all(&root);
+    result.unwrap();
+}
+
 /// R9 failure path, deterministic and not ignored: a Lead that cannot produce a
 /// decision (here its app-server executable exits immediately) must leave the
 /// durable root observably `failed` — never `succeeded` — and `final` must
