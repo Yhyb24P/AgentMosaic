@@ -64,6 +64,7 @@ pub struct CodexAppServer {
     reader: Option<JoinHandle<()>>,
     stderr_reader: Option<JoinHandle<String>>,
     stderr_diagnostics: Option<String>,
+    terminated: bool,
     request_timeout: Duration,
     next_id: u64,
     /// Notifications observed while a correlated request was pending. They are
@@ -152,6 +153,7 @@ impl CodexAppServer {
             reader: Some(reader),
             stderr_reader: Some(stderr_reader),
             stderr_diagnostics: None,
+            terminated: false,
             request_timeout,
             child,
             next_id: 1,
@@ -374,6 +376,10 @@ impl CodexAppServer {
     }
 
     fn terminate(&mut self) -> Result<(), CodexBridgeError> {
+        if self.terminated {
+            return Ok(());
+        }
+        self.terminated = true;
         #[cfg(unix)]
         unsafe {
             // The child is the process-group leader established at spawn.
@@ -491,6 +497,14 @@ impl CodexAppServer {
         };
         serde_json::from_str(&line)
             .map_err(|_| CodexBridgeError::Protocol("malformed JSON-RPC message".into()))
+    }
+}
+
+impl Drop for CodexAppServer {
+    fn drop(&mut self) {
+        // `close` is preferred so callers can receive diagnostics, but an
+        // abandoned compatibility client must not leave an app-server group.
+        let _ = self.terminate();
     }
 }
 
