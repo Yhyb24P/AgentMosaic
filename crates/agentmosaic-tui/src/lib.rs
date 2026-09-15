@@ -10,8 +10,10 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::time::Duration;
 
-use agentmosaic_storage::{AgentRegistryRecord, SqliteAgentRegistry, SqliteTaskBoard};
-use agentmosaic_team::{AgentMessage, SelectedArtifactRef, TaskBoard, TaskStatus};
+use agentmosaic_storage::{
+    AgentRegistryRecord, SqliteAgentRegistry, SqliteTaskBoard, MAX_RUNTIME_EVENT_QUERY,
+};
+use agentmosaic_team::{AgentMessage, RuntimeEvent, SelectedArtifactRef, TaskBoard, TaskStatus};
 use crossterm::{
     cursor::Show,
     event::{self, Event, KeyCode},
@@ -34,6 +36,8 @@ pub const POLL_TIMEOUT: Duration = Duration::from_millis(400);
 
 /// How many durable directed messages the activity summary keeps.
 pub const MESSAGE_SUMMARY_LIMIT: usize = 5;
+/// How many normalized runtime observations the dashboard retains.
+pub const RUNTIME_EVENT_SUMMARY_LIMIT: usize = 8;
 
 /// The latest root run, as the board header renders it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +96,17 @@ pub struct ArtifactView {
     pub sha256: String,
 }
 
+/// One privacy-filtered runtime observation in the dashboard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeEventView {
+    pub task_id: u64,
+    pub attempt: u32,
+    pub agent: String,
+    pub runtime: Option<String>,
+    pub kind: String,
+    pub summary: String,
+}
+
 /// The durable final selection for one run.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FinalRefs {
@@ -124,6 +139,8 @@ pub struct BoardSnapshot {
     pub final_refs: FinalRefs,
     /// The newest durable directed messages, bounded by [`MESSAGE_SUMMARY_LIMIT`].
     pub messages: Vec<AgentMessage>,
+    /// Recent normalized runtime observations; never task authority or a raw transcript.
+    pub runtime_events: Vec<RuntimeEventView>,
 }
 
 /// Read one complete board snapshot from `database`.
@@ -161,6 +178,7 @@ fn snapshot_from(
             artifacts: Vec::new(),
             final_refs: FinalRefs::default(),
             messages: message_summary(board)?,
+            runtime_events: Vec::new(),
         });
     };
 
@@ -174,6 +192,7 @@ fn snapshot_from(
     let mut tasks = Vec::new();
     let mut artifacts = Vec::new();
     let mut running = BTreeMap::<String, usize>::new();
+    let mut runtime_events = Vec::new();
     for id in subtree {
         let record = board
             .task(id)
@@ -203,6 +222,20 @@ fn snapshot_from(
             assignee: record.assignee,
             objective: record.objective,
         });
+        runtime_events.extend(
+            board
+                .latest_runtime_events(id, MAX_RUNTIME_EVENT_QUERY)
+                .map_err(|e| format!("read runtime events for task {id}: {e}"))?
+                .into_iter()
+                .map(|stored| RuntimeEventView {
+                    task_id: id,
+                    attempt: stored.record.attempt,
+                    agent: stored.record.agent_id,
+                    runtime: stored.record.runtime_name,
+                    kind: stored.record.event.kind().into(),
+                    summary: runtime_summary(&stored.record.event),
+                }),
+        );
     }
 
     let (task_refs, artifact_refs) = board
@@ -223,6 +256,10 @@ fn snapshot_from(
             artifact_refs,
         },
         messages: message_summary(board)?,
+        runtime_events: {
+            runtime_events.truncate(RUNTIME_EVENT_SUMMARY_LIMIT);
+            runtime_events
+        },
     })
 }
 
@@ -262,6 +299,28 @@ fn message_summary(board: &SqliteTaskBoard) -> Result<Vec<AgentMessage>, String>
         messages.drain(..messages.len() - MESSAGE_SUMMARY_LIMIT);
     }
     Ok(messages)
+}
+
+fn runtime_summary(event: &RuntimeEvent) -> String {
+    match event {
+        RuntimeEvent::AssistantMessageCompleted { text } => truncate(text, 160),
+        RuntimeEvent::ToolCallStarted { tool, .. } => format!("tool {tool} started"),
+        RuntimeEvent::ToolCallCompleted { tool, ok, .. } => {
+            format!("tool {tool} {}", if *ok { "completed" } else { "failed" })
+        }
+        RuntimeEvent::RuntimeWarning { message, .. }
+        | RuntimeEvent::RuntimeError { message, .. } => truncate(message, 160),
+        RuntimeEvent::UsageUpdated {
+            input_tokens,
+            output_tokens,
+            ..
+        } => format!(
+            "usage input={} output={}",
+            input_tokens.map_or("-".into(), |value| value.to_string()),
+            output_tokens.map_or("-".into(), |value| value.to_string())
+        ),
+        _ => event.kind().replace('_', " "),
+    }
 }
 
 /// Render one snapshot as the text the board shows, bounded to the terminal.
@@ -346,6 +405,26 @@ pub fn render_snapshot(snapshot: &BoardSnapshot, width: u16, height: u16) -> Str
         for artifact in &snapshot.artifacts {
             lines.push(truncate(
                 &format!("  #{}  {}", artifact.task_id, artifact.path),
+                width,
+            ));
+        }
+    }
+
+    lines.push(String::new());
+    lines.push(truncate("Runtime", width));
+    if snapshot.runtime_events.is_empty() {
+        lines.push(truncate("  no runtime events", width));
+    } else {
+        for event in &snapshot.runtime_events {
+            lines.push(truncate(
+                &format!(
+                    "  #{} a{} {} {} {}",
+                    event.task_id,
+                    event.attempt,
+                    event.agent,
+                    event.runtime.as_deref().unwrap_or("-"),
+                    event.summary
+                ),
                 width,
             ));
         }
