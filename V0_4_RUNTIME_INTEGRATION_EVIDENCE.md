@@ -27,7 +27,7 @@ runtime_event_foundation=PASS
 role_runtime_decoupled=PASS (LeadBrainFactory; unsupported Lead runtimes fail before root creation)
 generic_acp=PASS (typed ACP v1 adapter; exact running-attempt binding; capability-gated resume; normalized durable events; deny-by-default permissions)
 absolute_deadline=PARTIAL (ACP, Codex exec, Claude CLI, and Codex app-server deterministic deadline regressions pass)
-process_tree_cleanup=PARTIAL (ACP/Codex exec/Claude process groups plus Codex app-server bounded stderr and Drop reaping are covered; full cancellation-race matrix remains)
+process_tree_cleanup=PARTIAL (ACP/Codex exec/Claude process groups plus Codex app-server bounded stderr and Drop reaping are covered; a real local Codex app-server interrupt boundary passed; full cancellation-race matrix remains)
 codex_exec_runtime=PARTIAL (durable driver, JSONL normalization, bounded process group, thread binding, resume argv, and deterministic scheduler test)
 codex_exec_lead=PARTIAL (strict shared decision contract; root running-attempt binding is persisted on thread.started and restored across a new Lead instance via exec resume; one same-thread repair and deterministic fixtures pass; strict output-schema/live probe remain)
 claude_cli_runtime=PARTIAL (verified stream-json argv; bounded JSONL supervisor; durable worker driver/session binding/resume; permission and parent-tool topology normalization; deterministic SQLite integration test; CLI registration and non-invasive doctor probe)
@@ -51,7 +51,7 @@ diff_check=PASS (full workspace canonical gate after lifecycle and observability
 
 | Agent | Executable | Version | Adapter | Protocol | Probe | Event conformance | Resume | Cancel | Notes |
 |---|---|---|---|---|---|---|---|---|---|
-| Codex | `/home/yhshy/.local/bin/codex` | 0.154.0 | codex-exec | JSONL | pending | pending | pending | pending | exact contract pin |
+| Codex | `/home/yhshy/.local/bin/codex` | 0.154.0 | codex-exec | JSONL | PASS (logged-in local app-server interrupt probe, 2026-09-15) | pending | pending | PARTIAL (real app-server interrupt boundary passed) | exact exec contract pin; exec live prompt remains pending |
 | Qwen | `/home/yhshy/.npm-global/bin/qwen` | 0.23.4 | acp | v1 | pending | pending | pending | pending | installed version matches research reference; authentication/probe pending |
 | Kimi | `/home/yhshy/.local/bin/kimi` | 0.42.0 | acp | v1 | pending | pending | pending | pending | installed version below research reference |
 | OpenCode | `/home/yhshy/.opencode/bin/opencode` | 1.18.7 | acp | v1 | pending | pending | pending | pending | installed version below research reference |
