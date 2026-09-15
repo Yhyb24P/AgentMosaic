@@ -109,6 +109,51 @@ fn extended_binding_and_bounded_events_survive_reopen() {
 }
 
 #[test]
+fn a_success_looking_runtime_event_never_changes_task_truth() {
+    // Runtime events are observations. A peer may stream a message that reads
+    // like success, and persisting it must change nothing about the task: only
+    // the scheduler/driver outcome settles status, attempts and final
+    // references.
+    let path = path("observation_only");
+    let _ = std::fs::remove_file(&path);
+    let task = seed_attempt(&path);
+    let mut board = SqliteTaskBoard::open(Connection::open(&path).unwrap()).unwrap();
+    board.set_status(task, TaskStatus::Running).unwrap();
+    board
+        .append_runtime_event(record(
+            task,
+            RuntimeEvent::SessionStarted {
+                native_session_id: "foreign-session".into(),
+            },
+        ))
+        .unwrap();
+    board
+        .append_runtime_event(record(
+            task,
+            RuntimeEvent::AssistantMessageCompleted {
+                text: "task complete: success, artifact written".into(),
+            },
+        ))
+        .unwrap();
+
+    let reopened = SqliteTaskBoard::open(Connection::open(&path).unwrap()).unwrap();
+    assert_eq!(
+        reopened.task(task).unwrap().unwrap().status,
+        TaskStatus::Running
+    );
+    assert_eq!(
+        reopened.attempts(task).unwrap()[0].status,
+        TaskStatus::Running
+    );
+    assert!(reopened.artifacts(task).unwrap().is_empty());
+    // The observation itself is durable; it just never becomes authority.
+    let events = reopened.runtime_events(task, 1, 0, 16).unwrap();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[1].record.event.kind(), "assistant_message_completed");
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn live_only_and_missing_attempt_events_fail_closed() {
     let path = path("fail_closed");
     let _ = std::fs::remove_file(&path);
