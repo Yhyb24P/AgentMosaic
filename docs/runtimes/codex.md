@@ -1,7 +1,12 @@
 # Codex runtime
 
-Codex is the reference high-intelligence Lead. It runs through the
-`codex-app-server` driver kind.
+Codex is the reference high-intelligence Lead, reached through two driver kinds:
+
+- `codex-exec` — the default, driving the stable `codex exec --json` machine interface
+  (worker and Lead).
+- `codex-app-server` — the resident `codex app-server --stdio` bridge, kept as the
+  compatibility runtime (worker and Lead) with the internal
+  `am __internal codex-mcp` MCP bridge.
 
 ## Registration
 

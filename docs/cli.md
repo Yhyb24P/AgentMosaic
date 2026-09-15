@@ -5,21 +5,22 @@
 commands keep their established spellings; `am advanced` lists them.
 
 ```text
-usage: am <init|agent|doctor|run|status|final|artifact|tui|advanced> [fields]
+usage: am <init|agent|doctor|run|status|events|final|artifact|tui|advanced> [fields]
        am init [PATH]
-       am agent add <id> --role <reasoner|worker|utility> --adapter <acp|codex-app-server> [--name NAME] [--concurrency N] [--tag TAG] [--artifact RELPATH] [--max-events N] -- <program> [arg ...]
+       am agent add <id> --role <reasoner|worker|utility> --adapter <acp|codex-app-server|codex-exec|claude-cli> [--name NAME] [--concurrency N] [--tag TAG] [--artifact RELPATH] [--max-events N] -- <program> [arg ...]
        am agent list [--json]
        am agent remove <id>
        am doctor [--verbose] [--json]
        am run [--quiet] [--json] "<objective...>"
        am status [<run-id>] [--all] [--json]
+       am events [<task-or-run-id>] [--json] [--follow]
        am final [<run-id>] [--json]
        am artifact [<task-id>] [--json]
        am tui [<database>]
        am advanced
 ```
 
-`am --version` prints `am 0.3.0`.
+`am --version` prints the binary's own version (`am <version>`).
 
 ## Commands
 
@@ -32,6 +33,7 @@ usage: am <init|agent|doctor|run|status|final|artifact|tui|advanced> [fields]
 | `doctor` | Decide whether the project and team can run. The default report is decision-oriented: `project`, `lead`, `worker` and `team` lines, then `Ready to run.` or a `Reason` and a `Fix`. `am doctor --verbose` adds the bounded per-Agent diagnostic stages (`PROGRAM_FOUND`, `LAUNCHSPEC_VALID`, `SPAWN_OK`, `PROTOCOL_OK`, `SESSION_OK`, `READY`, or the first bounded failure, `PROGRAM_NOT_FOUND` or `PROTOCOL_UNAVAILABLE`); `--json` prints the decision as one object. It never authenticates. |
 | `run` | Discover project state and run the team. Progress and lifecycle go to stderr; stdout carries the final answer alone. `--quiet` drops routine progress, `--json` prints one object instead of human text. |
 | `status [<run-id>]` | Show the current run task by task, or one run by id, or every run with `--all`. Needs no database path. |
+| `events [<task-or-run-id>]` | Project the durable normalized runtime observations of the current run or one task, with `--json` for one machine object and `--follow` to keep polling. Needs no database path. |
 | `final [<run-id>]` | Print the durable final answer of the current run, or of one run by id. Needs no database path. |
 | `artifact [<task-id>]` | Print recorded artifact paths and whole hashes for the current run, or for one task by id. Needs no database path. |
 | `tui` | Live read-only terminal dashboard; `q` exits. Refreshes the durable board and reloads the registry while it runs. |

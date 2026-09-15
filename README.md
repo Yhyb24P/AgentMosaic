@@ -153,10 +153,11 @@ ACP-compatible coding runtimes communicate with AgentMosaic over a bounded worke
 boundary. The ACP driver takes one scheduler task and returns a bounded structured result
 plus artifact hashes; the SQLite board remains the authoritative source of state.
 
-Codex is the current reference high-reasoning Lead through `codex-app-server`. Its thread
-stays resident across planning, follow-up and synthesis, and the external thread/turn
-binding is persisted. Any Agent or runtime that satisfies the same boundary can take that
-role.
+Codex is the current reference high-reasoning Lead, reached through `codex-exec` (the
+default, driving `codex exec --json`) or through the resident `codex-app-server`
+compatibility runtime. Its thread stays resident across planning, follow-up and
+synthesis, and the external thread/turn binding is persisted. Any Agent or runtime that
+satisfies the same boundary can take that role.
 
 ## Durability and recovery
 

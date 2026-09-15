@@ -1,4 +1,4 @@
-# AgentMosaic v0.2 distribution contract. This is release preparation only;
+# AgentMosaic distribution contract. This is release preparation only;
 # it never creates a tag or GitHub Release by itself.
 [workspace]
 members = ["cargo:."]

@@ -143,9 +143,10 @@ launcher profile
 ACP 兼容的 coding runtime 通过一个有边界的 worker 边界与 AgentMosaic 通信。ACP driver
 接收一个调度任务，返回有边界的结构化结果和 artifact 哈希；权威状态始终在 SQLite board 上。
 
-Codex 是当前通过 `codex-app-server` 接入的参考高推理 Lead。它的 thread 在规划、跟进和
-综合之间常驻，外部 thread/turn binding 会被持久化。任何满足同一能力边界的 Agent 或
-runtime 都可以承担这个角色。
+Codex 是当前参考高推理 Lead，通过 `codex-exec`（默认，走 `codex exec --json`）或常驻的
+`codex-app-server` 兼容运行时接入。它的 thread 在规划、跟进和综合之间常驻，外部
+thread/turn binding 会被持久化。任何满足同一能力边界的 Agent 或 runtime 都可以承担这个
+角色。
 
 ## 持久化与恢复
 
