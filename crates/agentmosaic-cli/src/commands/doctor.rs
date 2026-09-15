@@ -204,6 +204,7 @@ fn probe_agent(agent: &AgentRegistryRecord, root: &Path) -> AgentProbe {
         Some("acp") => probe_acp(launch, args, root),
         Some("codex-app-server") => probe_codex(launch, root),
         Some("codex-exec") => probe_codex_exec(launch),
+        Some("claude-cli") => probe_claude_cli(launch),
         _ => AgentProbe::new(ReadinessStage::ProtocolUnavailable, "PROTOCOL_UNAVAILABLE"),
     };
     AgentProbe::new(
@@ -292,6 +293,26 @@ fn probe_codex_exec(launch: LaunchSpec) -> AgentProbe {
         Ok(output)
             if output.status.success()
                 && String::from_utf8_lossy(&output.stdout).contains("--json") =>
+        {
+            AgentProbe::new(ReadinessStage::Ready, "SPAWN_OK PROTOCOL_OK READY")
+        }
+        Ok(_) => AgentProbe::new(ReadinessStage::ProtocolUnavailable, "PROTOCOL_UNAVAILABLE"),
+        Err(_) => AgentProbe::new(ReadinessStage::SpawnFailed, "SPAWN_FAILED"),
+    }
+}
+
+/// Verify Claude's documented stream-json flags without prompting or logging in.
+fn probe_claude_cli(launch: LaunchSpec) -> AgentProbe {
+    let output = Command::new(&launch.program)
+        .args(&launch.args)
+        .arg("--help")
+        .output();
+    match output {
+        Ok(output)
+            if output.status.success() && {
+                let help = String::from_utf8_lossy(&output.stdout);
+                help.contains("stream-json") && help.contains("--permission-prompts")
+            } =>
         {
             AgentProbe::new(ReadinessStage::Ready, "SPAWN_OK PROTOCOL_OK READY")
         }

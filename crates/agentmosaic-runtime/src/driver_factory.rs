@@ -43,8 +43,9 @@ use agentmosaic_team::{AgentDriver, DriverKind};
 use serde_json::{Map, Value};
 
 use crate::{
-    AcpWorkerConfig, CodexExecDriverConfig, CodexTeamDriverConfig, LaunchSpec,
-    PersistedAcpWorkerDriver, PersistedCodexExecDriver, PersistedCodexTeamDriver,
+    AcpWorkerConfig, ClaudeCliDriverConfig, CodexExecDriverConfig, CodexTeamDriverConfig,
+    LaunchSpec, PersistedAcpWorkerDriver, PersistedClaudeCliDriver, PersistedCodexExecDriver,
+    PersistedCodexTeamDriver,
 };
 
 /// Default bound for one ACP task.
@@ -178,6 +179,7 @@ impl DriverFactory {
             DriverKind::Acp => self.build_acp(record, &options),
             DriverKind::CodexAppServer => self.build_codex(record, &options),
             DriverKind::CodexExec => self.build_codex_exec(record, &options),
+            DriverKind::ClaudeCli => self.build_claude_cli(record, &options),
             DriverKind::Native | DriverKind::Cli => {
                 Err(DriverFactoryError::UnsupportedDriverKind {
                     agent,
@@ -293,6 +295,39 @@ impl DriverFactory {
             isolate: false,
         };
         let driver = PersistedCodexExecDriver::new(config, self.database.clone(), agent.clone())
+            .map_err(|detail| DriverFactoryError::Driver {
+                agent: agent.clone(),
+                detail,
+            })?;
+        Ok(Arc::new(driver))
+    }
+
+    fn build_claude_cli(
+        &self,
+        record: &AgentRegistryRecord,
+        options: &AgentOptions,
+    ) -> Result<Arc<dyn AgentDriver>, DriverFactoryError> {
+        let agent = record.id.clone();
+        let launch = launch_spec(record)?;
+        let values = acp_option_values(&agent, options)?;
+        let config = ClaudeCliDriverConfig {
+            command: launch.program,
+            args: launch.args,
+            working_directory: self.repo.clone(),
+            timeout: Duration::from_secs(values.timeout_seconds),
+            max_prompt_bytes: values.max_prompt_bytes,
+            max_result_bytes: values.max_result_bytes,
+            json_schema: options
+                .output_schema
+                .as_deref()
+                .map(|path| {
+                    validate_artifact_path(&agent, path)?;
+                    Ok(self.repo.join(path).display().to_string())
+                })
+                .transpose()?,
+            artifact_paths: options.artifact_paths.clone(),
+        };
+        let driver = PersistedClaudeCliDriver::new(config, self.database.clone(), agent.clone())
             .map_err(|detail| DriverFactoryError::Driver {
                 agent: agent.clone(),
                 detail,
@@ -560,6 +595,7 @@ pub fn validate_driver_config(record: &AgentRegistryRecord) -> Result<(), String
         Some(DriverKind::Acp) => acp_option_values(&record.id, &options).map(|_| ()),
         Some(DriverKind::CodexAppServer) => codex_option_values(&record.id, &options).map(|_| ()),
         Some(DriverKind::CodexExec) => acp_option_values(&record.id, &options).map(|_| ()),
+        Some(DriverKind::ClaudeCli) => acp_option_values(&record.id, &options).map(|_| ()),
         // A kind no automatic run can drive, or none at all, is a protocol
         // concern of the readiness probe: only the config body is judged here.
         _ => Ok(()),

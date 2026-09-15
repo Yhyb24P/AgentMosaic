@@ -10,6 +10,7 @@
 mod acp_worker;
 mod agent;
 mod claude_cli;
+mod claude_cli_driver;
 mod codex_app_server;
 #[path = "bin/am-codex-mcp.rs"]
 mod codex_bridge;
@@ -35,6 +36,7 @@ pub use claude_cli::{
     normalize_stream_event as normalize_claude_stream_event,
     run_invocation as run_claude_cli_invocation, ClaudeCliInvocation, ClaudeCliResult,
 };
+pub use claude_cli_driver::{ClaudeCliDriverConfig, PersistedClaudeCliDriver};
 pub use codex_app_server::{
     select_final_agent_message, CodexAppServer, CodexBridgeError, CodexBridgeEvent,
     DEFAULT_FINAL_MESSAGE_MAX_BYTES,
