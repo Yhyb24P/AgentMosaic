@@ -601,7 +601,7 @@ mod tests {
             launch: LaunchSpec::new("sh", Vec::new()).unwrap(),
             args: vec![
                 "-c".into(),
-                "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"thread-1\"}' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"done\"}}'"
+                "cat >/dev/null; printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"thread-1\"}' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"done\"}}'"
                     .into(),
             ],
         };

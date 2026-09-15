@@ -26,13 +26,13 @@ v8_to_v12=PASS (authentic checked-in v8 fixture)
 runtime_event_foundation=PASS
 role_runtime_decoupled=PASS (LeadBrainFactory; unsupported Lead runtimes fail before root creation)
 generic_acp=PASS (typed ACP v1 adapter; exact running-attempt binding; capability-gated resume; normalized durable events; deny-by-default permissions)
-absolute_deadline=IN_PROGRESS
-process_tree_cleanup=IN_PROGRESS
+absolute_deadline=PARTIAL (ACP, Codex exec, Claude CLI, and Codex app-server deterministic deadline regressions pass)
+process_tree_cleanup=PARTIAL (ACP/Codex exec/Claude process groups plus Codex app-server bounded stderr and Drop reaping are covered; full cancellation-race matrix remains)
 codex_exec_runtime=PARTIAL (durable driver, JSONL normalization, bounded process group, thread binding, resume argv, and deterministic scheduler test)
 codex_exec_lead=PARTIAL (strict shared decision contract; root running-attempt binding is persisted on thread.started and restored across a new Lead instance via exec resume; one same-thread repair and deterministic fixtures pass; strict output-schema/live probe remain)
 claude_cli_runtime=PARTIAL (verified stream-json argv; bounded JSONL supervisor; durable worker driver/session binding/resume; permission and parent-tool topology normalization; deterministic SQLite integration test; CLI registration and non-invasive doctor probe)
 claude_cli_lead=NOT_SUPPORTED (worker runtime is intentionally not accepted as a Lead until a strict structured decision contract is implemented and tested)
-cli_observability=PARTIAL (`am events <TASK_OR_RUN> [--json]` replays privacy-filtered durable observations; follow handoff remains)
+cli_observability=PASS (`am events <TASK_OR_RUN> [--json] [--follow]` provides bounded durable replay/live handoff with privacy-filtered summaries and short binding IDs)
 tui_observability=PARTIAL (read-only board projects recent normalized runtime observations without foreign identifiers; richer task detail remains)
 recovery_no_replay=IN_PROGRESS
 ```
@@ -40,11 +40,11 @@ recovery_no_replay=IN_PROGRESS
 ## Deterministic tests
 
 ```text
-fmt=PASS (full workspace canonical gate after Claude worker-driver work)
-clippy=PASS (full workspace canonical gate after Claude worker-driver work)
-test=PASS (full workspace canonical gate after Claude worker-driver work; authenticated live cases intentionally ignored)
-release_build=PASS (full workspace canonical gate after Claude worker-driver work)
-diff_check=PASS (full workspace canonical gate after Claude worker-driver work)
+fmt=PASS (full workspace canonical gate after lifecycle and observability work)
+clippy=PASS (full workspace canonical gate after lifecycle and observability work)
+test=PASS (full workspace canonical gate after lifecycle and observability work; authenticated live cases intentionally ignored)
+release_build=PASS (full workspace canonical gate after lifecycle and observability work)
+diff_check=PASS (full workspace canonical gate after lifecycle and observability work)
 ```
 
 ## Runtime matrix
@@ -52,7 +52,7 @@ diff_check=PASS (full workspace canonical gate after Claude worker-driver work)
 | Agent | Executable | Version | Adapter | Protocol | Probe | Event conformance | Resume | Cancel | Notes |
 |---|---|---|---|---|---|---|---|---|---|
 | Codex | `/home/yhshy/.local/bin/codex` | 0.154.0 | codex-exec | JSONL | pending | pending | pending | pending | exact contract pin |
-| Qwen | `/home/yhshy/.npm-global/bin/qwen` | 0.23.3 | acp | v1 | pending | pending | pending | pending | installed version below research reference |
+| Qwen | `/home/yhshy/.npm-global/bin/qwen` | 0.23.4 | acp | v1 | pending | pending | pending | pending | installed version matches research reference; authentication/probe pending |
 | Kimi | `/home/yhshy/.local/bin/kimi` | 0.42.0 | acp | v1 | pending | pending | pending | pending | installed version below research reference |
 | OpenCode | `/home/yhshy/.opencode/bin/opencode` | 1.18.7 | acp | v1 | pending | pending | pending | pending | installed version below research reference |
 | Claude | `/home/yhshy/.local/bin/claude` | 2.1.268 | claude-cli | stream-json | PASS (2026-09-15 version/help probe) | PARTIAL (deterministic supervisor, permission/topology mapping, and durable-worker SQLite tests) | PARTIAL (deterministic persisted session resume) | NOT_SUPPORTED | verified `--bare -p --output-format stream-json --verbose --include-partial-messages --json-schema --resume --permission-mode --permission-prompts none`; no live prompt sent |
