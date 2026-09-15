@@ -1767,6 +1767,126 @@ mod tests {
         .expect("valid local Kimi ACP profile")
     }
 
+    /// The accepted OpenCode executable for conformance probes.
+    ///
+    /// A locally installed OpenCode may be older than the research floor, so
+    /// the probe takes an explicit path instead of overwriting the user's
+    /// installation. The caller supplies an isolated provider configuration
+    /// through the environment (`OPENCODE_CONFIG`), so no user model or
+    /// credential configuration is read or written.
+    fn opencode_acp_binary() -> PathBuf {
+        PathBuf::from(std::env::var("AM_OPENCODE_BIN").unwrap_or_else(|_| "opencode".to_string()))
+    }
+
+    fn opencode_acp_driver(working_directory: PathBuf) -> AcpWorkerDriver {
+        AcpWorkerDriver::new(AcpWorkerConfig {
+            runtime_kind: "opencode".into(),
+            command: opencode_acp_binary(),
+            args: vec!["acp".into()],
+            auth_method: None,
+            working_directory,
+            timeout: Duration::from_secs(240),
+            max_prompt_bytes: 512,
+            max_result_bytes: 1024,
+            artifact_paths: Vec::new(),
+        })
+        .expect("valid local OpenCode ACP profile")
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an accepted local OpenCode (>= 1.18.30) with an isolated provider configuration"]
+    async fn opencode_acp_completes_a_bounded_no_tool_turn() {
+        let cwd = acp_m2_probe_cwd("opencode_bounded");
+        std::fs::create_dir_all(&cwd).expect("OpenCode probe work directory");
+        let driver = opencode_acp_driver(cwd.clone());
+        let result = driver
+            .run(&AgentTask {
+                id: 9020,
+                objective: "Do not use tools, shell commands, network access, or filesystem writes. Return exactly this JSON peer result: {\"summary\":\"opencode bounded task complete\"}.".into(),
+                kind: TaskKind::Reasoning,
+                context: Vec::new(),
+            })
+            .await;
+        let _ = std::fs::remove_dir_all(&cwd);
+        let (session_id, response) = result.expect("OpenCode bounded ACP turn completes");
+        assert!(
+            !session_id.is_empty(),
+            "OpenCode returns a session reference"
+        );
+        assert!(
+            !response.is_empty(),
+            "OpenCode returns a bounded turn response"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an accepted local OpenCode (>= 1.18.30) with an isolated provider configuration"]
+    async fn opencode_acp_resumes_a_persisted_session_for_follow_up() {
+        let cwd = acp_m2_probe_cwd("opencode_resume");
+        std::fs::create_dir_all(&cwd).expect("OpenCode probe work directory");
+        let driver = opencode_acp_driver(cwd.clone());
+        let seeded = driver
+            .run(&AgentTask {
+                id: 9021,
+                objective: "Do not use tools. Return exactly this JSON peer result: {\"summary\":\"opencode resume seed\"}.".into(),
+                kind: TaskKind::Reasoning,
+                context: Vec::new(),
+            })
+            .await;
+        let result = match seeded {
+            Ok((session_id, _)) => driver
+                .resume_with_follow_up(
+                    &session_id,
+                    "Do not use tools. Return exactly this JSON peer result: {\"summary\":\"opencode resume follow-up\"}.",
+                )
+                .await,
+            Err(error) => Err(error),
+        };
+        let _ = std::fs::remove_dir_all(&cwd);
+        assert_eq!(
+            result.expect("OpenCode resumes the persisted ACP session"),
+            "opencode resume follow-up"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an accepted local OpenCode (>= 1.18.30) with an isolated provider configuration"]
+    async fn opencode_acp_confirms_active_session_cancellation() {
+        let cwd = acp_m2_probe_cwd("opencode_cancel");
+        std::fs::create_dir_all(&cwd).expect("OpenCode probe work directory");
+        let driver = opencode_acp_driver(cwd.clone());
+        let (cancellation, mut listener) = AcpCancellation::new();
+        let task = AgentTask {
+            id: 9022,
+            objective:
+                "Do not use tools. Wait for the cancellation request and stop when it arrives."
+                    .into(),
+            kind: TaskKind::Reasoning,
+            context: Vec::new(),
+        };
+        let run = tokio::spawn(async move {
+            driver
+                .execute_task_with_cancellation(&task, &mut listener)
+                .await
+        });
+        let delay = std::env::var("AM_OPENCODE_CANCEL_DELAY_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            // A cancellation is only meaningful once the peer owns an active
+            // turn. OpenCode starts its turn asynchronously (its ACP server
+            // bootstraps the workspace and provider first), so the probe waits
+            // for that turn instead of racing peer startup.
+            .unwrap_or(5_000);
+        tokio::time::sleep(Duration::from_millis(delay)).await;
+        cancellation.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(240), run).await;
+        let _ = std::fs::remove_dir_all(&cwd);
+        assert!(
+            matches!(result, Ok(Ok(Err(AcpWorkerError::Cancelled)))),
+            "OpenCode must confirm the ACP cancellation, got {result:?}"
+        );
+    }
+
     #[tokio::test]
     #[ignore = "requires locally configured Kimi Code ACP; resumes one bounded session without an ACP Authenticate request"]
     async fn kimi_acp_resumes_a_persisted_session_for_follow_up() {
