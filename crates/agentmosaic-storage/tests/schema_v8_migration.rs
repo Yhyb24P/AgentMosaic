@@ -274,17 +274,17 @@ fn authentic_v8_database_migrates_to_current_and_preserves_rows() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// A v10-shaped database migrates to v11: `driver_config_json` is added and the
-/// existing agent rows are preserved.
+/// A v10-shaped database migrates to current: the v11 driver configuration and
+/// v12 runtime-observation additions are applied while agent rows survive.
 ///
 /// The v10 shape here is built by executing the current `SCHEMA` and dropping
 /// the newest column. That is acceptable for the *previous-current* version:
-/// unlike the historical v8 fixture, v10 is the immediately preceding shape of
-/// the same DDL, so removing the one new column reconstructs it exactly. This
-/// is not the S1-4 defect (which fabricated a v8 database from current DDL).
+/// unlike the historical v8 fixture, the post-v10 additions are explicit and
+/// removed below to reconstruct the prior shape. This is not the S1-4 defect
+/// (which fabricated a v8 database from current DDL).
 #[test]
-fn v10_database_migrates_to_v11_adding_driver_config() {
-    let path = temp_db("v10-to-v11");
+fn v10_database_migrates_to_current_adding_runtime_foundation() {
+    let path = temp_db("v10-to-current");
     let _ = std::fs::remove_file(&path);
     {
         let conn = Connection::open(&path).expect("create v10 fixture");
@@ -294,6 +294,23 @@ fn v10_database_migrates_to_v11_adding_driver_config() {
             [],
         )
         .expect("drop the v11 column to reconstruct v10");
+        for column in [
+            "runtime_name",
+            "runtime_version",
+            "protocol_kind",
+            "protocol_version",
+            "capabilities_json",
+            "started_at",
+            "finished_at",
+        ] {
+            conn.execute(
+                &format!("ALTER TABLE external_runtime_bindings DROP COLUMN {column}"),
+                [],
+            )
+            .expect("drop a v12 binding column to reconstruct v10");
+        }
+        conn.execute("DROP TABLE runtime_events", [])
+            .expect("drop the v12 event table to reconstruct v10");
         conn.pragma_update(None, "user_version", 10)
             .expect("stamp v10");
         conn.execute(
@@ -314,9 +331,9 @@ fn v10_database_migrates_to_v11_adding_driver_config() {
         ));
     }
 
-    let registry = SqliteAgentRegistry::open(&path).expect("migrate v10 to v11");
+    let registry = SqliteAgentRegistry::open(&path).expect("migrate v10 to current");
     assert_eq!(registry.schema_version().expect("version"), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 11);
+    assert_eq!(SCHEMA_VERSION, 12);
     let old = registry
         .get_agent("old-worker")
         .expect("get old agent")
@@ -342,7 +359,13 @@ fn v10_database_migrates_to_v11_adding_driver_config() {
     drop(registry);
     let conn = Connection::open(&path).expect("reopen raw");
     assert!(column_exists(&conn, "agent_registry", "driver_config_json"));
-    assert_eq!(user_version(&conn), 11);
+    assert_eq!(user_version(&conn), SCHEMA_VERSION);
+    assert!(column_exists(
+        &conn,
+        "external_runtime_bindings",
+        "capabilities_json"
+    ));
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM runtime_events"), 0);
     assert_eq!(count(&conn, "SELECT COUNT(*) FROM agent_registry"), 1);
     let _ = std::fs::remove_file(&path);
 }

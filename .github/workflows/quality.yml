@@ -30,7 +30,13 @@ jobs:
         run: git diff --check
       - name: Release hygiene
         run: |
-          if git ls-files | grep -Eq '(^|/)([^/]+\.db(-wal|-shm)?|[^/]+-evidence(-check)?\.json)$'; then
+          # The single tracked-database exception is the frozen published-v0.3
+          # SQLite compatibility fixture. It is immutable migration evidence
+          # produced by the shipped 0.3.0 binary, never a runtime database, and
+          # rewriting or untracking it would destroy the compatibility proof.
+          # Every other database and evidence artifact is still rejected.
+          if git ls-files -- . ':(exclude)crates/agentmosaic-storage/tests/fixtures/v0_3_0_state.db' \
+            | grep -Eq '(^|/)([^/]+\.db(-wal|-shm)?|[^/]+-evidence(-check)?\.json)$'; then
             echo "runtime database or external evidence is tracked"
             exit 1
           fi

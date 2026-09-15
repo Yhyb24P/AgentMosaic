@@ -268,6 +268,22 @@ fn is_sha256_hex(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+/// Persist a deliberately small, non-secret live-run receipt when an operator
+/// requests it.  The normal test continues to remove its temporary board; the
+/// receipt is what lets a release audit retain the asserted durable facts
+/// without retaining ACP session references or a working repository.
+fn write_live_receipt(receipt: serde_json::Value) {
+    let Ok(path) = std::env::var("AGENTMOSAIC_LIVE_EVIDENCE_PATH") else {
+        return;
+    };
+    std::fs::write(
+        &path,
+        serde_json::to_vec_pretty(&receipt).expect("live receipt serializes"),
+    )
+    .unwrap_or_else(|error| panic!("writing live evidence receipt `{path}` failed: {error}"));
+    eprintln!("--- live evidence receipt ---\n{path}");
+}
+
 #[test]
 #[ignore = "requires authenticated local codex-cli and qwen-code; performs one live team run"]
 fn live_run_team_produces_a_durable_worker_dependent_answer() {
@@ -529,6 +545,29 @@ fn live_run_team_produces_a_durable_worker_dependent_answer() {
             binding.contains("external_reference_present=true"),
             "the worker binding has no external session reference:\n{binding}"
         );
+
+        write_live_receipt(json!({
+            "test": "live_run_team_produces_a_durable_worker_dependent_answer",
+            "root_task_id": root_id,
+            "root_status": root_line.status,
+            "worker_task_id": worker,
+            "worker_is_root_child": children.contains(&worker),
+            "answer_contains_worker_token": final_answer.contains(&token),
+            "final_reproduced_run_team_answer": final_answer == answer.trim_end(),
+            "resume_reproduced_task_refs": task_refs_of(&resume_output) == run_refs,
+            "resume_reproduced_artifact_refs": artifact_refs_of(&resume_output) == run_artifacts,
+            "worker_result_contains_token": worker_result.contains(&token),
+            "worker_artifact": {
+                "path": "worker.txt",
+                "sha256": worker_sha,
+                "digest_matches_file": computed == worker_sha,
+                "selected_by_lead": run_artifacts.iter().any(|(task, path, sha)| *task == worker
+                    && path == "worker.txt"
+                    && *sha == worker_sha),
+            },
+            "worker_runtime_kind": "acp",
+            "worker_external_reference_present": true,
+        }));
     }));
 
     if let Err(payload) = expectations {
@@ -545,6 +584,92 @@ fn live_run_team_produces_a_durable_worker_dependent_answer() {
         std::panic::resume_unwind(payload);
     }
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+#[ignore = "requires authenticated local Codex app-server and Codex exec; performs one live team run"]
+fn live_run_team_drives_a_strict_codex_exec_worker() {
+    let root = unique_root("codex_exec_worker");
+    let repo = root.join("repo");
+    initialize_git_repo(&repo);
+    let database = root.join("board.db");
+    let db = database.to_string_lossy().into_owned();
+    let repo_arg = repo.to_string_lossy().into_owned();
+    let mcp = runtime_binary("am-codex-mcp");
+    let lead_config = json!({
+        "mcp_command": mcp.display().to_string(),
+        "max_events": 200,
+        "model": "gpt-5.5",
+        "overrides": ["model=\"gpt-5.5\"", "model_reasoning_effort=\"low\""],
+    })
+    .to_string();
+    let worker_config = json!({"timeout_seconds": 300, "max_result_bytes": 1024}).to_string();
+    register(&[
+        "register",
+        &db,
+        "codex-lead",
+        "codex-lead",
+        "reasoner",
+        "codex-app-server",
+        "codex",
+        "-",
+        "1",
+        "-",
+        "-",
+        &lead_config,
+    ]);
+    register(&[
+        "register",
+        &db,
+        "codex-worker",
+        "codex-worker",
+        "worker",
+        "codex-exec",
+        "codex",
+        "-",
+        "1",
+        "-",
+        "-",
+        &worker_config,
+    ]);
+    let token = random_token();
+    let request = format!(
+        "Delegate exactly one bulk task to codex-worker. Its objective must require exactly the JSON result {{\"summary\":\"{token}\"}}. Do no work yourself. After it succeeds, complete with an answer containing {token} and select that worker task."
+    );
+    let run = run_cli(&["run-team", &db, &repo_arg, &request]);
+    eprintln!(
+        "--- codex-exec run-team (exit {:?}) ---\n{}\n{}",
+        run.status.code(),
+        stdout(&run),
+        stderr(&run)
+    );
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        assert!(
+            run.status.success(),
+            "run-team failed:\n{}\n{}",
+            stdout(&run),
+            stderr(&run)
+        );
+        let root_id = parse_root(&stdout(&run));
+        let status = run_ok(&["status", &db]);
+        let worker = status_lines(&status)
+            .into_iter()
+            .find(|line| line.parent == Some(root_id))
+            .expect("root has a worker")
+            .id;
+        let binding = run_ok(&["binding", &db, &worker.to_string()]);
+        assert!(binding.contains("runtime_kind=codex-exec"), "{binding}");
+        assert!(
+            binding.contains("external_reference_present=true"),
+            "{binding}"
+        );
+        let worker_result = run_ok(&["final", &db, &worker.to_string()]);
+        assert_eq!(worker_result.trim(), token);
+        let final_answer = run_ok(&["final", &db, &root_id.to_string()]);
+        assert!(final_answer.contains(&token), "{final_answer}");
+    }));
+    let _ = std::fs::remove_dir_all(&root);
+    result.unwrap();
 }
 
 /// R9 failure path, deterministic and not ignored: a Lead that cannot produce a

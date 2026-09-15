@@ -58,6 +58,7 @@ struct Mock {
     state_path: Option<PathBuf>,
     /// The text input of the most recent `turn/start`.
     last_prompt: Option<String>,
+    silent: bool,
 }
 
 impl Mock {
@@ -105,10 +106,16 @@ impl Mock {
             tool_call: setting("tool_call", "CODEX_BRIDGE_MOCK_TOOL_CALL"),
             state_path: setting("state", "CODEX_BRIDGE_MOCK_STATE").map(PathBuf::from),
             last_prompt: None,
+            silent: setting("silent", "CODEX_BRIDGE_MOCK_SILENT")
+                .as_deref()
+                .is_some_and(|value| value == "true"),
         }
     }
 
     fn handle(&mut self, value: &Value) {
+        if self.silent {
+            return;
+        }
         let id = value.get("id").cloned();
         match value.get("method").and_then(Value::as_str) {
             Some("initialize") => respond(&id, json!({"userAgent": "codex_bridge_mock"})),

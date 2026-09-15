@@ -43,7 +43,8 @@ use agentmosaic_team::{AgentDriver, DriverKind};
 use serde_json::{Map, Value};
 
 use crate::{
-    AcpWorkerConfig, CodexTeamDriverConfig, LaunchSpec, PersistedAcpWorkerDriver,
+    AcpWorkerConfig, ClaudeCliDriverConfig, CodexExecDriverConfig, CodexTeamDriverConfig,
+    LaunchSpec, PersistedAcpWorkerDriver, PersistedClaudeCliDriver, PersistedCodexExecDriver,
     PersistedCodexTeamDriver,
 };
 
@@ -177,6 +178,8 @@ impl DriverFactory {
         match kind {
             DriverKind::Acp => self.build_acp(record, &options),
             DriverKind::CodexAppServer => self.build_codex(record, &options),
+            DriverKind::CodexExec => self.build_codex_exec(record, &options),
+            DriverKind::ClaudeCli => self.build_claude_cli(record, &options),
             DriverKind::Native | DriverKind::Cli => {
                 Err(DriverFactoryError::UnsupportedDriverKind {
                     agent,
@@ -264,6 +267,73 @@ impl DriverFactory {
             })?;
         Ok(Arc::new(driver))
     }
+
+    fn build_codex_exec(
+        &self,
+        record: &AgentRegistryRecord,
+        options: &AgentOptions,
+    ) -> Result<Arc<dyn AgentDriver>, DriverFactoryError> {
+        let agent = record.id.clone();
+        let launch = launch_spec(record)?;
+        let values = acp_option_values(&agent, options)?;
+        let config = CodexExecDriverConfig {
+            command: launch.program,
+            args: launch.args,
+            working_directory: self.repo.clone(),
+            timeout: Duration::from_secs(values.timeout_seconds),
+            max_prompt_bytes: values.max_prompt_bytes,
+            max_result_bytes: values.max_result_bytes,
+            output_schema: options
+                .output_schema
+                .as_deref()
+                .map(|path| {
+                    validate_artifact_path(&agent, path)?;
+                    Ok(self.repo.join(path).display().to_string())
+                })
+                .transpose()?,
+            artifact_paths: options.artifact_paths.clone(),
+            isolate: false,
+        };
+        let driver = PersistedCodexExecDriver::new(config, self.database.clone(), agent.clone())
+            .map_err(|detail| DriverFactoryError::Driver {
+                agent: agent.clone(),
+                detail,
+            })?;
+        Ok(Arc::new(driver))
+    }
+
+    fn build_claude_cli(
+        &self,
+        record: &AgentRegistryRecord,
+        options: &AgentOptions,
+    ) -> Result<Arc<dyn AgentDriver>, DriverFactoryError> {
+        let agent = record.id.clone();
+        let launch = launch_spec(record)?;
+        let values = acp_option_values(&agent, options)?;
+        let config = ClaudeCliDriverConfig {
+            command: launch.program,
+            args: launch.args,
+            working_directory: self.repo.clone(),
+            timeout: Duration::from_secs(values.timeout_seconds),
+            max_prompt_bytes: values.max_prompt_bytes,
+            max_result_bytes: values.max_result_bytes,
+            json_schema: options
+                .output_schema
+                .as_deref()
+                .map(|path| {
+                    validate_artifact_path(&agent, path)?;
+                    Ok(self.repo.join(path).display().to_string())
+                })
+                .transpose()?,
+            artifact_paths: options.artifact_paths.clone(),
+        };
+        let driver = PersistedClaudeCliDriver::new(config, self.database.clone(), agent.clone())
+            .map_err(|detail| DriverFactoryError::Driver {
+                agent: agent.clone(),
+                detail,
+            })?;
+        Ok(Arc::new(driver))
+    }
 }
 
 /// Derive the sole external process launch representation from a durable v11
@@ -304,6 +374,7 @@ pub(crate) struct AgentOptions {
     pub(crate) overrides: Vec<String>,
     pub(crate) model: Option<String>,
     pub(crate) max_answer_bytes: Option<usize>,
+    pub(crate) output_schema: Option<String>,
 }
 
 /// Parse and validate one `driver_config_json` body. A missing body is an empty
@@ -349,6 +420,7 @@ pub(crate) fn parse_agent_options(
         overrides: string_array(agent, &map, "overrides")?,
         model: optional_string(agent, &map, "model")?,
         max_answer_bytes: optional_usize(agent, &map, "max_answer_bytes")?,
+        output_schema: optional_string(agent, &map, "output_schema")?,
     })
 }
 
@@ -522,6 +594,8 @@ pub fn validate_driver_config(record: &AgentRegistryRecord) -> Result<(), String
     let verdict = match kind {
         Some(DriverKind::Acp) => acp_option_values(&record.id, &options).map(|_| ()),
         Some(DriverKind::CodexAppServer) => codex_option_values(&record.id, &options).map(|_| ()),
+        Some(DriverKind::CodexExec) => acp_option_values(&record.id, &options).map(|_| ()),
+        Some(DriverKind::ClaudeCli) => acp_option_values(&record.id, &options).map(|_| ()),
         // A kind no automatic run can drive, or none at all, is a protocol
         // concern of the readiness probe: only the config body is judged here.
         _ => Ok(()),
@@ -671,12 +745,19 @@ mod tests {
             .build(&[
                 record(Some("acp"), Some(r#"{"timeout_seconds":1}"#)),
                 AgentRegistryRecord {
+                    id: "exec".into(),
+                    ..record(Some("codex-exec"), Some(r#"{"timeout_seconds":1}"#))
+                },
+                AgentRegistryRecord {
                     id: "lead".into(),
                     ..record(Some("codex-app-server"), Some(&codex_config))
                 },
             ])
             .unwrap();
-        assert_eq!(drivers.keys().collect::<Vec<_>>(), vec!["lead", "worker"]);
+        assert_eq!(
+            drivers.keys().collect::<Vec<_>>(),
+            vec!["exec", "lead", "worker"]
+        );
     }
 
     #[test]
@@ -743,6 +824,7 @@ mod tests {
                 Some(r#"{"artifact_paths":["nested/inside.txt"],"max_prompt_bytes":64}"#),
             ),
             record(Some("codex-app-server"), Some(r#"{"max_events":4000}"#)),
+            record(Some("codex-exec"), Some(r#"{"timeout_seconds":60}"#)),
             // A kind no automatic run drives, or none at all, is the readiness
             // probe's concern: only the config body is judged here.
             record(Some("native"), Some(r#"{"max_events":0}"#)),

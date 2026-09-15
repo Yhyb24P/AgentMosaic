@@ -66,6 +66,10 @@ pub enum DriverKind {
     /// A Codex CLI driven through its `app-server --stdio` protocol. It is an
     /// explicit kind, never inferred from an executable name.
     CodexAppServer,
+    /// A Codex CLI driven through its stable `exec --json` machine interface.
+    CodexExec,
+    /// A Claude CLI driven through its stable `stream-json` machine interface.
+    ClaudeCli,
 }
 
 impl DriverKind {
@@ -76,6 +80,8 @@ impl DriverKind {
             DriverKind::Acp => "acp",
             DriverKind::Cli => "cli",
             DriverKind::CodexAppServer => "codex-app-server",
+            DriverKind::CodexExec => "codex-exec",
+            DriverKind::ClaudeCli => "claude-cli",
         }
     }
 
@@ -87,6 +93,8 @@ impl DriverKind {
             "acp" => DriverKind::Acp,
             "cli" => DriverKind::Cli,
             "codex-app-server" => DriverKind::CodexAppServer,
+            "codex-exec" => DriverKind::CodexExec,
+            "claude-cli" => DriverKind::ClaudeCli,
             _ => return None,
         })
     }
@@ -397,10 +405,14 @@ mod tests {
             DriverKind::Acp,
             DriverKind::Cli,
             DriverKind::CodexAppServer,
+            DriverKind::CodexExec,
+            DriverKind::ClaudeCli,
         ] {
             assert_eq!(DriverKind::restore(kind.as_str()), Some(kind));
         }
         assert_eq!(DriverKind::CodexAppServer.as_str(), "codex-app-server");
+        assert_eq!(DriverKind::CodexExec.as_str(), "codex-exec");
+        assert_eq!(DriverKind::ClaudeCli.as_str(), "claude-cli");
         assert_eq!(
             DriverKind::restore("codex-app-server"),
             Some(DriverKind::CodexAppServer)

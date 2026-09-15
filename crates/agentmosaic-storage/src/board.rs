@@ -1,13 +1,19 @@
 //! The SQLite implementation of the team's durable task board.
 
 use agentmosaic_team::{
-    AgentMessage, ArtifactMeta, BoardError, SelectedArtifactRef, TaskAttempt, TaskBoard, TaskKind,
-    TaskRecord, TaskStatus,
+    AgentMessage, ArtifactMeta, BoardError, RuntimeEventPolicy, RuntimeEventRecord,
+    SelectedArtifactRef, TaskAttempt, TaskBoard, TaskKind, TaskRecord, TaskStatus,
+    MAX_DURABLE_RUNTIME_PAYLOAD_BYTES,
 };
-use rusqlite::{params, Connection, Row};
+use rusqlite::{params, Connection, Row, TransactionBehavior};
 use std::time::Duration;
 
+use crate::journal::now;
 use crate::schema::{migrate, SCHEMA};
+
+/// Product reads are always bounded even when a caller supplies a larger
+/// value. Follow-mode callers page with `after_sequence`.
+pub const MAX_RUNTIME_EVENT_QUERY: usize = 1_000;
 
 /// A durable task board backed by a SQLite connection.
 pub struct SqliteTaskBoard {
@@ -23,6 +29,70 @@ pub struct ExternalRuntimeBinding {
     pub native_thread_id: Option<String>,
     pub native_turn_id: Option<String>,
     pub lifecycle_state: String,
+}
+
+/// v12 metadata added to the existing per-attempt binding. The legacy binding
+/// API remains source-compatible and does not clear these fields when it
+/// updates lifecycle state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtendedExternalRuntimeBinding {
+    pub binding: ExternalRuntimeBinding,
+    pub runtime_name: Option<String>,
+    pub runtime_version: Option<String>,
+    pub protocol_kind: Option<String>,
+    pub protocol_version: Option<String>,
+    pub capabilities_json: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredRuntimeEvent {
+    pub sequence: u64,
+    pub created_at: String,
+    pub record: RuntimeEventRecord,
+}
+
+#[derive(Debug)]
+pub enum RuntimeEventStoreError {
+    Sqlite(rusqlite::Error),
+    Json(serde_json::Error),
+    LiveOnly(String),
+    MissingAttempt { task_id: u64, attempt: u32 },
+    Corrupt(String),
+    PayloadTooLarge(usize),
+}
+
+impl std::fmt::Display for RuntimeEventStoreError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Sqlite(error) => write!(formatter, "runtime event storage: {error}"),
+            Self::Json(error) => write!(formatter, "runtime event JSON: {error}"),
+            Self::LiveOnly(kind) => write!(formatter, "runtime event `{kind}` is live-only"),
+            Self::MissingAttempt { task_id, attempt } => {
+                write!(formatter, "task {task_id} has no attempt {attempt}")
+            }
+            Self::Corrupt(detail) => write!(formatter, "corrupt runtime event: {detail}"),
+            Self::PayloadTooLarge(bytes) => write!(
+                formatter,
+                "runtime event payload is {bytes} bytes; maximum is {MAX_DURABLE_RUNTIME_PAYLOAD_BYTES}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RuntimeEventStoreError {}
+
+impl From<rusqlite::Error> for RuntimeEventStoreError {
+    fn from(value: rusqlite::Error) -> Self {
+        Self::Sqlite(value)
+    }
+}
+
+impl From<serde_json::Error> for RuntimeEventStoreError {
+    fn from(value: serde_json::Error) -> Self {
+        Self::Json(value)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,6 +138,50 @@ impl SqliteTaskBoard {
         Ok(())
     }
 
+    pub fn upsert_external_binding_extended(
+        &self,
+        extended: &ExtendedExternalRuntimeBinding,
+    ) -> Result<(), rusqlite::Error> {
+        let binding = &extended.binding;
+        self.conn.execute(
+            "INSERT INTO external_runtime_bindings (
+                team_task_id,attempt,agent_id,runtime_kind,native_thread_id,native_turn_id,
+                lifecycle_state,runtime_name,runtime_version,protocol_kind,protocol_version,
+                capabilities_json,started_at,finished_at
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+             ON CONFLICT(team_task_id,attempt) DO UPDATE SET
+                agent_id=excluded.agent_id,
+                runtime_kind=excluded.runtime_kind,
+                native_thread_id=COALESCE(excluded.native_thread_id,native_thread_id),
+                native_turn_id=COALESCE(excluded.native_turn_id,native_turn_id),
+                lifecycle_state=excluded.lifecycle_state,
+                runtime_name=COALESCE(excluded.runtime_name,runtime_name),
+                runtime_version=COALESCE(excluded.runtime_version,runtime_version),
+                protocol_kind=COALESCE(excluded.protocol_kind,protocol_kind),
+                protocol_version=COALESCE(excluded.protocol_version,protocol_version),
+                capabilities_json=COALESCE(excluded.capabilities_json,capabilities_json),
+                started_at=COALESCE(excluded.started_at,started_at),
+                finished_at=COALESCE(excluded.finished_at,finished_at)",
+            params![
+                binding.team_task_id as i64,
+                binding.attempt as i64,
+                binding.agent_id,
+                binding.runtime_kind,
+                binding.native_thread_id,
+                binding.native_turn_id,
+                binding.lifecycle_state,
+                extended.runtime_name,
+                extended.runtime_version,
+                extended.protocol_kind,
+                extended.protocol_version,
+                extended.capabilities_json,
+                extended.started_at,
+                extended.finished_at,
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn external_binding(
         &self,
         task: u64,
@@ -79,6 +193,182 @@ impl SqliteTaskBoard {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+
+    pub fn external_binding_extended(
+        &self,
+        task: u64,
+        attempt: u32,
+    ) -> Result<Option<ExtendedExternalRuntimeBinding>, rusqlite::Error> {
+        let row = self.conn.query_row(
+            "SELECT team_task_id,attempt,agent_id,runtime_kind,native_thread_id,native_turn_id,
+                    lifecycle_state,runtime_name,runtime_version,protocol_kind,protocol_version,
+                    capabilities_json,started_at,finished_at
+             FROM external_runtime_bindings WHERE team_task_id=?1 AND attempt=?2",
+            params![task as i64, attempt as i64],
+            |row| {
+                Ok(ExtendedExternalRuntimeBinding {
+                    binding: ExternalRuntimeBinding {
+                        team_task_id: row.get::<_, i64>(0)? as u64,
+                        attempt: row.get::<_, i64>(1)? as u32,
+                        agent_id: row.get(2)?,
+                        runtime_kind: row.get(3)?,
+                        native_thread_id: row.get(4)?,
+                        native_turn_id: row.get(5)?,
+                        lifecycle_state: row.get(6)?,
+                    },
+                    runtime_name: row.get(7)?,
+                    runtime_version: row.get(8)?,
+                    protocol_kind: row.get(9)?,
+                    protocol_version: row.get(10)?,
+                    capabilities_json: row.get(11)?,
+                    started_at: row.get(12)?,
+                    finished_at: row.get(13)?,
+                })
+            },
+        );
+        match row {
+            Ok(value) => Ok(Some(value)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Persist one normalized durable observation. Sequence allocation and
+    /// insertion share an IMMEDIATE transaction, so overlapping writers for
+    /// the same attempt cannot allocate the same sequence.
+    pub fn append_runtime_event(
+        &mut self,
+        record: RuntimeEventRecord,
+    ) -> Result<StoredRuntimeEvent, RuntimeEventStoreError> {
+        let record = record.bounded();
+        if record.event.policy() != RuntimeEventPolicy::Durable {
+            return Err(RuntimeEventStoreError::LiveOnly(
+                record.event.kind().to_string(),
+            ));
+        }
+        let payload = serde_json::to_string(&record)?;
+        if payload.len() > MAX_DURABLE_RUNTIME_PAYLOAD_BYTES {
+            return Err(RuntimeEventStoreError::PayloadTooLarge(payload.len()));
+        }
+        let created_at = now();
+        let transaction = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let attempt_exists: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM team_task_runs WHERE task_id=?1 AND attempt=?2",
+            params![record.task_id as i64, record.attempt as i64],
+            |row| row.get(0),
+        )?;
+        if attempt_exists != 1 {
+            return Err(RuntimeEventStoreError::MissingAttempt {
+                task_id: record.task_id,
+                attempt: record.attempt,
+            });
+        }
+        let sequence: i64 = transaction.query_row(
+            "SELECT COALESCE(MAX(sequence),0)+1 FROM runtime_events
+             WHERE team_task_id=?1 AND attempt=?2",
+            params![record.task_id as i64, record.attempt as i64],
+            |row| row.get(0),
+        )?;
+        transaction.execute(
+            "INSERT INTO runtime_events
+                (team_task_id,attempt,sequence,event_kind,payload_json,created_at)
+             VALUES (?1,?2,?3,?4,?5,?6)",
+            params![
+                record.task_id as i64,
+                record.attempt as i64,
+                sequence,
+                record.event.kind(),
+                payload,
+                created_at,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(StoredRuntimeEvent {
+            sequence: sequence as u64,
+            created_at,
+            record,
+        })
+    }
+
+    pub fn runtime_events(
+        &self,
+        task: u64,
+        attempt: u32,
+        after_sequence: u64,
+        limit: usize,
+    ) -> Result<Vec<StoredRuntimeEvent>, RuntimeEventStoreError> {
+        let limit = limit.min(MAX_RUNTIME_EVENT_QUERY);
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let mut statement = self.conn.prepare(
+            "SELECT sequence,event_kind,payload_json,created_at FROM runtime_events
+             WHERE team_task_id=?1 AND attempt=?2 AND sequence>?3
+             ORDER BY sequence LIMIT ?4",
+        )?;
+        let rows = statement.query_map(
+            params![
+                task as i64,
+                attempt as i64,
+                after_sequence as i64,
+                limit as i64
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )?;
+        rows.map(|row| {
+            let (sequence, event_kind, payload, created_at) = row?;
+            decode_stored_runtime_event(task, attempt, sequence, &event_kind, &payload, created_at)
+        })
+        .collect()
+    }
+
+    pub fn latest_runtime_events(
+        &self,
+        task: u64,
+        limit: usize,
+    ) -> Result<Vec<StoredRuntimeEvent>, RuntimeEventStoreError> {
+        let limit = limit.min(MAX_RUNTIME_EVENT_QUERY);
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let mut statement = self.conn.prepare(
+            "SELECT attempt,sequence,event_kind,payload_json,created_at FROM runtime_events
+             WHERE team_task_id=?1 ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![task as i64, limit as i64], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?;
+        let mut events = rows
+            .map(|row| {
+                let (attempt, sequence, event_kind, payload, created_at) = row?;
+                decode_stored_runtime_event(
+                    task,
+                    attempt as u32,
+                    sequence,
+                    &event_kind,
+                    &payload,
+                    created_at,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        events.reverse();
+        Ok(events)
     }
 
     /// Idempotently persists a bounded external tool request and its response.
@@ -171,6 +461,33 @@ impl SqliteTaskBoard {
 
 /// The bounded number of `parent_task` hops the descendant walk follows.
 pub const MAX_DESCENDANT_HOPS: usize = 1024;
+
+fn decode_stored_runtime_event(
+    task: u64,
+    attempt: u32,
+    sequence: i64,
+    event_kind: &str,
+    payload: &str,
+    created_at: String,
+) -> Result<StoredRuntimeEvent, RuntimeEventStoreError> {
+    let record = serde_json::from_str::<RuntimeEventRecord>(payload)?;
+    if record.task_id != task || record.attempt != attempt {
+        return Err(RuntimeEventStoreError::Corrupt(
+            "payload task/attempt does not match row".into(),
+        ));
+    }
+    if record.event.kind() != event_kind {
+        return Err(RuntimeEventStoreError::Corrupt(format!(
+            "row kind `{event_kind}` does not match payload kind `{}`",
+            record.event.kind()
+        )));
+    }
+    Ok(StoredRuntimeEvent {
+        sequence: sequence as u64,
+        created_at,
+        record,
+    })
+}
 
 impl TaskBoard for SqliteTaskBoard {
     fn create_task(

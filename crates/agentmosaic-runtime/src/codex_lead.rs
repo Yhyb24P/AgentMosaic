@@ -1,4 +1,4 @@
-//! The resident Codex Lead brain.
+//! Compatibility/experimental resident Codex app-server Lead brain.
 //!
 //! One Lead objective is one Codex thread. The brain spawns the local
 //! `codex app-server` once, starts a single `read-only` / `never` thread whose
@@ -221,7 +221,7 @@ impl CodexLeadBrain {
     /// The single correction turn's input: why the reply was rejected, then the
     /// contract again. The reason is bounded so this prompt also stays within
     /// `max_prompt_bytes`.
-    fn correction_prompt(&self, reason: &str) -> String {
+    pub(crate) fn correction_prompt(&self, reason: &str) -> String {
         let head_budget = self
             .config
             .max_prompt_bytes
@@ -237,13 +237,21 @@ impl CodexLeadBrain {
     /// instruction. Only durable board facts are rendered (task ids, bounded
     /// result summaries, artifact digests, bounded errors, messages) — never
     /// hidden model reasoning.
-    fn render_prompt(&self, ctx: &LeadContext) -> String {
+    pub(crate) fn render_prompt(&self, ctx: &LeadContext) -> String {
         let budget = self
             .config
             .max_prompt_bytes
             .saturating_sub(PROMPT_PREFIX.len() + PROMPT_SUFFIX.len() + 2);
         let context = self.render_context(ctx, budget);
         format!("{PROMPT_PREFIX}{context}\n{PROMPT_SUFFIX}")
+    }
+
+    /// `codex app-server` receives this contract once as developer
+    /// instructions, but stateless `codex exec` has no equivalent thread
+    /// configuration. Include it in every Exec Lead turn so the rendered
+    /// context never refers to instructions that were not actually sent.
+    pub(crate) fn render_exec_prompt(&self, ctx: &LeadContext) -> String {
+        format!("{DEVELOPER_INSTRUCTIONS}\n\n{}", self.render_prompt(ctx))
     }
 
     fn render_context(&self, ctx: &LeadContext, budget: usize) -> String {
@@ -308,7 +316,7 @@ impl CodexLeadBrain {
     /// be exactly one JSON object in the contract, and every field must survive
     /// the contract's validation. No fence stripping, no prose scanning, no
     /// substring extraction.
-    fn parse_reply(&self, reply: &str) -> Result<LeadDecision, String> {
+    pub(crate) fn parse_reply(&self, reply: &str) -> Result<LeadDecision, String> {
         let trimmed = reply.trim_matches(|c: char| c.is_ascii_whitespace());
         if trimmed.is_empty() {
             return Err("the reply was empty".into());
@@ -862,6 +870,23 @@ mod tests {
             }
             other => panic!("expected complete, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn exec_prompt_carries_the_contract_that_app_server_gets_at_thread_start() {
+        let prompt = brain().render_exec_prompt(&LeadContext {
+            root_task_id: 9,
+            objective: "delegate safely".into(),
+            round: 0,
+            candidates: vec!["worker-a".into()],
+            results: Vec::new(),
+            artifacts: Vec::new(),
+            failures: Vec::new(),
+            messages: Vec::new(),
+        });
+        assert!(prompt.contains("You are the Lead of a heterogeneous coding agent team"));
+        assert!(prompt.contains("exactly one JSON object"));
+        assert!(prompt.contains("\"root_task_id\":9"));
     }
 
     #[test]

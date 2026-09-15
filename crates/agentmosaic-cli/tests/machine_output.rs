@@ -501,7 +501,7 @@ fn doctor_json_is_the_readiness_decision() {
     let project = TeamProject::ready("doctor_decision");
     let doctor = project.json(&["doctor", "--json"]);
     assert_eq!(doctor["ready"], json!(true));
-    assert_eq!(doctor["schema_version"], json!(11));
+    assert_eq!(doctor["schema_version"], json!(12));
     assert_eq!(
         doctor["team"],
         json!({"lead": 1, "worker": 1, "utility": 1})

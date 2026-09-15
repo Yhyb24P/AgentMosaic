@@ -52,8 +52,11 @@ pub fn add(spec: AgentAdd) -> Result<String, String> {
     if !matches!(spec.role.as_str(), "reasoner" | "worker" | "utility") {
         return Err("--role must be reasoner, worker, or utility".into());
     }
-    if !matches!(spec.adapter.as_str(), "acp" | "codex-app-server") {
-        return Err("--adapter must be acp or codex-app-server".into());
+    if !matches!(
+        spec.adapter.as_str(),
+        "acp" | "codex-app-server" | "codex-exec" | "claude-cli"
+    ) {
+        return Err("--adapter must be acp, codex-app-server, codex-exec, or claude-cli".into());
     }
     if spec.concurrency <= 0 {
         return Err("max-concurrency must be greater than zero".into());

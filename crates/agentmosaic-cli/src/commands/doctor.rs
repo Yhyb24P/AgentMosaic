@@ -5,6 +5,7 @@
 //! deliberately cheap and non-invasive: no prompt, no model, no login.
 
 use std::path::Path;
+use std::process::Command;
 use std::time::Duration;
 
 use agentmosaic_runtime::{
@@ -102,7 +103,7 @@ fn resolved_lead(agents: &[AgentRegistryRecord]) -> Option<&str> {
 /// itself states it, or None when a run's own configuration checks accept it.
 ///
 /// The checks run in the order a run builds them — every registry row, then
-/// every driver, then the Lead's brain — so the operator sees the same first
+/// the Lead's brain, then every driver — so the operator sees the same first
 /// failure a run would report. All of them construct nothing and start no
 /// process.
 fn configuration_problem(
@@ -115,11 +116,13 @@ fn configuration_problem(
     if let Err(detail) = validate_registry_row(agent) {
         return Some(detail);
     }
+    if lead == Some(agent.id.as_str()) {
+        if let Err(detail) = validate_lead_config(agent, root) {
+            return Some(detail);
+        }
+    }
     if let Err(detail) = validate_driver_config(agent) {
         return Some(detail);
-    }
-    if lead == Some(agent.id.as_str()) {
-        return validate_lead_config(agent, root).err();
     }
     None
 }
@@ -200,6 +203,8 @@ fn probe_agent(agent: &AgentRegistryRecord, root: &Path) -> AgentProbe {
     let probe = match agent.driver_kind.as_deref() {
         Some("acp") => probe_acp(launch, args, root),
         Some("codex-app-server") => probe_codex(launch, root),
+        Some("codex-exec") => probe_codex_exec(launch),
+        Some("claude-cli") => probe_claude_cli(launch),
         _ => AgentProbe::new(ReadinessStage::ProtocolUnavailable, "PROTOCOL_UNAVAILABLE"),
     };
     AgentProbe::new(
@@ -274,6 +279,45 @@ fn probe_codex(launch: LaunchSpec, root: &Path) -> AgentProbe {
             }
             Err(_) => AgentProbe::new(ReadinessStage::ProtocolUnavailable, "PROTOCOL_UNAVAILABLE"),
         },
+    }
+}
+
+/// Verify the supported Codex machine-interface surface without sending a
+/// prompt, selecting a model, or attempting authentication.
+fn probe_codex_exec(launch: LaunchSpec) -> AgentProbe {
+    let output = Command::new(&launch.program)
+        .args(&launch.args)
+        .args(["exec", "--help"])
+        .output();
+    match output {
+        Ok(output)
+            if output.status.success()
+                && String::from_utf8_lossy(&output.stdout).contains("--json") =>
+        {
+            AgentProbe::new(ReadinessStage::Ready, "SPAWN_OK PROTOCOL_OK READY")
+        }
+        Ok(_) => AgentProbe::new(ReadinessStage::ProtocolUnavailable, "PROTOCOL_UNAVAILABLE"),
+        Err(_) => AgentProbe::new(ReadinessStage::SpawnFailed, "SPAWN_FAILED"),
+    }
+}
+
+/// Verify Claude's documented stream-json flags without prompting or logging in.
+fn probe_claude_cli(launch: LaunchSpec) -> AgentProbe {
+    let output = Command::new(&launch.program)
+        .args(&launch.args)
+        .arg("--help")
+        .output();
+    match output {
+        Ok(output)
+            if output.status.success() && {
+                let help = String::from_utf8_lossy(&output.stdout);
+                help.contains("stream-json") && help.contains("--permission-prompts")
+            } =>
+        {
+            AgentProbe::new(ReadinessStage::Ready, "SPAWN_OK PROTOCOL_OK READY")
+        }
+        Ok(_) => AgentProbe::new(ReadinessStage::ProtocolUnavailable, "PROTOCOL_UNAVAILABLE"),
+        Err(_) => AgentProbe::new(ReadinessStage::SpawnFailed, "SPAWN_FAILED"),
     }
 }
 

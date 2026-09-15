@@ -24,7 +24,20 @@ fn main() {
         Ok(cli) => cli,
         Err(error) => error.exit(),
     };
-    match commands::dispatch_status(cli.command) {
+    let command = cli.command;
+    if let args::Command::Events {
+        target,
+        json,
+        follow: true,
+    } = command
+    {
+        if let Err(error) = commands::events::follow(target, json, std::io::stdout()) {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+        return;
+    }
+    match commands::dispatch_status(command) {
         Ok(dispatch) => {
             if let Some(payload) = dispatch.payload {
                 println!("{payload}");

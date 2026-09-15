@@ -9,7 +9,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use agentmosaic_runtime::{
-    AcpCancellation, AcpWorkerConfig, AcpWorkerDriver, AcpWorkerError, PersistedAcpWorkerDriver,
+    AcpCancellation, AcpRuntimeAdapter, AcpWorkerConfig, AcpWorkerDriver, AcpWorkerError,
+    NoopRuntimeEventSink, PersistedAcpWorkerDriver, RuntimeAdapter, RuntimeCheckpoint,
+    RuntimeError, RuntimeExecutionRequest,
 };
 use agentmosaic_storage::SqliteTaskBoard;
 use agentmosaic_team::{AgentDriver, AgentTask, TaskAttempt, TaskBoard, TaskKind, TaskStatus};
@@ -75,6 +77,113 @@ async fn readiness_probe_initializes_and_opens_a_session_without_a_prompt() {
         .probe_readiness()
         .await
         .expect("mock accepts a safe initialize and session check");
+    let _ = std::fs::remove_dir_all(&cwd);
+}
+
+#[tokio::test]
+async fn readiness_probe_captures_the_typed_v1_capability_snapshot() {
+    let cwd = mock_cwd("descriptor");
+    let driver = AcpWorkerDriver::new(valid_config(&cwd, "sync")).expect("valid mock driver");
+    let descriptor = driver.probe_descriptor().await.expect("typed handshake");
+    assert_eq!(descriptor.runtime_name.as_deref(), Some("acp-m2-mock"));
+    assert_eq!(descriptor.runtime_version.as_deref(), Some("1.0"));
+    assert_eq!(descriptor.protocol_kind, "acp");
+    assert_eq!(descriptor.protocol_version, "1");
+    assert!(!descriptor.capabilities.supports_resume);
+    assert!(!descriptor.capabilities.reverse_filesystem);
+    assert!(!descriptor.capabilities.reverse_terminal);
+    let _ = std::fs::remove_dir_all(&cwd);
+}
+
+#[tokio::test]
+async fn generic_adapter_binds_the_exact_session_before_releasing_execution() {
+    let cwd = mock_cwd("generic-adapter");
+    let adapter = AcpRuntimeAdapter::new(valid_config(&cwd, "sync")).expect("valid adapter");
+    let mut execution = adapter
+        .start(
+            RuntimeExecutionRequest {
+                task: task_for(16),
+                attempt: 3,
+                agent_id: "worker".into(),
+            },
+            Arc::new(NoopRuntimeEventSink),
+        )
+        .await
+        .expect("ACP binding precedes prompt release");
+    assert_eq!(execution.binding().task_id, 16);
+    assert_eq!(execution.binding().attempt, 3);
+    assert_eq!(execution.binding().native_session_id, "acp-m2-mock-session");
+    let outcome = execution.wait().await.expect("released ACP execution");
+    assert_eq!(outcome.result.task_id, 16);
+    assert!(outcome.result.summary.starts_with("mock-ok-"));
+    let _ = std::fs::remove_dir_all(&cwd);
+}
+
+#[tokio::test]
+async fn generic_adapter_cancel_waits_for_the_acp_cancel_boundary() {
+    let cwd = mock_cwd("generic-adapter-cancel");
+    let adapter = AcpRuntimeAdapter::new(valid_config(&cwd, "cancel-wait")).expect("adapter");
+    let mut execution = adapter
+        .start(
+            RuntimeExecutionRequest {
+                task: task_for(15),
+                attempt: 1,
+                agent_id: "worker".into(),
+            },
+            Arc::new(NoopRuntimeEventSink),
+        )
+        .await
+        .expect("ACP binding");
+    execution.cancel().await.expect("cancel confirmation");
+    let _ = std::fs::remove_dir_all(&cwd);
+}
+
+#[tokio::test]
+async fn generic_adapter_refuses_resume_when_the_typed_handshake_did_not_advertise_it() {
+    let cwd = mock_cwd("generic-adapter-resume-unsupported");
+    let adapter = AcpRuntimeAdapter::new(valid_config(&cwd, "sync")).expect("adapter");
+    let result = adapter
+        .resume(
+            RuntimeCheckpoint {
+                native_session_id: "acp-m2-mock-session".into(),
+            },
+            RuntimeExecutionRequest {
+                task: task_for(14),
+                attempt: 1,
+                agent_id: "worker".into(),
+            },
+            Arc::new(NoopRuntimeEventSink),
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(RuntimeError::UnsupportedCapability(_))
+    ));
+    let _ = std::fs::remove_dir_all(&cwd);
+}
+
+#[tokio::test]
+async fn generic_adapter_resumes_only_after_a_typed_resume_capability_handshake() {
+    let cwd = mock_cwd("generic-adapter-resume");
+    let adapter = AcpRuntimeAdapter::new(valid_config(&cwd, "resume")).expect("adapter");
+    let mut execution = adapter
+        .resume(
+            RuntimeCheckpoint {
+                native_session_id: "acp-m2-mock-session".into(),
+            },
+            RuntimeExecutionRequest {
+                task: task_for(13),
+                attempt: 2,
+                agent_id: "worker".into(),
+            },
+            Arc::new(NoopRuntimeEventSink),
+        )
+        .await
+        .expect("typed resume capability is advertised");
+    assert_eq!(execution.binding().attempt, 2);
+    let outcome = execution.wait().await.expect("same-session follow-up");
+    assert_eq!(outcome.result.task_id, 13);
+    assert!(outcome.result.summary.starts_with("mock-ok-"));
     let _ = std::fs::remove_dir_all(&cwd);
 }
 
@@ -189,16 +298,47 @@ async fn persisted_scheduler_driver_binds_foreign_session_before_returning_resul
     board.set_status(task_id, TaskStatus::Running).unwrap();
     drop(board);
     let driver =
-        PersistedAcpWorkerDriver::new(valid_config(&cwd, "sync"), database.clone(), "worker")
+        PersistedAcpWorkerDriver::new(valid_config(&cwd, "permission"), database.clone(), "worker")
             .unwrap();
     let result = driver.run_task(task_for(task_id)).await.unwrap();
     assert_eq!(result.task_id, task_id);
+    assert_eq!(result.summary, "permission-denied");
     let reopened = SqliteTaskBoard::open(Connection::open(&database).unwrap()).unwrap();
     let binding = reopened.external_binding(task_id, 1).unwrap().unwrap();
     assert_eq!(binding.agent_id, "worker");
     assert_eq!(binding.runtime_kind, "acp");
     assert_eq!(binding.lifecycle_state, "completed");
     assert!(binding.native_thread_id.is_some());
+    let extended = reopened
+        .external_binding_extended(task_id, 1)
+        .unwrap()
+        .expect("v12 binding metadata");
+    assert_eq!(extended.runtime_name.as_deref(), Some("acp-m2-mock"));
+    assert_eq!(extended.runtime_version.as_deref(), Some("1.0"));
+    assert_eq!(extended.protocol_kind.as_deref(), Some("acp"));
+    assert_eq!(extended.protocol_version.as_deref(), Some("1"));
+    assert!(extended.capabilities_json.is_some());
+    assert!(extended.started_at.is_some());
+    assert!(extended.finished_at.is_some());
+    let events = reopened.runtime_events(task_id, 1, 0, 100).unwrap();
+    assert!(events
+        .iter()
+        .any(|event| event.record.event.kind() == "session_started"));
+    assert!(events
+        .iter()
+        .any(|event| event.record.event.kind() == "assistant_message_completed"));
+    assert!(events
+        .iter()
+        .any(|event| event.record.event.kind() == "permission_requested"));
+    assert!(events.iter().any(|event| {
+        matches!(
+            event.record.event,
+            agentmosaic_team::RuntimeEvent::PermissionResolved {
+                decision: agentmosaic_team::RuntimePermissionDecision::Denied,
+                ..
+            }
+        )
+    }));
     let _ = std::fs::remove_dir_all(&cwd);
 }
 
@@ -258,6 +398,51 @@ async fn hang_is_mapped_to_timed_out() {
     }
     assert!(gone, "mock was not gone within the 2s post-timeout window");
 
+    let _ = std::fs::remove_dir_all(&cwd);
+}
+
+#[tokio::test]
+async fn slow_drip_does_not_extend_the_absolute_execution_deadline() {
+    let cwd = mock_cwd("slow-drip-deadline");
+    let mut cfg = valid_config(&cwd, "slow-drip");
+    cfg.timeout = Duration::from_millis(350);
+    let driver = AcpWorkerDriver::new(cfg).expect("bounded slow-drip driver");
+    let started = Instant::now();
+    let outcome = driver.run(&task_for(33)).await;
+    assert!(matches!(outcome, Err(AcpWorkerError::TimedOut)));
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "absolute deadline must not reset on each streamed chunk"
+    );
+    let _ = std::fs::remove_dir_all(&cwd);
+}
+
+#[tokio::test]
+async fn timeout_reaps_the_acp_wrapper_process_group_and_its_grandchild() {
+    let cwd = mock_cwd("wrapper-grandchild");
+    let grandchild_pid_file = cwd.join("grandchild.pid");
+    let mut cfg = valid_config(&cwd, "wrapper-hang");
+    cfg.args.extend([
+        "--grandchild-pid-file".into(),
+        grandchild_pid_file.display().to_string(),
+    ]);
+    cfg.timeout = Duration::from_millis(500);
+    let driver = AcpWorkerDriver::new(cfg).expect("bounded wrapper fixture");
+    assert!(matches!(
+        driver.run(&task_for(34)).await,
+        Err(AcpWorkerError::TimedOut)
+    ));
+
+    let pid =
+        std::fs::read_to_string(&grandchild_pid_file).expect("wrapper recorded grandchild pid");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while kill0(pid.trim()) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        !kill0(pid.trim()),
+        "ACP timeout left wrapper grandchild {pid} alive"
+    );
     let _ = std::fs::remove_dir_all(&cwd);
 }
 
