@@ -71,7 +71,7 @@ L2  bound_utf8(&payload.to_string(), budget)                     codex_lead.rs:3
     a byte cap on the whole serialized payload, applied last
 
 budget  = max_prompt_bytes - PROMPT_PREFIX.len() - PROMPT_SUFFIX.len() - 2
-        = 32,768 - 42 - 171 - 2 = 32,554                (defaults; team_runner.rs:52)
+        = 32,768 - 37 - 175 - 2 = 32,554                (defaults; team_runner.rs:52)
 ```
 
 `bound_utf8` is UTF-8-safe (it backs up to a character boundary) but is **not
@@ -82,9 +82,12 @@ Consequences:
 * Because the L1 divisor excludes candidates, message from/to ids, artifact
   digests, task ids and the envelope, `entries <= 7` does **not** prove that L2
   cannot trigger. The two bounds are independent.
-* `per_text` allocation begins decreasing at 8 entries (32,554 / 8 = 4,069, just
-  under the 4,096 ceiling) and reaches its 64-byte floor at 509+ entries. That is
-  a statement about L1 only: **the first whole-payload truncation point is not
+* `per_text` allocation begins decreasing at 8 entries (32,554 // 8 = 4,069, just
+  under the 4,096 ceiling).
+* At the floor, integer division already equals 64 at 507 and 508 entries
+  (32,554 // 507 = 64, 32,554 // 508 = 64); at 509 entries the division gives 63,
+  so the `clamp(64, ..)` lower bound starts doing the work. That is a statement
+  about L1 only: **the first whole-payload truncation point is not
   characterized**.
 
 ```text
@@ -93,17 +96,30 @@ WHOLE_PAYLOAD_TRUNCATION_CHARACTERIZED=false
 
 ## 4. L2 may produce structurally incomplete JSON (hypothesis, not a product defect)
 
-If L2 truncation ever fires, the rendered context can be a JSON prefix that no
-longer parses — the renderer has no structural fallback. That is a mechanical
-property of `bound_utf8` plus JSON serialization.
+The mechanism is certain, and it is mechanical rather than observed:
 
 ```text
-MALFORMED_JSON_MECHANICALLY_POSSIBLE = hypothesis (not yet demonstrated)
-MALFORMED_JSON_PRODUCT_REACHABLE     = not established
+payload is one complete top-level JSON object
+  -> serde_json::Value::to_string() emits a document that ends with its final `}`
+  -> if L2 fires, bound_utf8 returns a strict prefix of that string
+  -> a strict prefix cannot contain the final top-level closing brace
+  => L2 truncation implies the rendered context is not a complete JSON document
+```
+
+Consequences, kept strictly separate:
+
+```text
+L2_MECHANISM_CHARACTERIZED=true
+L2_TRUNCATION_IMPLIES_INVALID_JSON=true
+L2_ACTIVATION_BOUNDARY_CHARACTERIZED=false     (which case first reaches L2 is unmeasured)
+MALFORMED_JSON_PRODUCT_REACHABLE=unresolved    (no product-reachable case is established)
 ```
 
 Whether any current product-reachable state can actually reach that point is an
-S1 question and is **not** answered here. No fix is proposed in this document.
+S1 question and is **not** answered here. `L2_TRUNCATION_IMPLIES_INVALID_JSON`
+is a statement about the renderer's mechanism; it is **not** a claim that the
+current product can reach it, and it is not a product bug claim. No fix is
+proposed in this document.
 
 ## 5. Case-study byte shares
 
@@ -266,7 +282,9 @@ TOKEN_COUNT_MEASURED=false
 L1_BOUND_CHARACTERIZED=true
 L2_BOUND_CHARACTERIZED=true
 WHOLE_PAYLOAD_TRUNCATION_CHARACTERIZED=false
-MALFORMED_JSON_MECHANICALLY_POSSIBLE=hypothesis
+L2_MECHANISM_CHARACTERIZED=true
+L2_ACTIVATION_BOUNDARY_CHARACTERIZED=false
+L2_TRUNCATION_IMPLIES_INVALID_JSON=true
 MALFORMED_JSON_PRODUCT_REACHABLE=unresolved
 
 REAL_RUN_CASE_STUDY=true
