@@ -11,6 +11,7 @@ use agentmosaic_team::{
 };
 use async_trait::async_trait;
 use rusqlite::Connection;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -171,6 +172,29 @@ impl PersistedCodexExecDriver {
             .collect()
     }
 
+    /// The worker result is intentionally narrower than a free-form model
+    /// reply.  `--output-schema` asks Codex for this shape, while this parser
+    /// is the authoritative backstop: a non-conforming peer can never become
+    /// a successful scheduler result merely because it emitted valid JSONL.
+    fn structured_summary(message: &str) -> Result<String, String> {
+        let value: Value = serde_json::from_str(message)
+            .map_err(|error| format!("Codex exec final result must be JSON: {error}"))?;
+        let Value::Object(fields) = value else {
+            return Err("Codex exec final result must be a JSON object".into());
+        };
+        if fields.len() != 1 || !fields.contains_key("summary") {
+            return Err("Codex exec final result must contain exactly `summary`".into());
+        }
+        let summary = fields
+            .get("summary")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "Codex exec final result `summary` must be a string".to_string())?;
+        if summary.trim().is_empty() {
+            return Err("Codex exec final result `summary` must not be empty".into());
+        }
+        Ok(summary.into())
+    }
+
     fn run_blocking(&self, task: AgentTask) -> Result<AgentTaskResult, String> {
         let attempt = self.current_attempt(task.id)?;
         let existing = self
@@ -229,7 +253,7 @@ impl PersistedCodexExecDriver {
                 self.binding(task.id, attempt, result.thread_id, "completed")?;
                 Ok(AgentTaskResult {
                     task_id: task.id,
-                    summary: result.final_message,
+                    summary: Self::structured_summary(&result.final_message)?,
                     artifacts: self.collect_artifacts()?,
                     message: None,
                 })
@@ -242,6 +266,31 @@ impl PersistedCodexExecDriver {
                 }
                 Err(error.to_string())
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PersistedCodexExecDriver;
+
+    #[test]
+    fn worker_final_result_is_exactly_one_nonempty_summary() {
+        assert_eq!(
+            PersistedCodexExecDriver::structured_summary(r#"{"summary":"done"}"#).unwrap(),
+            "done"
+        );
+        for invalid in [
+            "done",
+            "[]",
+            r#"{"summary":""}"#,
+            r#"{"summary":1}"#,
+            r#"{"summary":"done","extra":true}"#,
+        ] {
+            assert!(
+                PersistedCodexExecDriver::structured_summary(invalid).is_err(),
+                "accepted {invalid}"
+            );
         }
     }
 }

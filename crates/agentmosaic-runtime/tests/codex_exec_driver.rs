@@ -49,7 +49,7 @@ async fn persists_thread_binding_and_normalized_events() {
             // `exec --json` argv, making this a deterministic JSONL fixture.
             args: vec![
                 "-c".into(),
-                "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"thread-1\"}' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"finished\"}}'"
+                "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"thread-1\"}' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"summary\\\":\\\"finished\\\"}\"}}'"
                     .into(),
             ],
             working_directory: root.clone(),
