@@ -13,8 +13,9 @@ continues the reasoning, with no manual copy/paste between Agents.
 Communication, scheduling, recovery and safety boundaries are supporting mechanics that
 let several Agents finish work. They are not the product.
 
-The native Rust Coding Agent is the execution engine for model-backed Agents. External
-Agents (Codex/Claude-style CLIs) plug in through drivers.
+AgentMosaic does not implement a model client or a tool loop of its own. Every Agent
+executes inside an external runtime (a Codex CLI, a Claude CLI or any ACP peer) reached
+through a registered runtime adapter; AgentMosaic owns the durable team layer around it.
 
 ## Identity
 
@@ -23,11 +24,11 @@ Brand              AgentMosaic / AM
 Public CLI         am
 Cargo prefix       agentmosaic-
 Rust import prefix agentmosaic_
-Codex helper       am-codex-mcp
+Internal bridge    am __internal codex-mcp (not a separate binary)
 Config namespace   agentmosaic
 Env prefix         AGENTMOSAIC_
-Development       0.2.0-dev
-SQLite schema      11
+Development       0.5.0-dev
+SQLite schema      12
 ```
 
 The only first-class user command is `am`. Do not reintroduce retired names or aliases
@@ -51,9 +52,10 @@ are not the product.
 
 ## Engineering guards that remain
 
-Path containment, command timeout, process-group termination, output truncation, atomic
-writes, file hashes, Git checkpoints and crash recovery stay. They make a Coding Agent
-reliable. They are runtime mechanics, not a control-plane product.
+The runtime adapters keep the guards that make an external Agent safe to supervise:
+absolute deadlines, process-group termination with reaping, bounded output, artifact
+path containment and file hashes. The board keeps crash recovery and no-replay
+settlement. They are runtime mechanics, not a control-plane product.
 
 ## Rust workspace
 
@@ -62,24 +64,17 @@ A Cargo workspace of small crates:
 ```text
 Cargo.toml
 crates/
-  agentmosaic-core/       # session state machine, Agent loop, events, recovery
-  agentmosaic-model/      # async model client (OpenAI-compatible HTTP first)
-  agentmosaic-tools/      # the five atomic tools
-  agentmosaic-workspace/  # project rules, Git worktree/checkpoint, path handling, diff/rollback
-  agentmosaic-context/    # context budget, truncation, compaction, repository map
-  agentmosaic-storage/    # small SQLite journal
-  agentmosaic-runtime/    # native Agent loop, external drivers (Codex app-server/ACP), product TeamRunner
+  agentmosaic-storage/    # SQLite task board, agent registry, runtime events, schema migration
+  agentmosaic-runtime/    # external runtime adapters (ACP, Codex, Claude), Lead brains, TeamRunner
   agentmosaic-team/       # Agent registry, lead, task board, scheduling, result flow
   agentmosaic-tui/        # ratatui/crossterm read-only board view
   agentmosaic-cli/        # the public `am` command
 ```
 
-Five atomic tools: `view_file`, `edit_file`, `write_file`, `search_dir`,
-`execute_command`. `execute_command` uses structured `program + argv + cwd + timeout +
-env` by default. `edit_file` uses exact unique matching, an expected file hash, and only
-limited line-ending/trailing-whitespace normalization.
+The workspace holds the durable team layer and the adapters for those external runtimes;
+it holds no Agent implementation of its own.
 
-Do not rename persisted data or protocol identifiers: SQLite schema stays v11, and
+Do not rename persisted data or protocol identifiers: SQLite schema stays v12, and
 task/result/artifact/final-reference semantics, `TaskKind` and `DriverKind` wire strings,
 and Lead decision JSON fields are stable.
 

@@ -146,6 +146,15 @@ fn authentic_v8_database_migrates_to_current_and_preserves_rows() {
             "acc_events",
             "external_runtime_bindings",
             "runtime_collaboration_records",
+            // Historical native representation: the retired session
+            // implementation no longer reads or writes these, but an old
+            // database must keep them and keep migrating.
+            "sessions",
+            "agent_turns",
+            "tool_calls",
+            "checkpoints",
+            "transitions",
+            "observations",
         ] {
             assert!(
                 table_exists(&conn, table),

@@ -1,15 +1,12 @@
 [package]
 name = "agentmosaic-storage"
-description = "Small SQLite journal for durable Agent state"
+description = "SQLite task board, agent registry, runtime events and schema migration"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
 [dependencies]
-agentmosaic-context = { path = "../agentmosaic-context" }
-agentmosaic-core = { path = "../agentmosaic-core" }
-agentmosaic-model = { path = "../agentmosaic-model" }
 agentmosaic-team = { path = "../agentmosaic-team" }
 rusqlite.workspace = true
 serde_json.workspace = true

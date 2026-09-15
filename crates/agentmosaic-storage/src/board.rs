@@ -8,8 +8,15 @@ use agentmosaic_team::{
 use rusqlite::{params, Connection, Row, TransactionBehavior};
 use std::time::Duration;
 
-use crate::journal::now;
 use crate::schema::{migrate, SCHEMA};
+
+/// Seconds since the Unix epoch, the durable timestamp form this board writes.
+fn now() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs().to_string())
+        .unwrap_or_default()
+}
 
 /// Product reads are always bounded even when a caller supplies a larger
 /// value. Follow-mode callers page with `after_sequence`.
