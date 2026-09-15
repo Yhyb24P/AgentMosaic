@@ -73,7 +73,7 @@ manual_agent_to_agent_copy_paste=false
 ## Compatibility
 
 ```text
-codex_app_server_compat=PASS (G2 deterministic product path)
+codex_app_server_compat=PASS (G2 deterministic product path plus real authenticated Lead planning and durable utility follow-up probe, 2026-09-15)
 v0.3_release_untouched=PASS (local annotated tag object `0560f388c976a2a1318fd7c923e14e410d04997c`, targeting `fb8cc9080584ed2687576fba406a4cff6dbbce2c`, matches the v0.3 audit)
 old_driver_strings_restorable=PASS (registry round-trip test covers native, acp, cli, codex-app-server, codex-exec, and claude-cli)
 ```
