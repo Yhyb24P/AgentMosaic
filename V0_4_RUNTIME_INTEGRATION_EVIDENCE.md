@@ -32,8 +32,8 @@ codex_exec_runtime=PARTIAL (durable driver, JSONL normalization, bounded process
 codex_exec_lead=PARTIAL (strict shared decision contract; root running-attempt binding is persisted on thread.started and restored across a new Lead instance via exec resume; one same-thread repair and deterministic fixtures pass; strict output-schema/live probe remain)
 claude_cli_runtime=PARTIAL (verified stream-json argv, bounded JSONL supervisor, durable worker driver, session binding/resume, CLI registration, and non-invasive doctor probe)
 claude_cli_lead=NOT_SUPPORTED (worker runtime is intentionally not accepted as a Lead until a strict structured decision contract is implemented and tested)
-cli_observability=IN_PROGRESS
-tui_observability=IN_PROGRESS
+cli_observability=PARTIAL (`am events <TASK_OR_RUN> [--json]` replays privacy-filtered durable observations; follow handoff remains)
+tui_observability=PARTIAL (read-only board projects recent normalized runtime observations without foreign identifiers; richer task detail remains)
 recovery_no_replay=IN_PROGRESS
 ```
 

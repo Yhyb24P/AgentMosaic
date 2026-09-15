@@ -418,7 +418,7 @@ mod tests {
             launch: LaunchSpec::new("sh", Vec::new()).unwrap(),
             args: vec![
                 "-c".into(),
-                "printf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"session-1\"}' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}'"
+                "cat >/dev/null; printf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"session-1\"}' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}'"
                     .into(),
             ],
         };
