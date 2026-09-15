@@ -51,7 +51,7 @@ diff_check=PASS (full workspace canonical gate after lifecycle and observability
 
 | Agent | Executable | Version | Adapter | Protocol | Probe | Event conformance | Resume | Cancel | Notes |
 |---|---|---|---|---|---|---|---|---|---|
-| Codex | `/home/yhshy/.local/bin/codex` | 0.154.0 | codex-exec | JSONL | PASS (logged-in local app-server interrupt and read-only `exec --json` probes, 2026-09-15) | PARTIAL (real exec emitted thread.started, assistant message, and usage; deterministic normalizer/driver coverage) | pending | PARTIAL (real app-server interrupt boundary passed) | exact exec contract pin; full driver/Lead live run remains pending |
+| Codex | `/home/yhshy/.local/bin/codex` | 0.154.0 | codex-exec | JSONL | PASS (logged-in local app-server interrupt and read-only `exec --json` probes, 2026-09-15) | PARTIAL (real exec emitted thread.started, assistant message, and usage; deterministic normalizer/driver coverage) | PASS (same foreign thread successfully resumed through real `exec resume --json`) | PARTIAL (real app-server interrupt boundary passed) | exact exec contract pin; full driver/Lead live run remains pending |
 | Qwen | `/home/yhshy/.npm-global/bin/qwen` | 0.23.4 | acp | v1 | pending | pending | pending | pending | installed version matches research reference; authentication/probe pending |
 | Kimi | `/home/yhshy/.local/bin/kimi` | 0.42.0 | acp | v1 | pending | pending | pending | pending | installed version below research reference |
 | OpenCode | `/home/yhshy/.opencode/bin/opencode` | 1.18.7 | acp | v1 | pending | pending | pending | pending | installed version below research reference |
