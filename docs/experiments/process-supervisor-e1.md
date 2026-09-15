@@ -100,7 +100,7 @@ vendor semantics in the helper 0     (PASS: no vendor name, RuntimeEvent, id, pa
 | Claude deterministic parity | PASS — same run |
 | process-tree regressions | PASS — both grandchild reap regressions green under the extraction (and proven meaningful by NC1) |
 | absolute-deadline regressions | PASS — both streamed-output deadline regressions green (and proven meaningful by NC2) |
-| error/diagnostic parity (M5) | PASS at class level: failure variants and the attachment rule were preserved verbatim in the family mapping; the existing suite covers the TimedOut-vs-Protocol classes. There is still no dedicated test that asserts stderr *attachment*, so this is the weakest link in the table and is listed as a follow-up |
+| error/diagnostic parity (M5) | **PARTIAL.** Verified: `RuntimeError` class parity, `TimedOut`-vs-`Protocol` parity, and the family mapping/attachment rule preserved verbatim. Not independently characterized: stderr *attachment* behavior has no dedicated test |
 | Codex real probe parity (M4-E1) | PASS — real `codex exec` turn through the driver: ok before (`565657c`) and ok after the extraction (thread binding persisted, `session_started` event, bounded result) |
 | Claude real probe parity (M4-E1) | PASS — real Claude turn: ok before and ok after |
 | M1 duplicated mechanics reduction >= 60% | PASS — 63.0% |
@@ -125,6 +125,14 @@ what a line means), so each family needs a small failure-mapping function and a
 diagnostic-attachment rule. The module plus that surface is larger than the one
 copy it removes. The duplication is real, but it is cheaper than the
 boundary-compliant abstraction that would remove it.
+
+Stated precisely, so the record is not read as a general impossibility result:
+
+```text
+The tested boundary-compliant extraction costs more than the duplication it
+removes; under the frozen E1 contract there is no evidence to replace the
+family-local supervisors.
+```
 
 ## What landed, and what did not
 
@@ -154,7 +162,21 @@ Not attempted: E2 (codex app-server), E3 (ACP), E4 — all unauthorized.
    hypothesis entirely.
 ```
 
-## Evidence
+The decision taken on this review is **3**, and the line is closed:
+
+```text
+PROCESS_SUPERVISOR_LINE_CLOSED=true
+```
+
+A smaller primitive would keep most of the deadline-loop duplication (plausibly
+trading a passing M1 for a better M6), neutral wording would change
+user-visible diagnostics for the sake of the abstraction, app-server adds a
+per-request budget and a Drop-owned lifecycle, and ACP's lifecycle and
+peer-confirmed cancel belong to the SDK. The line reopens only if a new external
+runtime makes the same skeleton three or more copies, which would change the
+economics.
+
+## Local raw evidence (ephemeral; not part of the repository)
 
 ```text
 raw evidence dir              /tmp/am-ps-e1
@@ -168,6 +190,10 @@ final state gates             e1-gates.txt (identity, fmt, clippy, workspace tes
                               369 passed / 0 failed / 25 ignored, release build, diff-check)
 ```
 
+These files are local scratch evidence, not a durable project artifact. The
+merged repository retains the summarized measurements and conclusions above; a
+machine that no longer has the directory loses the raw logs, not the result.
+
 ## Status
 
 ```text
@@ -175,6 +201,7 @@ E0_COMPLETE=true
 E1_COMPLETE=true
 E1_PROCEED=false
 KEEP_FAMILY_LOCAL_SUPERVISORS=true
+PROCESS_SUPERVISOR_LINE_CLOSED=true
 E2_AUTHORIZED=false
 E3_AUTHORIZED=false
 E4_AUTHORIZED=false
