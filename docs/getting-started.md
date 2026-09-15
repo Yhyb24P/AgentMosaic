@@ -43,9 +43,10 @@ must remain valid when AgentMosaic appends `app-server --stdio`. Named Codex pro
 not currently a portable app-server configuration mechanism; use app-server-compatible
 `-c` overrides, or a wrapper that expands to them.
 
-`--adapter` accepts `acp` or `codex-app-server`. A `utility` Agent is registered the same
-way with `--role utility`. `am agent list` prints the registry as a role-first table
-(`--json` for one object), and `am agent remove <id>` removes one Agent.
+`--adapter` accepts `acp`, `codex-app-server`, `codex-exec` or `claude-cli`. A `utility`
+Agent is registered the same way with `--role utility`. `am agent list` prints the
+registry as a role-first table (`--json` for one object), and `am agent remove <id>`
+removes one Agent.
 
 `--max-events N` is an advanced tuning option for high-event Codex backends: it is
 accepted by `--adapter codex-app-server` only, and the default is unchanged.
