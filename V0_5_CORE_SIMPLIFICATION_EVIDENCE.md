@@ -212,6 +212,16 @@ the S2 evidence. The commit that adds this CI block changes documentation only;
 the same three workflows were required to run green on it as well, and no code
 changed after `verified_head`.
 
+Closeout head (the review follow-up commit that reconciled AGENTS.md, the test
+ledger, the manifest hygiene and the development version):
+
+```text
+closeout_head=4fcc03aaaaecbe1ebf11599e9d79534fa3bdb905
+rust          run 35014099843  success  4fcc03aaaaecbe1ebf11599e9d79534fa3bdb905
+rust-quality  run 35014099807  success  4fcc03aaaaecbe1ebf11599e9d79534fa3bdb905
+Release/plan  run 35014099796  success  4fcc03aaaaecbe1ebf11599e9d79534fa3bdb905
+```
+
 ## Review closeout (external cross-review follow-up)
 
 An external cross-review accepted the subtraction result but flagged two
@@ -279,4 +289,16 @@ PR_IMPLEMENTATION_READY=true
 
 PR_MERGED=false
 V0_5_RELEASE_CREATED=false
+```
+
+Review-derived release status (after the closeout commit above):
+
+```text
+PR16_TECHNICAL_IMPLEMENTATION=PASS
+ACTIVE_CONTRACT_COHERENCE=PASS   (AGENTS.md reconciled; identity gate still cannot check it)
+EVIDENCE_LEDGER_VALIDITY=PASS    (25 records x 6 columns, csv.reader clean)
+MANIFEST_HYGIENE=PASS            (four unused workspace deps removed; storage description corrected)
+DEVELOPMENT_VERSION=0.5.0-dev
+PR16_READY_FOR_REVIEW=true       (exact-head workflows green on the closeout head)
+PR16_READY_TO_MERGE=false        (converting from Draft is a separate, user-authorized action)
 ```
