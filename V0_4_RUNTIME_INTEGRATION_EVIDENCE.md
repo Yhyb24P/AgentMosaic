@@ -40,11 +40,11 @@ recovery_no_replay=PARTIAL (TeamRunner interrupted-descendant recovery and succe
 ## Deterministic tests
 
 ```text
-fmt=PASS (full workspace canonical gate after the retained live-TeamRunner receipt)
-clippy=PASS (full workspace canonical gate after the retained live-TeamRunner receipt)
-test=PASS (full workspace canonical gate after the retained live-TeamRunner receipt; authenticated live cases intentionally ignored there and are recorded separately below)
-release_build=PASS (full workspace canonical gate after the retained live-TeamRunner receipt)
-diff_check=PASS (full workspace canonical gate after the retained live-TeamRunner receipt)
+fmt=PASS (full workspace canonical gate after Exec Lead contract and observability work)
+clippy=PASS (full workspace canonical gate after Exec Lead contract and observability work)
+test=PASS (full workspace canonical gate after Exec Lead contract and observability work; authenticated live cases intentionally ignored there and are recorded separately below)
+release_build=PASS (full workspace canonical gate after Exec Lead contract and observability work)
+diff_check=PASS (full workspace canonical gate after Exec Lead contract and observability work)
 ```
 
 ## Runtime matrix
