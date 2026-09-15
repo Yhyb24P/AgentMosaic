@@ -52,7 +52,7 @@ diff_check=PASS (full workspace canonical gate after lifecycle and observability
 | Agent | Executable | Version | Adapter | Protocol | Probe | Event conformance | Resume | Cancel | Notes |
 |---|---|---|---|---|---|---|---|---|---|
 | Codex | `/home/yhshy/.local/bin/codex` | 0.154.0 | codex-exec | JSONL | PASS (logged-in local app-server interrupt and read-only `exec --json` probes, 2026-09-15) | PARTIAL (real exec emitted thread.started, assistant message, and usage; deterministic normalizer/driver coverage) | PASS (same foreign thread successfully resumed through real `exec resume --json`) | PARTIAL (real app-server interrupt boundary passed) | exact exec contract pin; full driver/Lead live run remains pending |
-| Qwen | `/home/yhshy/.npm-global/bin/qwen` | 0.23.4 | acp | v1 | PASS (real bounded scheduler ACP task, 2026-09-15) | PARTIAL (real worker result/artifact/binding plus deterministic ACP v1 mapping suite) | PARTIAL (deterministic capability-gated resume) | PARTIAL (deterministic cancel/process-tree suite) | installed version matches research reference; real fixture cleans its temporary DB after assertions |
+| Qwen | `/home/yhshy/.npm-global/bin/qwen` | 0.23.4 | acp | v1 | PASS (real TeamRunner worker and utility tasks, 2026-09-15) | PARTIAL (real worker result/artifact/binding plus deterministic ACP v1 mapping suite) | PARTIAL (deterministic capability-gated resume) | PARTIAL (deterministic cancel/process-tree suite) | installed version matches research reference; successful TeamRunner receipt retains only non-secret assertions |
 | Kimi | `/home/yhshy/.local/bin/kimi` | 0.42.0 | acp | v1 | pending | pending | pending | pending | installed version below research reference |
 | OpenCode | `/home/yhshy/.opencode/bin/opencode` | 1.18.7 | acp | v1 | pending | pending | pending | pending | installed version below research reference |
 | Claude | `/home/yhshy/.local/bin/claude` | 2.1.268 | claude-cli | stream-json | PASS (real bare/dontAsk read-only stream probe, 2026-09-15) | PARTIAL (real init, nested text/thinking frames, assistant/result, usage/cost; deterministic permission/topology and durable-worker SQLite tests) | PASS (same foreign session successfully resumed through real bare/dontAsk `--resume`) | NOT_SUPPORTED | verified `--bare -p --output-format stream-json --verbose --include-partial-messages --json-schema --resume --permission-mode --permission-prompts none`; real probe confirmed thinking is observed but not persisted |
@@ -60,12 +60,12 @@ diff_check=PASS (full workspace canonical gate after lifecycle and observability
 ## Heterogeneous E2E
 
 ```text
-lead=Codex app-server (real bounded scheduler fixture)
-workers=Qwen ACP + deterministic utility (real bounded scheduler fixture)
-root_task_id=not retained (fixture intentionally removes its temporary SQLite DB after final assertions)
-delegated_task_ids=not retained (same ephemeral fixture)
-artifact_refs=PASS (real Qwen worker artifact and persisted final reference asserted before cleanup)
-restart_final_reconstruction=PARTIAL (real interrupted utility recovery/resume asserted; full TeamRunner final reconstruction pending)
+lead=Codex app-server (real public `am run-team` product entrypoint)
+workers=Qwen ACP worker + Qwen ACP utility (both real local processes; no manual copy/paste)
+root_task_id=1 (successful real run on 2026-09-15; non-secret receipt retained)
+delegated_task_ids=2 (worker), 3 (utility), both succeeded as root children
+artifact_refs=PASS (worker task 2 selected `worker.txt`; SHA-256 `54aaa002d6b8b1d91535bc3a058e739f0dba4d3c889e3418bfde1f2cc76539ba` matched the written file)
+restart_final_reconstruction=PASS (fresh `am final` and fresh `am resume-team` reproduced the answer and exact task/artifact refs)
 runtime_event_replay=pending
 manual_agent_to_agent_copy_paste=false
 ```
