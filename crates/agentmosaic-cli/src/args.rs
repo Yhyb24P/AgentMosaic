@@ -247,7 +247,7 @@ pub enum AgentCommand {
         /// Agent role: reasoner, worker, or utility
         #[arg(long, value_name = "ROLE")]
         role: String,
-        /// Adapter kind: acp or codex-app-server
+        /// Adapter kind: acp, codex-app-server, codex-exec, or claude-cli
         #[arg(long, value_name = "KIND")]
         adapter: String,
         /// Display name (defaults to the id)
