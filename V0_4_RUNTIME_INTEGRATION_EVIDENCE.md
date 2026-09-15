@@ -30,8 +30,8 @@ absolute_deadline=IN_PROGRESS
 process_tree_cleanup=IN_PROGRESS
 codex_exec_runtime=PARTIAL (durable driver, JSONL normalization, bounded process group, thread binding, resume argv, and deterministic scheduler test)
 codex_exec_lead=PARTIAL (strict shared decision contract; root running-attempt binding is persisted on thread.started and restored across a new Lead instance via exec resume; one same-thread repair and deterministic fixtures pass; strict output-schema/live probe remain)
-claude_cli_runtime=IN_PROGRESS
-claude_cli_lead=IN_PROGRESS
+claude_cli_runtime=PARTIAL (verified stream-json argv, bounded JSONL supervisor, durable worker driver, session binding/resume, CLI registration, and non-invasive doctor probe)
+claude_cli_lead=NOT_SUPPORTED (worker runtime is intentionally not accepted as a Lead until a strict structured decision contract is implemented and tested)
 cli_observability=IN_PROGRESS
 tui_observability=IN_PROGRESS
 recovery_no_replay=IN_PROGRESS
@@ -40,11 +40,11 @@ recovery_no_replay=IN_PROGRESS
 ## Deterministic tests
 
 ```text
-fmt=PASS (full workspace canonical gate after Codex exec work)
-clippy=PASS (full workspace canonical gate after Codex exec work)
-test=PASS (full workspace canonical gate after Codex exec work; authenticated live cases intentionally ignored)
-release_build=PASS (full workspace canonical gate after Codex exec work)
-diff_check=PASS (full workspace canonical gate after Codex exec work)
+fmt=PASS (full workspace canonical gate after Claude worker-driver work)
+clippy=PASS (full workspace canonical gate after Claude worker-driver work)
+test=PASS (full workspace canonical gate after Claude worker-driver work; authenticated live cases intentionally ignored)
+release_build=PASS (full workspace canonical gate after Claude worker-driver work)
+diff_check=PASS (full workspace canonical gate after Claude worker-driver work)
 ```
 
 ## Runtime matrix
@@ -55,7 +55,7 @@ diff_check=PASS (full workspace canonical gate after Codex exec work)
 | Qwen | `/home/yhshy/.npm-global/bin/qwen` | 0.23.3 | acp | v1 | pending | pending | pending | pending | installed version below research reference |
 | Kimi | `/home/yhshy/.local/bin/kimi` | 0.42.0 | acp | v1 | pending | pending | pending | pending | installed version below research reference |
 | OpenCode | `/home/yhshy/.opencode/bin/opencode` | 1.18.7 | acp | v1 | pending | pending | pending | pending | installed version below research reference |
-| Claude | `/home/yhshy/.local/bin/claude` | 2.1.268 | claude-cli | stream-json | PASS (2026-09-15 version/help probe) | pending | pending | pending | verified `--bare -p --output-format stream-json --verbose --include-partial-messages --json-schema --resume --permission-mode --permission-prompts none`; no live prompt sent |
+| Claude | `/home/yhshy/.local/bin/claude` | 2.1.268 | claude-cli | stream-json | PASS (2026-09-15 version/help probe) | PARTIAL (deterministic supervisor and durable-worker tests) | pending | NOT_SUPPORTED | verified `--bare -p --output-format stream-json --verbose --include-partial-messages --json-schema --resume --permission-mode --permission-prompts none`; no live prompt sent |
 
 ## Heterogeneous E2E
 
