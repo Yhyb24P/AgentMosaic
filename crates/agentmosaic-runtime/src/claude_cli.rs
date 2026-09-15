@@ -109,6 +109,12 @@ pub struct ClaudeCliInvocation {
 }
 
 impl ClaudeCliInvocation {
+    /// Apply the already-tokenized invocation to a process command. This is
+    /// the sole shell-free bridge used by the future supervisor.
+    pub fn apply_to(&self, command: &mut std::process::Command) {
+        command.args(&self.args);
+    }
+
     /// Create a fresh isolated non-interactive session. Prompt text is passed
     /// over stdin, never in argv.
     pub fn start(launch: LaunchSpec, json_schema: Option<&str>) -> Self {
@@ -177,6 +183,9 @@ mod tests {
             .windows(2)
             .any(|part| part == ["--resume", "session-1"]));
         assert!(invocation.args.contains(&"--bare".into()));
+        let mut command = std::process::Command::new(&invocation.launch.program);
+        invocation.apply_to(&mut command);
+        assert_eq!(command.get_args().count(), invocation.args.len());
         assert!(ClaudeCliInvocation::resume(
             LaunchSpec::new("claude", Vec::new()).unwrap(),
             " ",
