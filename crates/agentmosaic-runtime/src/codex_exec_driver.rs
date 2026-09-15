@@ -1,6 +1,9 @@
 //! Scheduler-facing durable driver for `codex exec --json`.
 
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,6 +21,8 @@ use crate::{
     run_codex_exec_invocation, CodexExecInvocation, NoopLiveRuntimeEventSink, RuntimeError,
     RuntimeEventDispatcher, SqliteRuntimeEventWriter,
 };
+
+static SCHEMA_NONCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
 pub struct CodexExecDriverConfig {
@@ -41,13 +46,11 @@ impl CodexExecDriverConfig {
         if self.timeout.is_zero() || self.max_prompt_bytes == 0 || self.max_result_bytes == 0 {
             return Err("Codex exec bounds must be positive".into());
         }
-        if let Some(schema) = &self.output_schema {
-            if !std::fs::metadata(schema)
-                .map_err(|error| error.to_string())?
-                .is_file()
-            {
-                return Err("Codex exec output_schema must name a regular file".into());
-            }
+        if self.output_schema.is_some() {
+            return Err(
+                "Codex exec output_schema is managed by the runtime and must not be configured"
+                    .into(),
+            );
         }
         for relative in &self.artifact_paths {
             let path = Path::new(relative);
@@ -64,6 +67,47 @@ impl CodexExecDriverConfig {
             }
         }
         Ok(())
+    }
+}
+
+/// A private, one-invocation schema. It makes the CLI enforce the same result
+/// contract that `structured_summary` validates, while Drop removes it even on
+/// protocol failure or timeout.
+struct WorkerResultSchema(PathBuf);
+
+impl WorkerResultSchema {
+    fn create(directory: &Path, task: u64, attempt: u32, max_bytes: usize) -> Result<Self, String> {
+        let nonce = SCHEMA_NONCE.fetch_add(1, Ordering::Relaxed);
+        let path = directory.join(format!(
+            ".agentmosaic-codex-worker-schema-{}-{}-{}-{}.json",
+            std::process::id(),
+            task,
+            attempt,
+            nonce
+        ));
+        let body = format!(
+            r#"{{"type":"object","additionalProperties":false,"required":["summary"],"properties":{{"summary":{{"type":"string","minLength":1,"maxLength":{max_bytes}}}}}}}"#
+        );
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|error| format!("create Codex worker schema: {error}"))?;
+        file.write_all(body.as_bytes())
+            .map_err(|error| format!("write Codex worker schema: {error}"))?;
+        Ok(Self(path))
+    }
+
+    fn path(&self) -> Result<&str, String> {
+        self.0
+            .to_str()
+            .ok_or_else(|| "Codex worker schema path is not UTF-8".into())
+    }
+}
+
+impl Drop for WorkerResultSchema {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
     }
 }
 
@@ -201,17 +245,24 @@ impl PersistedCodexExecDriver {
             .board()?
             .external_binding(task.id, attempt)
             .map_err(|error| error.to_string())?;
+        let schema = WorkerResultSchema::create(
+            &self.config.working_directory,
+            task.id,
+            attempt,
+            self.config.max_result_bytes,
+        )?;
+        let schema_path = schema.path()?;
         let launch = crate::LaunchSpec::new(self.config.command.clone(), self.config.args.clone())?;
         let invocation = match existing.and_then(|binding| binding.native_thread_id) {
             Some(thread_id) => CodexExecInvocation::resume(
                 launch,
                 &thread_id,
-                self.config.output_schema.as_deref(),
+                Some(schema_path),
                 self.config.isolate,
             ),
             None => Ok(CodexExecInvocation::start(
                 launch,
-                self.config.output_schema.as_deref(),
+                Some(schema_path),
                 self.config.isolate,
             )),
         }
@@ -270,6 +321,13 @@ impl PersistedCodexExecDriver {
     }
 }
 
+#[async_trait]
+impl AgentDriver for PersistedCodexExecDriver {
+    async fn run_task(&self, task: AgentTask) -> Result<AgentTaskResult, String> {
+        self.run_blocking(task)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::PersistedCodexExecDriver;
@@ -292,12 +350,5 @@ mod tests {
                 "accepted {invalid}"
             );
         }
-    }
-}
-
-#[async_trait]
-impl AgentDriver for PersistedCodexExecDriver {
-    async fn run_task(&self, task: AgentTask) -> Result<AgentTaskResult, String> {
-        self.run_blocking(task)
     }
 }
