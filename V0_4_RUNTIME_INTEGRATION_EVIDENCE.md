@@ -13,7 +13,7 @@ changed after `end_sha`.
 ```text
 branch=feat/v0.4-runtime-integration
 start_sha=c90ec9560f80cc8f956057e686fd20d96efb93a4
-end_sha=c7dbe480355bbfc50029b625f9a5264ccb81cf6c
+end_sha=32dddcc933dadd921495dda08fc2b4e172654e39
 base_main=c90ec9560f80cc8f956057e686fd20d96efb93a4
 workspace_version=0.4.0-dev
 schema_version=12
@@ -22,8 +22,17 @@ dirty_state_preserved=true (every worktree was clean before each edit)
 
 ## Remote CI
 
-Exact head `c7dbe480355bbfc50029b625f9a5264ccb81cf6c` (all PR-triggered
+Exact head `32dddcc933dadd921495dda08fc2b4e172654e39` (all PR-triggered
 workflows, queried with `gh run view --json headSha,conclusion`):
+
+```text
+rust          run 35002084208  success  32dddcc933dadd921495dda08fc2b4e172654e39
+rust-quality  run 35002084245  success  32dddcc933dadd921495dda08fc2b4e172654e39
+Release/plan  run 35002084213  success  32dddcc933dadd921495dda08fc2b4e172654e39
+```
+
+Earlier checkpoint on `c7dbe48` (same green set, before the two streaming
+deadline regressions were added):
 
 ```text
 rust          run 35000927350  success  c7dbe480355bbfc50029b625f9a5264ccb81cf6c
@@ -78,15 +87,19 @@ f30ea52  Codex exec and Claude deadlines killed the direct child but nothing
          proved the whole process group was reaped. Each family now has a
          deterministic grandchild regression; removing group termination makes
          the Codex exec case fail with the surviving grandchild pid.
+32dddcc  Slow-drip deadline coverage existed only for ACP. Codex exec and Claude
+         now stream a frame every 100ms under a 350ms budget and must still time
+         out inside the window; sliding the deadline per event makes the Codex
+         exec case run the whole stream and fail.
 ```
 
-## Canonical local gates (on `c7dbe48`)
+## Canonical local gates (on `32dddcc`)
 
 ```text
 identity=      PASS (scripts/ci/check_identity.sh)
 fmt=           PASS (cargo fmt --all -- --check)
 clippy=        PASS (cargo clippy --workspace --all-targets --all-features -- -D warnings)
-tests=         PASS (cargo test --workspace --all-features: 480 passed, 0 failed, 24 ignored live cases recorded separately)
+tests=         PASS (cargo test --workspace --all-features: 482 passed, 0 failed, 24 ignored live cases recorded separately)
 release_build= PASS (cargo build --release --workspace)
 diff_check=    PASS (git diff --check)
 ```
@@ -165,7 +178,7 @@ not the v0.4 default. ACC was not deleted or redesigned.
 
 ```text
 absolute_deadline=PASS (ACP, Codex exec, Claude CLI and Codex app-server all fail at a single monotonic budget)
-slow_drip=PASS (slow-drip ACP output cannot extend the absolute deadline — crates/agentmosaic-runtime/tests/acp_m2_lifecycle.rs)
+slow_drip=PASS (streamed output cannot extend the absolute deadline in any process family: ACP slow-drip plus new Codex exec and Claude streaming regressions, each of which fails when the deadline is allowed to slide per event)
 cancel=PASS (ACP peer-confirmed cancel for Qwen, Kimi and OpenCode; Codex exec and Claude have no protocol cancel, so their bounded outcome is deadline + process-group termination)
 process_tree_cleanup=PASS (ACP wrapper + grandchild, Codex exec wrapper + grandchild, Claude wrapper + grandchild; two of the three are new regressions that fail when group termination is removed)
 no_orphan=PASS (no owned descendant survived a timeout or cancellation in any family; the live E2E and probes left no stray child)
