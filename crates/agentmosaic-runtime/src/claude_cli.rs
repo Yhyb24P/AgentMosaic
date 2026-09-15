@@ -44,6 +44,18 @@ pub fn normalize_stream_event(value: &Value) -> Result<Vec<RuntimeEvent>, Runtim
         return Ok(events);
     }
     let event = match kind {
+        "retry" | "warning" => Some(RuntimeEvent::RuntimeWarning {
+            code: value
+                .get("subtype")
+                .or_else(|| value.get("code"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            message: value
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Claude runtime warning")
+                .into(),
+        }),
         "assistant" => value
             .pointer("/message/content")
             .and_then(Value::as_array)
@@ -223,6 +235,10 @@ mod tests {
                 estimated_cost_usd: Some(cost),
                 ..
             } if (cost - 0.1).abs() < f64::EPSILON
+        ));
+        assert!(matches!(
+            normalize_stream_event(&json!({"type":"warning","code":"retrying","message":"try again"})).unwrap()[0],
+            RuntimeEvent::RuntimeWarning { code: Some(ref code), .. } if code == "retrying"
         ));
     }
 }
