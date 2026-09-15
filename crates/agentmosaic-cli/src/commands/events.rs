@@ -28,8 +28,9 @@ pub fn list(target: Option<String>, machine: bool) -> Result<String, String> {
 /// Poll durable observations using bounded per-attempt cursors. This performs
 /// no task mutation; the OS default Ctrl-C terminates this reader only.
 pub fn follow(target: Option<String>, machine: bool, mut output: impl Write) -> Result<(), String> {
-    // Per-attempt monotonic cursors bound memory for a long-lived reader. If
-    // the cap is exceeded this observer may replay a line, never task state.
+    // Per-attempt monotonic cursors prevent a poll from replaying a durable
+    // observation. Exceeding the fixed capacity fails closed rather than
+    // clearing history and silently printing duplicates.
     let mut cursors = BTreeMap::<(u64, u32), u64>::new();
     loop {
         for event in read(target.clone())? {
@@ -49,7 +50,7 @@ pub fn follow(target: Option<String>, machine: bool, mut output: impl Write) -> 
             }
         }
         if cursors.len() > 1024 {
-            cursors.clear();
+            return Err("events follow cursor capacity exceeded; restart the observer".into());
         }
         output
             .flush()
