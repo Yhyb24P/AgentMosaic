@@ -193,8 +193,24 @@ frozen fixture hashes unchanged; v0.3 tag/Release untouched
 
 ```text
 identity / fmt / clippy / test / release build / git diff --check: all PASS on the final head
-remote Draft PR workflows: recorded in the PR after push (exact final head)
+remote Draft PR workflows: all green on the exact verified head (below)
 ```
+
+## Remote CI (I)
+
+```text
+pr=#16 (Draft, base main, head refactor/v0.5-core-simplification)
+verified_head=c0e97792b4f8d63762347dd678f9c175a1cfbb6f
+rust          run 35011874403  success  c0e97792b4f8d63762347dd678f9c175a1cfbb6f
+rust-quality  run 35011874461  success  c0e97792b4f8d63762347dd678f9c175a1cfbb6f
+Release/plan  run 35011874359  success  c0e97792b4f8d63762347dd678f9c175a1cfbb6f
+PR_MERGED=false ; V0_5_RELEASE_CREATED=false
+```
+
+`verified_head` is the commit that carried the code, the audit documents and
+the S2 evidence. The commit that adds this CI block changes documentation only;
+the same three workflows were required to run green on it as well, and no code
+changed after `verified_head`.
 
 ## Final status
 
