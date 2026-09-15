@@ -6,7 +6,7 @@ use std::os::unix::process::CommandExt;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use agentmosaic_team::RuntimeEvent;
+use agentmosaic_team::{RuntimeEvent, RuntimePermissionDecision, RuntimePermissionOption};
 use serde_json::Value;
 
 use crate::{codex_exec, LaunchSpec, RuntimeError};
@@ -213,6 +213,48 @@ pub fn normalize_stream_event(value: &Value) -> Result<Vec<RuntimeEvent>, Runtim
                 .unwrap_or("Claude runtime warning")
                 .into(),
         }),
+        "permission_request" => value
+            .get("request_id")
+            .or_else(|| value.get("tool_use_id"))
+            .and_then(Value::as_str)
+            .map(|request_id| RuntimeEvent::PermissionRequested {
+                request_id: request_id.into(),
+                action: value
+                    .get("tool_name")
+                    .or_else(|| value.get("action"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("runtime action")
+                    .into(),
+                options: value
+                    .get("options")
+                    .and_then(Value::as_array)
+                    .map(|options| {
+                        options
+                            .iter()
+                            .filter_map(|option| {
+                                option.get("id").and_then(Value::as_str).map(|id| {
+                                    RuntimePermissionOption {
+                                        option_id: id.into(),
+                                        label: option
+                                            .get("label")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("option")
+                                            .into(),
+                                    }
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            }),
+        "permission_denied" => value
+            .get("request_id")
+            .or_else(|| value.get("tool_use_id"))
+            .and_then(Value::as_str)
+            .map(|request_id| RuntimeEvent::PermissionResolved {
+                request_id: request_id.into(),
+                decision: RuntimePermissionDecision::Denied,
+            }),
         "assistant" => value
             .pointer("/message/content")
             .and_then(Value::as_array)
@@ -267,7 +309,19 @@ pub fn normalize_stream_event(value: &Value) -> Result<Vec<RuntimeEvent>, Runtim
             }),
         _ => None,
     };
-    Ok(event.into_iter().collect())
+    let mut events = event.into_iter().collect::<Vec<_>>();
+    if let Some(RuntimeEvent::ToolCallStarted { native_call_id, .. }) = events.first() {
+        if let Some(parent_native_id) = value
+            .pointer("/message/content/0/parent_tool_use_id")
+            .and_then(Value::as_str)
+        {
+            events.push(RuntimeEvent::SubagentStarted {
+                native_id: native_call_id.clone(),
+                parent_native_id: Some(parent_native_id.into()),
+            });
+        }
+    }
+    Ok(events)
 }
 
 /// Shell-free argv for Claude Code 2.1.268's supported stream-json surface.
@@ -410,6 +464,33 @@ mod tests {
             normalize_stream_event(&json!({"type":"warning","code":"retrying","message":"try again"})).unwrap()[0],
             RuntimeEvent::RuntimeWarning { code: Some(ref code), .. } if code == "retrying"
         ));
+    }
+
+    #[test]
+    fn stream_json_maps_permission_and_subagent_topology_without_payloads() {
+        let permission = normalize_stream_event(&json!({
+            "type":"permission_request", "request_id":"permit-1", "tool_name":"Bash",
+            "options":[{"id":"deny","label":"Deny"}]
+        }))
+        .unwrap();
+        assert!(
+            matches!(&permission[0], RuntimeEvent::PermissionRequested { request_id, action, options } if request_id == "permit-1" && action == "Bash" && options.len() == 1)
+        );
+        assert!(matches!(
+            normalize_stream_event(&json!({"type":"permission_denied","tool_use_id":"call-1"}))
+                .unwrap()[0],
+            RuntimeEvent::PermissionResolved {
+                decision: RuntimePermissionDecision::Denied,
+                ..
+            }
+        ));
+        let topology = normalize_stream_event(&json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"child","name":"Task","parent_tool_use_id":"parent","input":{"secret":"drop"}}]}})).unwrap();
+        assert!(
+            matches!(&topology[0], RuntimeEvent::ToolCallStarted { input_summary, .. } if input_summary == "tool started")
+        );
+        assert!(
+            matches!(&topology[1], RuntimeEvent::SubagentStarted { native_id, parent_native_id: Some(parent) } if native_id == "child" && parent == "parent")
+        );
     }
 
     #[test]
