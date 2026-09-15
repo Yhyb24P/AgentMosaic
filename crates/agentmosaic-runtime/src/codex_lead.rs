@@ -873,6 +873,23 @@ mod tests {
     }
 
     #[test]
+    fn exec_prompt_carries_the_contract_that_app_server_gets_at_thread_start() {
+        let prompt = brain().render_exec_prompt(&LeadContext {
+            root_task_id: 9,
+            objective: "delegate safely".into(),
+            round: 0,
+            candidates: vec!["worker-a".into()],
+            results: Vec::new(),
+            artifacts: Vec::new(),
+            failures: Vec::new(),
+            messages: Vec::new(),
+        });
+        assert!(prompt.contains("You are the Lead of a heterogeneous coding agent team"));
+        assert!(prompt.contains("exactly one JSON object"));
+        assert!(prompt.contains("\"root_task_id\":9"));
+    }
+
+    #[test]
     fn answer_over_the_bound_is_rejected() {
         let mut config = config(4096);
         config.max_answer_bytes = 8;
