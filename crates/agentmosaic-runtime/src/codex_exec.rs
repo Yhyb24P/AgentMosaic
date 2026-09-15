@@ -643,4 +643,60 @@ mod tests {
         assert_eq!(error, RuntimeError::TimedOut);
         assert!(started.elapsed() < Duration::from_secs(1));
     }
+
+    #[test]
+    #[cfg(unix)]
+    fn deadline_reaps_the_codex_exec_process_group_and_its_grandchild() {
+        // A Codex exec wrapper owns one process group. A timeout must terminate
+        // the wrapper *and* every descendant it started, or a supervised run
+        // would leave orphaned helpers behind on the machine.
+        let directory =
+            std::env::temp_dir().join(format!("am_codex_exec_reap_{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let pid_file = directory.join("grandchild.pid");
+        // The wrapper returns on its own and the grandchild keeps no inherited
+        // pipe, so the only way the grandchild can disappear inside the window
+        // below is the supervisor terminating the whole process group.
+        let script = format!(
+            "sleep 300 >/dev/null 2>&1 & echo $! > '{}'; sleep 2",
+            pid_file.display()
+        );
+        let invocation = CodexExecInvocation {
+            launch: LaunchSpec::new("sh", Vec::new()).unwrap(),
+            args: vec!["-c".into(), script],
+        };
+        let error = run_invocation(
+            &invocation,
+            &directory,
+            "ignored",
+            Duration::from_millis(300),
+            32,
+            |_| Ok(()),
+        )
+        .unwrap_err();
+        assert_eq!(error, RuntimeError::TimedOut);
+
+        let grandchild =
+            std::fs::read_to_string(&pid_file).expect("the wrapper recorded its grandchild pid");
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while process_is_alive(grandchild.trim()) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(
+            !process_is_alive(grandchild.trim()),
+            "Codex exec timeout left grandchild {} alive",
+            grandchild.trim()
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[cfg(unix)]
+    fn process_is_alive(pid: &str) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", pid])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
 }

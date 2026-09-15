@@ -568,4 +568,59 @@ mod tests {
         .unwrap_err();
         assert!(matches!(error, RuntimeError::TimedOut));
     }
+
+    #[test]
+    #[cfg(unix)]
+    fn deadline_reaps_the_claude_process_group_and_its_grandchild() {
+        // The Claude worker has no protocol-level cancel, so its bounded
+        // termination is the process group it owns: a deadline must kill the
+        // CLI *and* the helpers it spawned, leaving no orphan behind.
+        let directory = std::env::temp_dir().join(format!("am_claude_reap_{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let pid_file = directory.join("grandchild.pid");
+        // The wrapper returns on its own and the grandchild keeps no inherited
+        // pipe, so the only way the grandchild can disappear inside the window
+        // below is the supervisor terminating the whole process group.
+        let script = format!(
+            "sleep 300 >/dev/null 2>&1 & echo $! > '{}'; sleep 2",
+            pid_file.display()
+        );
+        let invocation = ClaudeCliInvocation {
+            launch: LaunchSpec::new("sh", Vec::new()).unwrap(),
+            args: vec!["-c".into(), script],
+        };
+        let error = run_invocation(
+            &invocation,
+            &directory,
+            "ignored",
+            Duration::from_millis(300),
+            128,
+            |_| Ok(()),
+        )
+        .unwrap_err();
+        assert!(matches!(error, RuntimeError::TimedOut));
+
+        let grandchild =
+            std::fs::read_to_string(&pid_file).expect("the wrapper recorded its grandchild pid");
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while process_is_alive(grandchild.trim()) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(
+            !process_is_alive(grandchild.trim()),
+            "Claude timeout left grandchild {} alive",
+            grandchild.trim()
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[cfg(unix)]
+    fn process_is_alive(pid: &str) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", pid])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
 }
