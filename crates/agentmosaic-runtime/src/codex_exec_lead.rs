@@ -1,6 +1,9 @@
 //! `codex exec --json` transport for the existing Lead decision contract.
 
-use std::path::PathBuf;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use agentmosaic_storage::{ExternalRuntimeBinding, SqliteTaskBoard};
@@ -11,6 +14,46 @@ use async_trait::async_trait;
 use crate::{
     run_codex_exec_invocation, CodexExecInvocation, CodexLeadBrain, CodexLeadConfig, LaunchSpec,
 };
+
+const LEAD_SCHEMA: &[u8] = include_bytes!("codex_exec_lead.schema.json");
+static LEAD_SCHEMA_NONCE: AtomicU64 = AtomicU64::new(0);
+
+struct LeadSchema(PathBuf);
+
+impl LeadSchema {
+    fn create(directory: &Path, root: u64) -> Result<Self, LeadBrainError> {
+        let nonce = LEAD_SCHEMA_NONCE.fetch_add(1, Ordering::Relaxed);
+        let path = directory.join(format!(
+            ".agentmosaic-codex-lead-schema-{}-{}-{}.json",
+            std::process::id(),
+            root,
+            nonce
+        ));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|error| {
+                LeadBrainError::Unavailable(format!("create Codex lead schema: {error}"))
+            })?;
+        file.write_all(LEAD_SCHEMA).map_err(|error| {
+            LeadBrainError::Unavailable(format!("write Codex lead schema: {error}"))
+        })?;
+        Ok(Self(path))
+    }
+
+    fn path(&self) -> Result<&str, LeadBrainError> {
+        self.0.to_str().ok_or_else(|| {
+            LeadBrainError::Unavailable("Codex lead schema path is not UTF-8".into())
+        })
+    }
+}
+
+impl Drop for LeadSchema {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct CodexExecLeadConfig {
@@ -145,16 +188,18 @@ impl CodexExecLeadBrain {
 
     fn run_turn(&mut self, root: u64, prompt: &str) -> Result<String, LeadBrainError> {
         self.restore_binding(root)?;
+        let schema = LeadSchema::create(&self.config.working_directory, root)?;
+        let schema_path = schema.path()?;
         let invocation = match &self.thread_id {
             Some(thread) => CodexExecInvocation::resume(
                 self.config.launch.clone(),
                 thread,
-                None,
+                Some(schema_path),
                 self.config.isolate,
             ),
             None => Ok(CodexExecInvocation::start(
                 self.config.launch.clone(),
-                None,
+                Some(schema_path),
                 self.config.isolate,
             )),
         }
