@@ -14,7 +14,7 @@ fn cli() -> Command {
 fn public_interface_is_am() {
     let version = cli().arg("--version").output().unwrap();
     assert!(version.status.success());
-    assert_eq!(String::from_utf8_lossy(&version.stdout), "am 0.4.0-dev\n");
+    assert_eq!(String::from_utf8_lossy(&version.stdout), "am 0.5.0-dev\n");
 
     // The default help centers the normal path.
     let help = cli().arg("--help").output().unwrap();

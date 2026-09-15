@@ -212,6 +212,63 @@ the S2 evidence. The commit that adds this CI block changes documentation only;
 the same three workflows were required to run green on it as well, and no code
 changed after `verified_head`.
 
+## Review closeout (external cross-review follow-up)
+
+An external cross-review accepted the subtraction result but flagged two
+blocking coherence issues and two hygiene items. All were fixed in one
+closeout commit that touches no runtime/team/storage implementation:
+
+```text
+1. AGENTS.md is the active engineering contract and contradicted itself.
+   Before: "The native Rust Coding Agent is the execution engine", "Codex helper
+   am-codex-mcp", "Development 0.2.0-dev", "SQLite schema 11", and later
+   "SQLite schema stays v11" — while the same file also said AM ships no model
+   client or tool loop.
+   After: the positioning states that every Agent executes in an external
+   runtime; the identity block records the internal bridge as
+   `am __internal codex-mcp` (not a separate binary), Development 0.5.0-dev and
+   schema 12; the engineering-guard paragraph names only the guards that still
+   exist (deadlines, process-group termination with reaping, bounded output,
+   artifact path containment and hashes, board recovery); the stale "schema
+   stays v11" line is corrected to v12.
+   The identity gate never checked these facts, so a green gate did not imply a
+   correct active contract.
+
+2. S2_TEST_LEDGER.csv was not valid CSV: two wildcard rows carried unquoted
+   commas in the test_path column (22 and 11 fields instead of 6). Both rows are
+   quoted now, and the two inline tests removed with storage::observations
+   (observations_survive_reopen, observations_are_session_scoped) are listed
+   explicitly, so the claim "every removed test target is listed" is true.
+   Validation: 6 columns, 25 data records, csv.reader parses every row.
+
+3. Root Cargo.toml still declared four workspace dependencies that no remaining
+   crate uses: ignore, glob, regex, ureq. Removed. The lock never resolved them
+   after wave C (0 entries each), so package count stays 225.
+
+4. crates/agentmosaic-storage/Cargo.toml described the crate as a "small SQLite
+   journal", i.e. the surface wave B deleted. Now: "SQLite task board, agent
+   registry, runtime events and schema migration".
+
+5. Development version unified on the v0.5 line: workspace version
+   0.4.0-dev -> 0.5.0-dev, matching the branch, the PR and this evidence file;
+   AGENTS.md and the version-pinned CLI test follow, and Cargo.lock changes by
+   exactly the five member version lines. `am --version` prints `am 0.5.0-dev`.
+   Recorded as a version-governance decision, not as an S2 technical result.
+```
+
+Re-verified after the closeout (local, `--locked`):
+
+```text
+identity / fmt / clippy / tests (369 passed, 0 failed, 24 ignored) / release build / git diff --check: PASS
+metadata: 5 workspace crates, 9 local normal edges, 225 packages (unchanged)
+```
+
+Pre-existing documentation staleness found during this closeout and
+deliberately left untouched (not caused by S2, out of the subtraction scope):
+`docs/cli.md` still says `am --version` prints `am 0.3.0`, and
+`dist-workspace.toml` still carries a "v0.2 distribution contract" header
+comment. They are candidates for a separate documentation pass.
+
 ## Final status
 
 ```text

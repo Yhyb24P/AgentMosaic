@@ -54,7 +54,7 @@ dependencies = [
 
 [[package]]
 name = "agentmosaic-cli"
-version = "0.4.0-dev"
+version = "0.5.0-dev"
 dependencies = [
  "agentmosaic-runtime",
  "agentmosaic-storage",
@@ -69,7 +69,7 @@ dependencies = [
 
 [[package]]
 name = "agentmosaic-runtime"
-version = "0.4.0-dev"
+version = "0.5.0-dev"
 dependencies = [
  "agent-client-protocol",
  "agentmosaic-storage",
@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "agentmosaic-storage"
-version = "0.4.0-dev"
+version = "0.5.0-dev"
 dependencies = [
  "agentmosaic-team",
  "async-trait",
@@ -97,7 +97,7 @@ dependencies = [
 
 [[package]]
 name = "agentmosaic-team"
-version = "0.4.0-dev"
+version = "0.5.0-dev"
 dependencies = [
  "async-trait",
  "schemars 0.8.22",
@@ -109,7 +109,7 @@ dependencies = [
 
 [[package]]
 name = "agentmosaic-tui"
-version = "0.4.0-dev"
+version = "0.5.0-dev"
 dependencies = [
  "agentmosaic-storage",
  "agentmosaic-team",
