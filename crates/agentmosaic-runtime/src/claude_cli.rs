@@ -127,6 +127,17 @@ impl ClaudeCliInvocation {
         command.args(&self.args);
     }
 
+    /// Create the constrained process command consumed by the supervisor.
+    pub fn supervised_command(&self) -> std::process::Command {
+        let mut command = std::process::Command::new(&self.launch.program);
+        self.apply_to(&mut command);
+        command
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        command
+    }
+
     /// Create a fresh isolated non-interactive session. Prompt text is passed
     /// over stdin, never in argv.
     pub fn start(launch: LaunchSpec, json_schema: Option<&str>) -> Self {
@@ -198,6 +209,8 @@ mod tests {
         let mut command = std::process::Command::new(&invocation.launch.program);
         invocation.apply_to(&mut command);
         assert_eq!(command.get_args().count(), invocation.args.len());
+        let supervised = invocation.supervised_command();
+        assert_eq!(supervised.get_args().count(), invocation.args.len());
         assert!(ClaudeCliInvocation::resume(
             LaunchSpec::new("claude", Vec::new()).unwrap(),
             " ",
