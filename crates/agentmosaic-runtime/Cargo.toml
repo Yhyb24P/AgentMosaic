@@ -1,7 +1,7 @@
 [package]
 name = "agentmosaic-runtime"
 autobins = false
-description = "Native Coding Agent loop: model decisions, tool dispatch, durable history"
+description = "External Agent runtime adapters (ACP, Codex, Claude) and the durable team run path"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -21,11 +21,6 @@ name = "codex_bridge_mock"
 path = "src/bin/codex_bridge_mock.rs"
 
 [dependencies]
-agentmosaic-core = { path = "../agentmosaic-core" }
-agentmosaic-model = { path = "../agentmosaic-model" }
-agentmosaic-tools = { path = "../agentmosaic-tools" }
-agentmosaic-workspace = { path = "../agentmosaic-workspace" }
-agentmosaic-context = { path = "../agentmosaic-context" }
 agentmosaic-storage = { path = "../agentmosaic-storage" }
 agentmosaic-team = { path = "../agentmosaic-team" }
 async-trait.workspace = true
