@@ -70,9 +70,10 @@ fn read(target: Option<String>) -> Result<Vec<RuntimeEventJson>, String> {
                 .latest_root_task()
                 .map_err(|e| format!("{e:?}"))?
                 .ok_or_else(|| "no runs in this project yet".to_string())?;
-            let mut ids = vec![run.id];
-            ids.extend(board.descendants_of(run.id).map_err(|e| format!("{e:?}"))?);
-            ids
+            // The reasoning root expands to its own subtree in the loop below.
+            // Naming the run once here is what keeps every descendant from
+            // being projected twice.
+            vec![run.id]
         }
     };
     let mut events = Vec::new();
