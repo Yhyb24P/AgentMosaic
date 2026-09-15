@@ -95,6 +95,8 @@ pub struct RuntimeEventJson {
     pub timestamp: String,
     pub agent: String,
     pub runtime: Option<String>,
+    /// A short display-only foreign binding prefix, never the full identifier.
+    pub session: Option<String>,
     pub event: String,
     pub summary: String,
 }

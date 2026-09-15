@@ -104,23 +104,34 @@ fn read(target: Option<String>) -> Result<Vec<RuntimeEventJson>, String> {
             .cmp(&right.created_at)
             .then(left.sequence.cmp(&right.sequence))
     });
-    Ok(events.into_iter().map(project).collect::<Vec<_>>())
+    events
+        .into_iter()
+        .map(|stored| {
+            let session = board
+                .external_binding(stored.record.task_id, stored.record.attempt)
+                .map_err(|error| format!("runtime binding: {error}"))?
+                .and_then(|binding| binding.native_thread_id)
+                .map(|id| short_id(&id));
+            Ok(project(stored, session))
+        })
+        .collect()
 }
 
 fn render(event: RuntimeEventJson) -> String {
     format!(
-        "{} task={} attempt={} agent={} runtime={} event={} {}",
+        "{} task={} attempt={} agent={} runtime={} session={} event={} {}",
         event.timestamp,
         event.task_id,
         event.attempt,
         event.agent,
         event.runtime.unwrap_or_else(|| "-".into()),
+        event.session.unwrap_or_else(|| "-".into()),
         event.event,
         event.summary
     )
 }
 
-fn project(stored: StoredRuntimeEvent) -> RuntimeEventJson {
+fn project(stored: StoredRuntimeEvent, session: Option<String>) -> RuntimeEventJson {
     let record = stored.record;
     RuntimeEventJson {
         task_id: record.task_id,
@@ -129,9 +140,14 @@ fn project(stored: StoredRuntimeEvent) -> RuntimeEventJson {
         timestamp: stored.created_at,
         agent: record.agent_id,
         runtime: record.runtime_name,
+        session,
         event: record.event.kind().into(),
         summary: summary(&record.event),
     }
+}
+
+fn short_id(value: &str) -> String {
+    value.chars().take(8).collect()
 }
 
 fn summary(event: &RuntimeEvent) -> String {
@@ -200,12 +216,14 @@ mod tests {
             timestamp: "2026-09-15T00:00:00Z".into(),
             agent: "worker".into(),
             runtime: Some("claude".into()),
+            session: Some("session-".into()),
             event: "session_started".into(),
             summary: "session started".into(),
         };
         let json = json::encode(&event).unwrap();
         assert!(json.contains("\"sequence\":3"));
         assert!(!json.contains("native_session_id"));
-        assert_eq!(render(event), "2026-09-15T00:00:00Z task=7 attempt=2 agent=worker runtime=claude event=session_started session started");
+        assert_eq!(render(event), "2026-09-15T00:00:00Z task=7 attempt=2 agent=worker runtime=claude session=session- event=session_started session started");
+        assert_eq!(short_id("opaque-session-id"), "opaque-s");
     }
 }
