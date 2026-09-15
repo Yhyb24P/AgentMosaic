@@ -200,6 +200,18 @@ pub fn normalize_stream_event(value: &Value) -> Result<Vec<RuntimeEvent>, Runtim
         }
         return Ok(events);
     }
+    if kind == "stream_event" {
+        // Claude wraps partial Anthropic message frames in `stream_event`.
+        // Only visible text deltas cross the runtime boundary: thinking and
+        // signatures remain private even when the CLI elects to stream them.
+        return Ok(value
+            .pointer("/event/delta")
+            .filter(|delta| delta.get("type").and_then(Value::as_str) == Some("text_delta"))
+            .and_then(|delta| delta.get("text").and_then(Value::as_str))
+            .map(|text| RuntimeEvent::AssistantMessageDelta { text: text.into() })
+            .into_iter()
+            .collect());
+    }
     let event = match kind {
         "retry" | "warning" => Some(RuntimeEvent::RuntimeWarning {
             code: value
@@ -491,6 +503,24 @@ mod tests {
         assert!(
             matches!(&topology[1], RuntimeEvent::SubagentStarted { native_id, parent_native_id: Some(parent) } if native_id == "child" && parent == "parent")
         );
+    }
+
+    #[test]
+    fn nested_stream_events_forward_only_visible_text_deltas() {
+        let text = normalize_stream_event(&json!({
+            "type":"stream_event",
+            "event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"visible"}}
+        }))
+        .unwrap();
+        assert!(
+            matches!(&text[0], RuntimeEvent::AssistantMessageDelta { text } if text == "visible")
+        );
+        assert!(normalize_stream_event(&json!({
+            "type":"stream_event",
+            "event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"private"}}
+        }))
+        .unwrap()
+        .is_empty());
     }
 
     #[test]
