@@ -12,7 +12,16 @@ retired='Research Agent System|research-agent-system|agent-code-|agent_code_|ras
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
-git grep -nE "$retired" -- ':!CHANGELOG.md' ':!docs/releases/v0.1.0.md' ':!docs/history.md' ':!scripts/ci/check_identity.sh' >"$tmp" || true
+# The sole binary exception is the frozen published-v0.3 SQLite compatibility
+# fixture. It is immutable migration evidence produced by the shipped 0.3.0
+# binary, so its historical identity text cannot be rewritten. Everything else
+# (including every other fixture) stays scanned.
+git grep -nE "$retired" -- \
+  ':!CHANGELOG.md' \
+  ':!docs/releases/v0.1.0.md' \
+  ':!docs/history.md' \
+  ':!scripts/ci/check_identity.sh' \
+  ':!crates/agentmosaic-storage/tests/fixtures/v0_3_0_state.db' >"$tmp" || true
 if [[ -s "$tmp" ]]; then
   echo 'stale active identity:'
   cat "$tmp"
