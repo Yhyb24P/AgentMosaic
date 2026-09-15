@@ -45,11 +45,13 @@ async fn persists_thread_binding_and_normalized_events() {
     let driver = PersistedCodexExecDriver::new(
         CodexExecDriverConfig {
             command: PathBuf::from("sh"),
-            // The shell script intentionally ignores adapter-owned trailing
-            // `exec --json` argv, making this a deterministic JSONL fixture.
+            // The shell script reads the stdin prompt exactly like the real
+            // supervisor contract, and intentionally ignores adapter-owned
+            // trailing `exec --json` argv, making this a deterministic JSONL
+            // fixture rather than a timing-dependent one.
             args: vec![
                 "-c".into(),
-                "[ \"$2\" = --output-schema ] && [ -f \"$3\" ] || exit 9; printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"thread-1\"}' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"summary\\\":\\\"finished\\\"}\"}}'"
+                "prompt=$(cat); [ -n \"$prompt\" ] || exit 8; [ \"$2\" = --output-schema ] && [ -f \"$3\" ] || exit 9; printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"thread-1\"}' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"summary\\\":\\\"finished\\\"}\"}}'"
                     .into(),
             ],
             working_directory: root.clone(),

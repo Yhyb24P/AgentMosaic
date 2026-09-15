@@ -7,6 +7,13 @@ use agentmosaic_team::{
 };
 use rusqlite::Connection;
 
+/// Every deterministic Codex Exec fixture must implement the real supervisor
+/// transport contract: the prompt arrives on stdin and is read to EOF before
+/// the fixture answers. Skipping this read makes the fixture exit early and
+/// turns a correct production `write_all` into a scheduling-dependent
+/// `Broken pipe`.
+const READ_PROMPT: &str = r#"prompt=$(cat); [ -n "$prompt" ] || exit 8; "#;
+
 #[tokio::test]
 #[cfg(unix)]
 async fn exec_lead_turn_uses_the_shared_strict_decision_contract() {
@@ -16,7 +23,7 @@ async fn exec_lead_turn_uses_the_shared_strict_decision_contract() {
         CodexExecLeadConfig {
             launch: LaunchSpec::new(
                 "sh",
-                vec!["-c".into(), format!("printf '%s\\n' '{{\"type\":\"thread.started\",\"thread_id\":\"lead-thread\"}}' '{{\"type\":\"item.completed\",\"item\":{{\"type\":\"agent_message\",\"text\":{reply:?}}}}}'")],
+                vec!["-c".into(), format!("{READ_PROMPT}printf '%s\\n' '{{\"type\":\"thread.started\",\"thread_id\":\"lead-thread\"}}' '{{\"type\":\"item.completed\",\"item\":{{\"type\":\"agent_message\",\"text\":{reply:?}}}}}'")],
             )
             .unwrap(),
             working_directory: root,
@@ -52,7 +59,11 @@ async fn exec_lead_turn_uses_the_shared_strict_decision_contract() {
 #[cfg(unix)]
 async fn rejected_reply_is_repaired_once_through_exec_resume() {
     let root = std::env::current_dir().unwrap();
-    let script = r#"if [ "$1" = resume ]; then printf '%s\n' '{"type":"thread.started","thread_id":"lead-thread"}' '{"type":"item.completed","item":{"type":"agent_message","text":"{\"action\":\"delegate\",\"tasks\":[{\"kind\":\"tool\",\"target\":\"worker\",\"objective\":\"repair\"}]}"}}'; else printf '%s\n' '{"type":"thread.started","thread_id":"lead-thread"}' '{"type":"item.completed","item":{"type":"agent_message","text":"{}"}}'; fi"#.to_owned();
+    let script = [
+        READ_PROMPT,
+        r#"if [ "$1" = resume ]; then printf '%s\n' '{"type":"thread.started","thread_id":"lead-thread"}' '{"type":"item.completed","item":{"type":"agent_message","text":"{\"action\":\"delegate\",\"tasks\":[{\"kind\":\"tool\",\"target\":\"worker\",\"objective\":\"repair\"}]}"}}'; else printf '%s\n' '{"type":"thread.started","thread_id":"lead-thread"}' '{"type":"item.completed","item":{"type":"agent_message","text":"{}"}}'; fi"#,
+    ]
+    .concat();
     let mut lead = CodexExecLeadBrain::new(
         CodexExecLeadConfig {
             launch: LaunchSpec::new("sh", vec!["-c".into(), script]).unwrap(),
@@ -108,7 +119,11 @@ async fn exec_lead_persists_its_foreign_thread_on_the_running_root_attempt() {
         task
     };
     let mut lead = CodexExecLeadBrain::new(CodexExecLeadConfig {
-        launch: LaunchSpec::new("sh", vec!["-c".into(), "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"lead-thread\"}' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"action\\\":\\\"delegate\\\",\\\"tasks\\\":[{\\\"kind\\\":\\\"bulk\\\",\\\"target\\\":\\\"worker\\\",\\\"objective\\\":\\\"work\\\"}]}\"}}'".into()]).unwrap(),
+        launch: LaunchSpec::new("sh", vec!["-c".into(), [
+            READ_PROMPT,
+            "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"lead-thread\"}' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"action\\\":\\\"delegate\\\",\\\"tasks\\\":[{\\\"kind\\\":\\\"bulk\\\",\\\"target\\\":\\\"worker\\\",\\\"objective\\\":\\\"work\\\"}]}\"}}'",
+        ]
+        .concat()]).unwrap(),
         working_directory: root.clone(), max_prompt_bytes: 1024, max_answer_bytes: 1024, timeout: Duration::from_secs(1), isolate: false,
         binding_database: Some(database.clone()), binding_agent_id: Some("lead".into()),
     }, vec!["worker".into()]).unwrap();
@@ -172,10 +187,14 @@ async fn new_exec_lead_instance_resumes_the_root_binding() {
             .unwrap();
         task
     };
-    let script = r#"if [ "$1" = resume ]; then printf '%s\n' '{"type":"thread.started","thread_id":"saved-thread"}' '{"type":"item.completed","item":{"type":"agent_message","text":"{\"action\":\"delegate\",\"tasks\":[{\"kind\":\"bulk\",\"target\":\"worker\",\"objective\":\"resumed\"}]}"}}'; else exit 9; fi"#;
+    let script = [
+        READ_PROMPT,
+        r#"if [ "$1" = resume ]; then printf '%s\n' '{"type":"thread.started","thread_id":"saved-thread"}' '{"type":"item.completed","item":{"type":"agent_message","text":"{\"action\":\"delegate\",\"tasks\":[{\"kind\":\"bulk\",\"target\":\"worker\",\"objective\":\"resumed\"}]}"}}'; else exit 9; fi"#,
+    ]
+    .concat();
     let mut lead = CodexExecLeadBrain::new(
         CodexExecLeadConfig {
-            launch: LaunchSpec::new("sh", vec!["-c".into(), script.into()]).unwrap(),
+            launch: LaunchSpec::new("sh", vec!["-c".into(), script]).unwrap(),
             working_directory: root.clone(),
             max_prompt_bytes: 1024,
             max_answer_bytes: 1024,
