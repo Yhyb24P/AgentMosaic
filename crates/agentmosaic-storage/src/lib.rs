@@ -1,9 +1,8 @@
-//! Small SQLite journal for durable Agent state.
+//! Durable SQLite state for the Agent team: task board, agent registry,
+//! runtime bindings/events and the one migration authority for the schema.
 
 mod acc_store;
 mod board;
-mod journal;
-mod observations;
 mod registry_store;
 mod schema;
 
@@ -12,103 +11,18 @@ pub use board::{
     ExtendedExternalRuntimeBinding, ExternalRuntimeBinding, RuntimeCollaborationRecord,
     RuntimeEventStoreError, SqliteTaskBoard, StoredRuntimeEvent, MAX_RUNTIME_EVENT_QUERY,
 };
-pub use journal::SqliteJournal;
 pub use registry_store::{AgentRegistryRecord, SqliteAgentRegistry};
 pub use schema::{migrate, SCHEMA, SCHEMA_VERSION};
 
 #[cfg(test)]
 mod tests {
-    use agentmosaic_core::recover_interrupted_tools;
-    use agentmosaic_core::{AgentState, Journal, SessionId, ToolCallId};
     use rusqlite::Connection;
-
-    use super::SqliteJournal;
 
     fn temp_db(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
             "agentmosaic_r1fix_{name}_{}.db",
             std::process::id()
         ))
-    }
-
-    #[test]
-    fn reopen_recovers_current_state() {
-        let path = temp_db("reopen");
-        let _ = std::fs::remove_file(&path);
-        {
-            let conn = Connection::open(&path).expect("open db");
-            let mut j = SqliteJournal::open(conn, SessionId::new("s")).expect("bind");
-            j.create(AgentState::Initializing).expect("create");
-            j.record_transition(AgentState::Initializing, AgentState::Observing)
-                .expect("t1");
-            j.record_transition(AgentState::Observing, AgentState::WaitingModel)
-                .expect("t2");
-        }
-        let conn = Connection::open(&path).expect("reopen db");
-        let j = SqliteJournal::open(conn, SessionId::new("s")).expect("bind");
-        assert_eq!(
-            j.current_state().expect("read"),
-            Some(AgentState::WaitingModel)
-        );
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn two_sessions_are_isolated() {
-        let path = temp_db("isolated");
-        let _ = std::fs::remove_file(&path);
-        let c1 = Connection::open(&path).expect("open a");
-        let c2 = Connection::open(&path).expect("open b");
-        let mut a = SqliteJournal::open(c1, SessionId::new("a")).expect("bind a");
-        let b = SqliteJournal::open(c2, SessionId::new("b")).expect("bind b");
-        a.create(AgentState::Initializing).expect("create a");
-        a.record_transition(AgentState::Initializing, AgentState::Observing)
-            .expect("a t1");
-        a.record_transition(AgentState::Observing, AgentState::WaitingModel)
-            .expect("a t2");
-        a.begin_tool_call(AgentState::WaitingModel, ToolCallId::new(1))
-            .expect("a begin");
-
-        assert_eq!(
-            a.current_state().expect("a state"),
-            Some(AgentState::ExecutingTool {
-                call: ToolCallId::new(1)
-            })
-        );
-        assert_eq!(
-            a.running_tools().expect("a running"),
-            vec![ToolCallId::new(1)]
-        );
-        // Session b is untouched by session a's activity.
-        assert_eq!(b.current_state().expect("b state"), None);
-        assert_eq!(
-            b.running_tools().expect("b running"),
-            Vec::<ToolCallId>::new()
-        );
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn reopen_marks_running_tool_interrupted() {
-        let path = temp_db("interrupted");
-        let _ = std::fs::remove_file(&path);
-        {
-            let conn = Connection::open(&path).expect("open db");
-            let mut j = SqliteJournal::open(conn, SessionId::new("s")).expect("bind");
-            j.create(AgentState::Initializing).expect("create");
-            j.record_transition(AgentState::Initializing, AgentState::Observing)
-                .expect("t1");
-            j.record_transition(AgentState::Observing, AgentState::WaitingModel)
-                .expect("t2");
-            j.begin_tool_call(AgentState::WaitingModel, ToolCallId::new(9))
-                .expect("begin");
-        }
-        let conn = Connection::open(&path).expect("reopen db");
-        let mut j = SqliteJournal::open(conn, SessionId::new("s")).expect("bind");
-        let interrupted = recover_interrupted_tools(&mut j).expect("recover");
-        assert_eq!(interrupted, vec![ToolCallId::new(9)]);
-        assert!(j.running_tools().expect("running").is_empty());
-        let _ = std::fs::remove_file(&path);
     }
 
     /// The exact R3 (version 1) schema: the R4 schema minus the two new
@@ -239,55 +153,54 @@ CREATE TABLE IF NOT EXISTS observations (
 );
 "#;
 
-    /// Opening an R3 database migrates it to the current version: old data is
-    /// preserved, the new columns become writable, and the session recovers.
+    /// Opening an R3 (version 1) database migrates it to the current version:
+    /// the historical rows are preserved and the columns later versions added
+    /// become writable. This is a representation contract, so it is asserted
+    /// through SQL rather than through any retired session implementation.
     #[test]
     fn r3_database_migrates_preserving_data() {
-        use crate::SCHEMA_VERSION;
+        use super::{migrate, SCHEMA, SCHEMA_VERSION};
         let path = temp_db("migrate");
         let _ = std::fs::remove_file(&path);
 
         // Build a database with the exact R3 schema and seed it.
-        {
-            let conn = Connection::open(&path).expect("open db");
-            conn.execute_batch(R3_SCHEMA).expect("apply R3 schema");
-            conn.pragma_update(None, "user_version", 1)
-                .expect("set version 1");
-            conn.execute(
-                "INSERT INTO sessions (id, state, active_call, created_at) VALUES ('s', 'Observing', NULL, 'now')",
-                [],
-            )
-            .expect("seed session");
-            conn.execute(
-                "INSERT INTO agent_turns (session_id, decision) VALUES ('s', 'view a.txt')",
-                [],
-            )
-            .expect("seed turn");
-            conn.execute(
-                "INSERT INTO tool_calls (session_id, call_id, state) VALUES ('s', 1, 'Succeeded')",
-                [],
-            )
-            .expect("seed tool");
-        }
+        let mut conn = Connection::open(&path).expect("open db");
+        conn.execute_batch(R3_SCHEMA).expect("apply R3 schema");
+        conn.pragma_update(None, "user_version", 1)
+            .expect("set version 1");
+        conn.execute(
+            "INSERT INTO sessions (id, state, active_call, created_at) VALUES ('s', 'Observing', NULL, 'now')",
+            [],
+        )
+        .expect("seed session");
+        conn.execute(
+            "INSERT INTO agent_turns (session_id, decision) VALUES ('s', 'view a.txt')",
+            [],
+        )
+        .expect("seed turn");
+        conn.execute(
+            "INSERT INTO tool_calls (session_id, call_id, state) VALUES ('s', 1, 'Succeeded')",
+            [],
+        )
+        .expect("seed tool");
 
-        // Open with the current version: the migration adds the missing columns.
-        let conn = Connection::open(&path).expect("reopen db");
-        let mut j = SqliteJournal::open(conn, SessionId::new("s")).expect("bind");
+        // Opening at the current version runs the real migration.
+        conn.execute_batch(SCHEMA).expect("apply current schema");
+        migrate(&mut conn).expect("migrate to the current version");
 
-        // The database was migrated to the current version.
-        let version: i32 = j
-            .conn()
+        let version: i32 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap_or(0);
         assert_eq!(version, SCHEMA_VERSION);
 
-        // The session recovers and the seeded data is preserved.
-        assert_eq!(
-            j.current_state().expect("state"),
-            Some(AgentState::Observing)
-        );
-        let seeded_turn: String = j
-            .conn()
+        // The seeded historical rows survived the migration.
+        let seeded_state: String = conn
+            .query_row("SELECT state FROM sessions WHERE id = 's'", [], |r| {
+                r.get(0)
+            })
+            .expect("seeded session");
+        assert_eq!(seeded_state, "Observing");
+        let seeded_turn: String = conn
             .query_row(
                 "SELECT decision FROM agent_turns WHERE session_id = 's'",
                 [],
@@ -295,8 +208,7 @@ CREATE TABLE IF NOT EXISTS observations (
             )
             .expect("seeded turn");
         assert_eq!(seeded_turn, "view a.txt");
-        let seeded_tool: String = j
-            .conn()
+        let seeded_tool: String = conn
             .query_row(
                 "SELECT state FROM tool_calls WHERE session_id = 's' AND call_id = 1",
                 [],
@@ -305,13 +217,18 @@ CREATE TABLE IF NOT EXISTS observations (
             .expect("seeded tool");
         assert_eq!(seeded_tool, "Succeeded");
 
-        // The new columns are writable.
-        j.record_turn("edit a.txt", Some("boom"))
-            .expect("record turn");
-        j.record_tool_requested(ToolCallId::new(2), "edit a.txt")
-            .expect("record request");
-        let error: Option<String> = j
-            .conn()
+        // The columns added by later versions are writable.
+        conn.execute(
+            "INSERT INTO agent_turns (session_id, decision, error) VALUES ('s', 'edit a.txt', 'boom')",
+            [],
+        )
+        .expect("write agent_turns.error");
+        conn.execute(
+            "INSERT INTO tool_calls (session_id, call_id, state, request) VALUES ('s', 2, 'Requested', 'edit a.txt')",
+            [],
+        )
+        .expect("write tool_calls.request");
+        let error: Option<String> = conn
             .query_row(
                 "SELECT error FROM agent_turns WHERE decision = 'edit a.txt'",
                 [],
@@ -319,8 +236,7 @@ CREATE TABLE IF NOT EXISTS observations (
             )
             .expect("turn error");
         assert_eq!(error, Some("boom".into()));
-        let request: Option<String> = j
-            .conn()
+        let request: Option<String> = conn
             .query_row(
                 "SELECT request FROM tool_calls WHERE call_id = 2",
                 [],
