@@ -1,99 +1,250 @@
 # v0.4 Runtime Integration Evidence
 
+Every entry below is an actual result: deterministic test output, a remote
+workflow conclusion, a live CLI transcript, a SQLite read-back, or a file hash.
+Nothing here is promoted from source inspection alone.
+
+`end_sha` is the frozen implementation head whose remote gates are green. The
+commit that adds or updates this document changes documentation only; no code
+changed after `end_sha`.
+
 ## Baseline
 
 ```text
 branch=feat/v0.4-runtime-integration
 start_sha=c90ec9560f80cc8f956057e686fd20d96efb93a4
-end_sha=IN_PROGRESS
+end_sha=c7dbe480355bbfc50029b625f9a5264ccb81cf6c
+base_main=c90ec9560f80cc8f956057e686fd20d96efb93a4
 workspace_version=0.4.0-dev
 schema_version=12
-dirty_state_preserved=true (baseline was clean)
-baseline_canonical_gates=PASS
+dirty_state_preserved=true (every worktree was clean before each edit)
+```
+
+## Remote CI
+
+Exact head `c7dbe480355bbfc50029b625f9a5264ccb81cf6c` (all PR-triggered
+workflows, queried with `gh run view --json headSha,conclusion`):
+
+```text
+rust          run 35000927350  success  c7dbe480355bbfc50029b625f9a5264ccb81cf6c
+rust-quality  run 35000927334  success  c7dbe480355bbfc50029b625f9a5264ccb81cf6c
+Release/plan  run 35000927201  success  c7dbe480355bbfc50029b625f9a5264ccb81cf6c
+```
+
+Earlier checkpoint on the P0-repair head `9492b33`:
+
+```text
+rust          run 34995681746  success  9492b33ebc3482f9a501905dccc68c7df83287c3
+rust-quality  run 34995681756  success  9492b33ebc3482f9a501905dccc68c7df83287c3
+Release/plan  run 34995681750  success  9492b33ebc3482f9a501905dccc68c7df83287c3
+```
+
+## P0 repairs and the CI failures they exposed
+
+```text
+identity_fixture_hash_before=e7b430ad17b8c2be3704f540ca921c77b2ba063c9661300411fbda51334adc3b
+identity_fixture_hash_after =e7b430ad17b8c2be3704f540ca921c77b2ba063c9661300411fbda51334adc3b
+identity_gate_negative_control=FAIL as required (stale active identity: docs/__identity_negative_control.md:1)
+codex_exec_mock_stress_runs=50/50 pass (cargo test -p agentmosaic-runtime --test codex_exec_lead rejected_reply_is_repaired_once_through_exec_resume)
+```
+
+Three separate repairs were needed before PR CI could be trusted:
+
+1. `a1e5856` — the identity gate flagged the binary published-v0.3 SQLite
+   fixture. The exception is exactly that one path; every other tracked file is
+   still scanned, and a tracked text file carrying a retired identity still
+   fails the gate (negative control above).
+2. `b46f315` — the deterministic Codex exec fixtures printed JSONL and exited
+   without reading the prompt that production writes to stdin, so a correct
+   `write_all` could race the child's exit into `EPIPE`. Every Codex exec
+   fixture now reads stdin to EOF and asserts a non-empty prompt before
+   answering. Production transport is unchanged, and the previously failing
+   test passed 50 consecutive invocations locally.
+3. `9492b33` — once those two repairs let `rust-quality` reach its later steps,
+   the release-hygiene gate rejected the tree for tracking a `.db` file. The
+   frozen compatibility fixture is force-tracked migration evidence, not a
+   runtime database, so the gate excludes exactly that path; a tracked
+   negative-control `.db` was still rejected.
+
+## Defects found and fixed during closeout
+
+```text
+eb0bed1  am events projected every descendant observation twice (the latest run
+         was expanded, then its reasoning root was expanded again). A duplicated
+         line is a fabricated second observation and, with --follow, a replay.
+         Deterministic CLI regression: crates/agentmosaic-cli/tests/events_projection.rs
+         fails on the previous code (6 rows where 4 are unique).
+f30ea52  Codex exec and Claude deadlines killed the direct child but nothing
+         proved the whole process group was reaped. Each family now has a
+         deterministic grandchild regression; removing group termination makes
+         the Codex exec case fail with the surviving grandchild pid.
+```
+
+## Canonical local gates (on `c7dbe48`)
+
+```text
+identity=      PASS (scripts/ci/check_identity.sh)
+fmt=           PASS (cargo fmt --all -- --check)
+clippy=        PASS (cargo clippy --workspace --all-targets --all-features -- -D warnings)
+tests=         PASS (cargo test --workspace --all-features: 480 passed, 0 failed, 24 ignored live cases recorded separately)
+release_build= PASS (cargo build --release --workspace)
+diff_check=    PASS (git diff --check)
 ```
 
 ## Migration
 
 ```text
 v11_to_v12=PASS (additive binding columns + runtime_events)
-v0.3_db_compat=PASS (published am 0.3.0 fixture SHA-256 e7b430ad17b8c2be3704f540ca921c77b2ba063c9661300411fbda51334adc3b)
+published_v0_3_to_v12=PASS (published am 0.3.0 fixture, SHA-256 e7b430ad17b8c2be3704f540ca921c77b2ba063c9661300411fbda51334adc3b, copied before opening so the frozen fixture is never modified)
 v8_to_v12=PASS (authentic checked-in v8 fixture)
+old_driver_strings_restorable=PASS (registry round-trip covers native, acp, cli, codex-app-server, codex-exec, claude-cli)
 ```
 
 ## Architecture gates
 
 ```text
-runtime_event_foundation=PASS
-role_runtime_decoupled=PASS (LeadBrainFactory; unsupported Lead runtimes fail before root creation)
-generic_acp=PASS (typed ACP v1 adapter; exact running-attempt binding; capability-gated resume; normalized durable events; deny-by-default permissions)
-absolute_deadline=PARTIAL (ACP, Codex exec, Claude CLI, and Codex app-server deterministic deadline regressions pass)
-process_tree_cleanup=PARTIAL (ACP/Codex exec/Claude process groups plus Codex app-server bounded stderr and Drop reaping are covered; a real local Codex app-server interrupt boundary passed; full cancellation-race matrix remains)
-codex_exec_runtime=PASS (durable driver, JSONL normalization, bounded process group, thread binding, resume argv, managed strict worker-result schema with fail-closed parsing, fresh/resume real `exec --json --output-schema` probes, and real public TeamRunner scheduler-driver test with durable binding and persisted final result)
-codex_exec_lead=PARTIAL (strict shared decision parser/validator; root running-attempt binding is persisted on thread.started and restored across a new Lead instance via exec resume; one same-thread repair and deterministic fixtures pass. Real 0.154.0 probes reject the required discriminated `oneOf` schema and also require every property, making its response-schema dialect unable to express the Lead's mutually exclusive wire contract; parser remains the fail-closed authority.)
-claude_cli_runtime=PARTIAL (verified stream-json argv; bounded JSONL supervisor; durable worker driver/session binding/resume; permission and parent-tool topology normalization; deterministic SQLite integration test; CLI registration and non-invasive doctor probe)
-claude_cli_lead=NOT_SUPPORTED (worker runtime is intentionally not accepted as a Lead until a strict structured decision contract is implemented and tested)
-cli_observability=PASS (`am events <TASK_OR_RUN> [--json] [--follow]` provides bounded durable replay/live handoff with privacy-filtered summaries and short binding IDs)
-tui_observability=PASS (read-only board projects bounded durable task/attempt/agent/runtime observations with privacy-filtered summaries; direct projection test proves foreign session IDs never render)
-recovery_no_replay=PARTIAL (TeamRunner interrupted-descendant recovery and succeeded-root idempotency tests pass; real isolated Qwen ACP crash recovery resumes without replay; `am events --follow` now fails closed rather than clearing cursors and replaying durable observations; full cross-runtime cancellation/recovery matrix remains)
+runtime_event_foundation=PASS (schema v12 observation plane; a success-looking observation leaves task, attempt, artifacts and final refs untouched — crates/agentmosaic-storage/tests/runtime_events_v12.rs)
+task_authority_separation=PASS (only Scheduler/Driver/Lead settle task truth; runtime events are observation-only)
+role_runtime_decoupled=PASS (LeadBrainFactory; unsupported Lead runtimes fail before a root exists)
+generic_acp=PASS (one typed ACP v1 adapter drives Qwen, Kimi and OpenCode; no per-vendor parser)
+codex_exec_worker=PASS (durable driver, JSONL normalization, bounded process group, thread binding, resume argv, managed strict worker-result schema)
+codex_exec_lead=PASS (see the Codex Exec Lead section)
+claude_cli_worker=PASS (see the Claude section)
+claude_cli_lead=UNSUPPORTED (worker runtime is deliberately not accepted as a Lead until a strict structured decision contract exists and is tested; allowed final status for v0.4)
+cli_observability=PASS (am events/status/final/artifact replay durable observations with privacy-filtered summaries and short foreign ids)
+tui_observability=PASS (read-only board projection; a direct test proves foreign session ids never render)
 ```
 
-## Deterministic tests
+### Codex Exec Lead
+
+Deterministic suite at this head: strict decision parsing, exactly one
+same-thread repair, fail-closed second rejection, root running-attempt binding
+persisted on `thread.started`, and a new Lead instance restoring and resuming
+the persisted foreign thread (`crates/agentmosaic-runtime/tests/codex_exec_lead.rs`).
+
+Real TeamRunner run (codex-cli 0.154.0, `/home/yhshy/.local/bin/codex`, public
+`am run`, Codex Exec Lead + real Qwen ACP worker):
 
 ```text
-fmt=PASS (full workspace canonical gate after Kimi ACP lifecycle coverage, 2026-09-15)
-clippy=PASS (full workspace canonical gate after Kimi ACP lifecycle coverage, 2026-09-15)
-test=PASS (full workspace canonical gate after Kimi ACP lifecycle coverage, 2026-09-15; authenticated/live cases intentionally ignored there and are recorded separately below)
-release_build=PASS (full workspace canonical gate after Kimi ACP lifecycle coverage, 2026-09-15)
-diff_check=PASS (full workspace canonical gate after Kimi ACP lifecycle coverage, 2026-09-15)
+project scratch, root task   1 (reasoning, lead, succeeded)
+delegated child task         2 (bulk, qwen-worker, succeeded)
+lead foreign binding         runtime_kind=codex-exec, native_thread_id=01a0a5ed-a95b-74c1-96f9-0e24ad604800, persisted on attempt 1
+worker binding               runtime_kind=acp, qwen-code 0.23.4, protocol v1, capabilities persisted
+final task refs              root 1 -> task 2
+am final after reopen        reproduced the durable answer from a fresh process
+resume of the succeeded root byte-identical board state (no replay, no new events)
+```
+
+Codex's own rollout file for that foreign thread
+(`~/.codex/sessions/2026/09/16/rollout-2026-09-16T00-36-51-01a0a5ed-....jsonl`)
+shows one thread containing: the round-0 `delegate` reply, then the round-1
+`complete` reply that AM rejected strictly for a missing `selected_artifacts`
+field, then AM's single same-thread repair prompt, then the accepted `complete`.
+That is same-thread continuity plus the authoritative AM parser in one artifact.
+
+Provider limitation, recorded separately and non-blocking: codex-cli 0.154.0
+`--output-schema` cannot express the Lead's discriminated union, so the Lead
+relies on the prompt contract while AM's parser/validator stays authoritative.
+
+### Claude CLI
+
+```text
+deterministic=PASS (verified argv --bare -p --output-format stream-json --verbose --include-partial-messages; thinking and raw tool payloads dropped; permission/subagent topology normalization; absolute deadline)
+live worker turn=PASS (real claude 2.1.268 turn through the scheduler-facing driver: summary returned, claude-cli binding persisted, lifecycle completed, only visible events durable)
+live resume=PASS (a second attempt holding the same foreign session resumed it; the persisted session id is unchanged)
+live cleanup=PASS (deadline reaps the Claude process group and its grandchild)
+claude_cli_lead=UNSUPPORTED (no strict structured decision contract exists for this runtime)
+```
+
+### Compatibility boundary
+
+`codex app-server` compatibility is unchanged and remains the v0.3 path; it is
+not the v0.4 default. ACC was not deleted or redesigned.
+
+## Lifecycle, deadline and recovery
+
+```text
+absolute_deadline=PASS (ACP, Codex exec, Claude CLI and Codex app-server all fail at a single monotonic budget)
+slow_drip=PASS (slow-drip ACP output cannot extend the absolute deadline — crates/agentmosaic-runtime/tests/acp_m2_lifecycle.rs)
+cancel=PASS (ACP peer-confirmed cancel for Qwen, Kimi and OpenCode; Codex exec and Claude have no protocol cancel, so their bounded outcome is deadline + process-group termination)
+process_tree_cleanup=PASS (ACP wrapper + grandchild, Codex exec wrapper + grandchild, Claude wrapper + grandchild; two of the three are new regressions that fail when group termination is removed)
+no_orphan=PASS (no owned descendant survived a timeout or cancellation in any family; the live E2E and probes left no stray child)
+recovery_no_replay=PASS (TeamRunner interrupted-descendant recovery, idempotent succeeded-root resume, real isolated Qwen ACP crash recovery, and the E2E resume that reproduced byte-identical board state)
+event_replay=PASS (durable CLI projection lists every observation exactly once — new regression; --follow fails closed at capacity instead of replaying)
 ```
 
 ## Runtime matrix
 
-| Agent | Executable | Version | Adapter | Protocol | Probe | Event conformance | Resume | Cancel | Notes |
+| Agent | Executable | Version | Adapter | Protocol | Probe | Events | Resume | Cancel | Deadline/Cleanup |
 |---|---|---|---|---|---|---|---|---|---|
-| Codex | `/home/yhshy/.local/bin/codex` | 0.154.0 | codex-exec | JSONL | PASS (logged-in local app-server interrupt, fresh/resume strict schema probes, and real TeamRunner worker driver, 2026-09-15) | PASS (real strict worker results, thread/usage, durable binding, and deterministic normalizer coverage) | PASS (same foreign thread successfully resumed through real `exec resume --json --output-schema`) | PARTIAL (real app-server interrupt boundary passed) | exact exec contract pin; Codex Exec Lead is separately partial because pinned response-schema dialect cannot represent its discriminated contract |
-| Qwen | `/home/yhshy/.npm-global/bin/qwen` | 0.23.4 | acp | v1 | PASS (real TeamRunner worker/utility, isolated crash-recovery/no-replay, and same-session follow-up probes, 2026-09-15) | PARTIAL (real worker result/artifact/binding and same-session continuation, plus deterministic ACP v1 mapping suite) | PASS (real isolated Qwen ACP crash recovery resumes without replay) | PASS (real local ACP cancellation received peer-confirmed `cancelled`) | installed version matches research reference; successful TeamRunner receipt retains only non-secret assertions |
-| Kimi | `/home/yhshy/.local/bin/kimi` | 0.43.1 | acp | v1 | PASS (real bounded no-tool ACP turn without an ACP Authenticate request, 2026-09-15) | PASS (strict peer-result path exercised by a real bounded turn) | PASS (real persisted-session resume plus bounded follow-up, without replay) | PASS (real local ACP cancellation received peer-confirmed `cancelled`) | newer than research pin 0.43.0; local shim loads its configured provider, so this path uses `kimi acp` with no ACP Authenticate request; initialize reported loadSession plus list/resume/close/delete/fork capabilities |
-| OpenCode | `/home/yhshy/.opencode/bin/opencode` | 1.18.7 | acp | v1 | NOT_RUN (installed below research pin 1.18.30) | NOT_RUN (version below pin) | NOT_RUN (version below pin) | NOT_RUN (version below pin) | `opencode acp` command is present, but its behavior is not accepted as pinned conformance evidence |
-| Claude | `/home/yhshy/.local/bin/claude` | 2.1.268 | claude-cli | stream-json | PASS (real bare/dontAsk read-only stream probe, 2026-09-15) | PARTIAL (real init, nested text/thinking frames, assistant/result, usage/cost; deterministic permission/topology and durable-worker SQLite tests) | PASS (same foreign session successfully resumed through real bare/dontAsk `--resume`) | NOT_SUPPORTED | verified `--bare -p --output-format stream-json --verbose --include-partial-messages --json-schema --resume --permission-mode --permission-prompts none`; real probe confirmed thinking is observed but not persisted |
+| Codex Exec | `/home/yhshy/.local/bin/codex` | 0.154.0 | codex-exec | JSONL | PASS (real TeamRunner Lead run + real TeamRunner worker) | PASS (thread, usage, command/file summaries; no raw payloads) | PASS (same foreign thread resumed through `exec resume --json`) | bounded (no protocol interrupt; process-group termination) | PASS (absolute deadline + group reap) |
+| Qwen | `/home/yhshy/.npm-global/bin/qwen --acp` | 0.23.4 | acp | v1 | PASS (5 live probes at this head: auth-required, bounded task, same-session follow-up, resume, isolated coding task) | PASS (durable normalized events + binding) | PASS | PASS (peer-confirmed `cancelled`) | PASS |
+| Kimi | `/home/yhshy/.local/bin/kimi acp` | 0.43.1 | acp | v1 | PASS (3 live probes at this head, isolated `KIMI_CODE_HOME`) | PASS (including a real permission request/resolution) | PASS | PASS (peer-confirmed) | PASS |
+| OpenCode | `/tmp/opencode-iso/node_modules/.bin/opencode acp` (isolated) | 1.18.31 | acp | v1 | PASS (3 live probes at this head: bounded, resume, active-session cancel) | PASS (file_changed, tool, usage events for a real turn) | PASS | PASS (peer-confirmed once the peer's turn is active) | PASS |
+| Claude | `/home/yhshy/.local/bin/claude` | 2.1.268 | claude-cli | stream-json | PASS (live worker turn + resume) | PASS (visible only; thinking dropped) | PASS | bounded (no protocol cancel; process-group termination) | PASS |
+
+Environment facts recorded, not worked around by weakening the product:
+
+```text
+kimi     the user's global ~/.kimi-code/config.toml ends with [thinking] enabled=false,
+         so an ACP session binds thinkingEffort=off and this kimi-code build refuses a
+         reasoning-by-default model ("declares no off effort"). The user's configuration
+         was not modified; the conformance probes ran under an isolated KIMI_CODE_HOME
+         that omits that section.
+opencode the user's installation is 1.18.7, below the 1.18.30 research floor, and has no
+         provider configured. An isolated side-by-side 1.18.31 install (npm prefix under
+         /tmp, isolated XDG dirs, provider key read from the environment) was used instead.
+         The user's installation hash and mtime are unchanged.
+```
 
 ## Heterogeneous E2E
 
+Real topology: Codex Exec Lead + Qwen ACP + Kimi ACP + OpenCode ACP, driven by
+the public `am run` entrypoint.
+
 ```text
-lead=Codex app-server (real public `am run-team` product entrypoint)
-workers=Qwen ACP worker + Qwen ACP utility (both real local processes; no manual copy/paste)
-root_task_id=1 (successful real run on 2026-09-15; non-secret receipt retained)
-delegated_task_ids=2 (worker), 3 (utility), both succeeded as root children
-artifact_refs=PASS (worker task 2 selected `worker.txt`; SHA-256 `54aaa002d6b8b1d91535bc3a058e739f0dba4d3c889e3418bfde1f2cc76539ba` matched the written file)
-restart_final_reconstruction=PASS (fresh `am final` and fresh `am resume-team` reproduced the answer and exact task/artifact refs)
-runtime_event_replay=PARTIAL (durable CLI replay is task/run scoped and sequence ordered; follow observer is no-replay or fails closed at capacity)
-manual_agent_to_agent_copy_paste=false
+root_task=1 (reasoning, lead)
+lead=codex-exec, foreign thread 01a0a614-9b8a... persisted on the running root attempt
+qwen_task=2  (bulk, qwen-worker)  -> qwen-result.txt     sha256 8da41ead27fa6d0ad9abec8ac22326698fcc368e5c4a2fd64fe7bdd1c8955e6b
+kimi_task=3  (bulk, kimi-worker)  -> kimi-result.txt     sha256 cdce3f0a3dc212e9d334abacd6a3ec19f23397a5a6dc9b74c989d113ae48228f
+opencode_task=4 (bulk, opencode-worker) -> opencode-result.txt sha256 1356d0b1e4b1512143eb037c95b0136bde9a570cbd4a9e0ef762ec7129a0f6c9
+all_children_succeeded=true (one attempt each, no retries)
+worker_bindings=qwen-code 0.23.4 acp/1, Kimi Code CLI 0.43.1 acp/1, OpenCode 1.18.31 acp/1 (foreign session ids persisted per attempt)
+runtime_events=9 (qwen), 12 (kimi, including permission_requested/resolved), 15 (opencode)
+artifact_files=every recorded digest matched the file on disk (sha256sum -c PASS); no manual copy/paste
+final_refs=3 selected task ids + 3 selected artifacts with exact paths and digests
+lead_synthesis=root answer "qwen-result.txt, kimi-result.txt, opencode-result.txt"
+restart_final=fresh am status/final/events/artifact processes reconstructed run, answer, refs and digests
+resume_no_replay=resume-team on the succeeded root reproduced the answer and refs with byte-identical board state; artifacts unchanged
+runtime_event_authority=no runtime event settled any task; the new storage regression proves a success-looking observation leaves task truth untouched
+manual_copy_paste=false
 ```
+
+Privacy on the public surfaces: durable events carry bounded visible summaries
+and short foreign ids only; no thinking/thought chunks, raw wire frames or
+credentials are persisted, and foreign session ids never become canonical task
+ids.
 
 ## Compatibility
 
 ```text
-codex_app_server_compat=PASS (G2 deterministic product path plus real authenticated Lead planning and durable utility follow-up probe, 2026-09-15)
-v0.3_release_untouched=PASS (local annotated tag object `0560f388c976a2a1318fd7c923e14e410d04997c`, targeting `fb8cc9080584ed2687576fba406a4cff6dbbce2c`, matches the v0.3 audit)
-old_driver_strings_restorable=PASS (registry round-trip test covers native, acp, cli, codex-app-server, codex-exec, and claude-cli)
+codex_app_server_compat=PASS (v0.3 behaviour preserved; not the v0.4 default)
+v0.3_release_untouched=PASS (annotated tag object 0560f388c976a2a1318fd7c923e14e410d04997c -> commit fb8cc9080584ed2687576fba406a4cff6dbbce2c, unchanged; no v0.4.0 tag or Release created)
+old_driver_strings_restorable=PASS
+published_v03_fixture_bytes=PASS (SHA-256 unchanged through every storage change)
 ```
 
 ## Final
 
 ```text
-DETERMINISTIC_RUNTIME_FOUNDATION_READY=false
-LIVE_HETEROGENEOUS_E2E_READY=false
-AGENT_RUNTIME_INTEGRATION_READY=false
+DETERMINISTIC_RUNTIME_FOUNDATION_READY=true
+LIVE_HETEROGENEOUS_E2E_READY=true
+AGENT_RUNTIME_INTEGRATION_READY=true
+V0_4_IMPLEMENTATION_COMPLETE=true
+PR_IMPLEMENTATION_READY=true
+PR_MERGED=false
+V0_4_RELEASE_CREATED=false
 ```
 
-## Remaining blockers
-
-Implementation is in progress; no STOP-HARD condition has been observed.
-
-The v0.3 compatibility fixture was created by the published `am 0.3.0`
-binary (`f8a683bb9eb00bd8d1f932cc27808192e45ff223afc613aab37e0eaf01c7bbf0`)
-against deterministic Codex app-server and ACP peers. Before migration it is
-schema v11 and contains a completed root/worker run, two attempts, one
-artifact, final task/artifact references, two registry rows and an ACP foreign
-binding. The migration test copies it before opening, so the frozen fixture is
-never modified by v0.4 code.
+PR #15 stays Draft; converting it to Ready for Review is left to explicit user
+authorization.
