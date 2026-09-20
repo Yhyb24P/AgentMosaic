@@ -161,7 +161,12 @@ closed ProcessSupervisor experiment remain unjustified by this measurement.
 
 Local package creation and checksum verification passed; the extracted binary
 outside the source tree reports `am 0.5.0-dev`. The license report covers 220
-third-party crates and passed the packaging policy.
+third-party crates and passed the packaging policy. `dist plan` also succeeded
+with the Linux x86_64 archive and shell installer plan; it did not publish them.
+The extracted binary upgraded a copy of the frozen published-v0.3 database to
+v12 with all original registry/task/attempt/artifact/message/final-reference rows
+unchanged. It also upgraded a database instantiated from the authentic v8 DDL
+to v12. The original published fixture's hash remained unchanged.
 
 ```text
 source candidate 1855507c91f04b656f140a213080f8648fdf01a2
@@ -185,6 +190,46 @@ Fresh projects using the extracted package also passed:
   the injected failure diagnostic without manual message transfer. Total
   runtime was 41.560 seconds.
 
-The full copied-package review/fix experiment and remote PR gates are pending;
-their results will be appended after completion. These do not change the
-already-verified local deterministic or copied-package recovery results.
+Remote gates passed on `9582561288126243b414567378f0061e768da901`, whose executable
+sources are identical to candidate `1855507` (the intervening commit is docs only):
+
+| Workflow | Run | Result |
+|---|---|---|
+| rust | 35516189673 | success |
+| rust-quality | 35516189660 | success |
+| Release / plan | 35516189655 | success |
+
+Draft PR: https://github.com/Yhyb24P/AgentMosaic/pull/22. Later evidence-only
+updates use the same PR checks; the PR is the source of its current head status.
+
+The copied-package `repair-release` run also completed (323.259 seconds): tasks
+2/3/4 performed review/fix/review; final selected owners were 3 and 4. The first
+reviewer's initial response failed the strict JSON result contract, then its
+second attempt succeeded automatically. The fixer and final reviewer each
+succeeded on their first attempt. Independent tests passed 3/3; the test fixture
+hash is identical to the original. Final `pricing.py` has the digest above and
+final `review.txt` has digest
+`69fe324f87d5dd93a3ffa8f6119665a347b309ce42f37bf8087ca1f409deba61`.
+
+`CONTEXT_INTEGRITY_LIVE_MEASUREMENTS.csv` retains the copied-package measurements:
+nine completed real Lead invocations across three scenarios and one explicitly
+marked injected pause. That pause received AM's prompt in the launcher but never
+started a provider invocation, so it has no token count. The completed contexts
+range from 491 to 3,230 bytes; all parse as JSON. The CSV includes hashes of the
+original capture files under the scratch root's `measurements/` directory.
+Raw captures and databases are local scratch artifacts; the checked-in CSV and
+this report retain the measured results when that scratch directory is removed.
+
+## Completion audit
+
+| Planned advancement | Outcome and evidence |
+|---|---|
+| Correct reachability and regression evidence | S1 classification corrected; default-32 public CLI regression and renderer negative control |
+| Repair context correctness and exact references | Both backends use complete serialized JSON; marked text; capacity errors; task-owned artifacts; deterministic and live tests |
+| Validate meaningful collaboration, failure and recovery | Copied-package repair/review, injected failure with real Lead, real Qwen interruption/no-replay all passed; three additional flow defects fixed |
+| Measure multi-round context and runtime usage before optimization | Nine completed real Lead invocations retained in CSV; no inferred token cost or claimed savings; no evidence yet for context compression |
+| Establish a reviewable release candidate | Required local gates, remote Rust/quality/release-plan gates, package checksums, copied-binary live runs and old-schema compatibility passed; Draft PR #22 |
+
+This advancement is ready for review. Publishing v0.5, merging the PR, broadly
+qualifying every external runtime version, and statistical cost/quality
+benchmarking are separate work. None is implied by these focused results.
