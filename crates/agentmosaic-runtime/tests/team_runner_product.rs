@@ -1143,7 +1143,9 @@ async fn resume_uses_durable_root_assignee() {
 }
 
 /// The legacy branch of the canonical-Lead rule: a root with no durable
-/// assignee resolves a Lead once, and the claim persists that choice.
+/// assignee resolves a Lead once, and the claim persists that choice. A
+/// `Cancelled` root is resumable, which is also the operator's escape hatch
+/// when a root's status disagrees with its attempts.
 #[tokio::test]
 async fn resume_resolves_and_persists_a_legacy_root_lead() {
     let fixture = Fixture::new("resume-legacy-assignee");
@@ -1157,7 +1159,7 @@ async fn resume_resolves_and_persists_a_legacy_root_lead() {
     Connection::open(&fixture.database)
         .unwrap()
         .execute(
-            "UPDATE team_tasks SET assignee = NULL WHERE id = ?1",
+            "UPDATE team_tasks SET assignee = NULL, status = 'cancelled' WHERE id = ?1",
             rusqlite::params![root as i64],
         )
         .unwrap();
@@ -1366,6 +1368,13 @@ async fn a_rejected_root_final_commit_leaves_no_partial_final() {
         "the rejected selection rolled back with the commit"
     );
     assert_eq!(board.task(1).unwrap().unwrap().status, TaskStatus::Failed);
+    assert!(
+        !(root_attempts
+            .iter()
+            .any(|attempt| attempt.status == TaskStatus::Succeeded)
+            && board.task(1).unwrap().unwrap().status != TaskStatus::Succeeded),
+        "a succeeded attempt must never be observable next to a non-succeeded root"
+    );
     // The delegated work that did succeed is untouched: only the root's own
     // final commit was rejected.
     assert_eq!(board.attempts(2).unwrap()[0].status, TaskStatus::Succeeded);
