@@ -243,6 +243,26 @@ async fn one_objective_becomes_a_durable_team_result() {
     );
     assert_eq!(outcome.result.artifact_refs[0].artifact.sha256, sha256);
 
+    // Inspect the input actually delivered to the external Lead, not merely
+    // its scripted answer: artifact ownership survives board -> context -> JSON.
+    let observation: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&fixture.state).unwrap()).unwrap();
+    let prompt = observation["last_prompt"].as_str().unwrap();
+    let segment = prompt
+        .split_once("Current lead context (compact JSON):\n")
+        .unwrap()
+        .1
+        .split_once("\nReply with exactly")
+        .unwrap()
+        .0;
+    let context: serde_json::Value = serde_json::from_str(segment).unwrap();
+    assert_eq!(
+        context["artifacts"],
+        json!([{
+            "task_id": 2, "path": WORKER_ARTIFACT, "sha256": sha256,
+        }])
+    );
+
     let board = fixture.open_board();
     // Exactly one root task, of kind reasoning, owned by the Lead.
     let ids = board.task_ids().unwrap();
@@ -638,6 +658,83 @@ async fn a_configuration_error_never_leaves_a_root_behind() {
 
 // A failed root is resumable: once the registry is corrected, the Lead is
 // driven again and its pre-existing attempt row is settled in place.
+#[tokio::test]
+#[cfg(unix)]
+async fn failed_exec_lead_resume_marks_root_running_and_completes_existing_work() {
+    let fixture = Fixture::new("failed-exec-resume");
+    let mut record = codex_agent("lead", &fixture, &[]);
+    record.driver_kind = Some("codex-exec".into());
+    record.executable = Some("sh".into());
+    let reply = complete_reply(2, None, "");
+    let event = json!({"type":"item.completed", "item":{"type":"agent_message", "text":reply}});
+    record.driver_args_json = Some(json!(["-c", format!(
+        "prompt=$(cat); [ -n \"$prompt\" ] || exit 9; printf '%s\\n' '{{\"type\":\"thread.started\",\"thread_id\":\"resumed-thread\"}}' '{event}'"
+    )]).to_string());
+    record.driver_config_json = None;
+    fixture.register(&record);
+    fixture.register(&acp_agent("worker", "worker", &[]));
+    let mut board = fixture.open_board();
+    let root = board
+        .create_task(
+            "finish existing work",
+            None,
+            TaskKind::Reasoning,
+            Some("lead".into()),
+        )
+        .unwrap();
+    board.assign(root, "lead").unwrap();
+    board
+        .record_attempt(&TaskAttempt {
+            task_id: root,
+            attempt: 1,
+            agent_id: "lead".into(),
+            status: TaskStatus::Failed,
+            result: None,
+            error: Some("interrupted synthesis".into()),
+        })
+        .unwrap();
+    board.set_status(root, TaskStatus::Failed).unwrap();
+    let child = board
+        .create_task(
+            "already done",
+            Some(root),
+            TaskKind::Bulk,
+            Some("worker".into()),
+        )
+        .unwrap();
+    board.assign(child, "worker").unwrap();
+    board
+        .record_attempt(&TaskAttempt {
+            task_id: child,
+            attempt: 1,
+            agent_id: "worker".into(),
+            status: TaskStatus::Succeeded,
+            result: Some("durable work".into()),
+            error: None,
+        })
+        .unwrap();
+    board.set_status(child, TaskStatus::Succeeded).unwrap();
+    drop(board);
+    let result = runner(&fixture).resume(root).await.unwrap();
+    assert_eq!(result.result.task_refs, vec![child]);
+    let board = fixture.open_board();
+    assert_eq!(board.task_ids().unwrap(), vec![root, child]);
+    assert_eq!(board.attempts(child).unwrap().len(), 1);
+    assert_eq!(
+        board.attempts(root).unwrap()[0].status,
+        TaskStatus::Succeeded
+    );
+    assert_eq!(
+        board
+            .external_binding(root, 1)
+            .unwrap()
+            .unwrap()
+            .native_thread_id
+            .as_deref(),
+        Some("resumed-thread")
+    );
+}
+
 #[tokio::test]
 async fn resume_re_drives_a_failed_root() {
     let fixture = Fixture::new("resume-after-failure");

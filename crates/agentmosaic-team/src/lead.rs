@@ -16,7 +16,7 @@
 use async_trait::async_trait;
 
 use crate::board::{
-    AgentMessage, ArtifactMeta, BoardError, SelectedArtifactRef, TaskAttempt, TaskBoard, TaskStatus,
+    AgentMessage, BoardError, SelectedArtifactRef, TaskAttempt, TaskBoard, TaskStatus,
 };
 use crate::registry::{AgentTaskResult, TaskKind};
 use crate::run_event::{bounded_event_text, LeadPhase, RunEvent};
@@ -58,8 +58,8 @@ pub struct LeadContext {
     pub candidates: Vec<String>,
     /// Succeeded task results: (task_id, result summary).
     pub results: Vec<(u64, AgentTaskResult)>,
-    /// Artifacts recorded on the Lead's tasks.
-    pub artifacts: Vec<ArtifactMeta>,
+    /// Artifacts recorded on the Lead's tasks, retaining their owning task.
+    pub artifacts: Vec<SelectedArtifactRef>,
     /// Failed task attempts: (task_id, bounded error text). No retry loops here.
     pub failures: Vec<(u64, String)>,
     /// Durable messages addressed to the Lead.
@@ -115,7 +115,7 @@ pub enum LeadError {
     MaxRounds,
     /// The maximum number of tasks was exceeded.
     TooManyTasks,
-    /// A follow-up was requested before any worker result existed.
+    /// A follow-up was requested before any worker result or failure existed.
     FollowUpWithoutResult,
     /// The final result does not reference completed tasks.
     CompletionNotGrounded,
@@ -141,7 +141,7 @@ impl std::fmt::Display for LeadError {
             }
             Self::FollowUpWithoutResult => write!(
                 f,
-                "the lead asked for a follow-up before any worker result existed"
+                "the lead asked for a follow-up before any worker result or failure existed"
             ),
             Self::CompletionNotGrounded => write!(
                 f,
@@ -281,16 +281,16 @@ impl<B: TaskBoard + Send + 'static> Lead<B> {
                     round += 1;
                 }
                 LeadDecision::FollowUp(specs) => {
-                    if ctx.results.is_empty() {
+                    if ctx.results.is_empty() && ctx.failures.is_empty() {
                         return Err(LeadError::FollowUpWithoutResult);
                     }
                     self.extend_tasks(&specs, root_id).await?;
                     round += 1;
                 }
                 LeadDecision::Complete(result) => {
-                    if round == 0 {
-                        return Err(LeadError::CompletionNotGrounded);
-                    }
+                    // A resumed run starts at local round zero but can already
+                    // have completed descendants. Grounding is a board fact,
+                    // not a property of this process's round counter.
                     self.verify_completion(&result)?;
                     self.persist_final(root_id, &result)?;
                     return Ok(result);
@@ -353,7 +353,10 @@ impl<B: TaskBoard + Send + 'static> Lead<B> {
                     _ => {}
                 }
                 let arts = board.artifacts(id).map_err(LeadError::Board)?;
-                artifacts.extend(arts);
+                artifacts.extend(arts.into_iter().map(|artifact| SelectedArtifactRef {
+                    task_id: id,
+                    artifact,
+                }));
             }
         }
         let messages = board
@@ -1126,6 +1129,110 @@ mod tests {
         let board = lead.scheduler.board().lock().unwrap();
         // The seeded child keeps its single attempt: it was not re-run.
         assert_eq!(board.attempts(child_id).unwrap().len(), 1);
+    }
+
+    struct CompleteExisting;
+
+    #[async_trait]
+    impl LeadBrain for CompleteExisting {
+        async fn decide(&mut self, ctx: &LeadContext) -> Result<LeadDecision, LeadBrainError> {
+            assert_eq!(ctx.round, 0);
+            Ok(LeadDecision::Complete(TeamResult {
+                answer: "existing work is sufficient".into(),
+                task_refs: ctx.results.iter().map(|(id, _)| *id).collect(),
+                artifact_refs: ctx.artifacts.clone(),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn resumed_root_can_complete_immediately_without_new_tasks_or_attempts() {
+        let (board, root_id, child_id) = resumed_board();
+        let sched = Scheduler::new(trio_registry(), full_drivers(), board, 1);
+        // No spare task budget: any unnecessary delegation must fail.
+        let mut lead = Lead::new(Box::new(CompleteExisting), sched, 1, 1, "lead");
+        let result = lead.run_on_root(root_id, "analyze").await.unwrap();
+        assert_eq!(result.task_refs, vec![child_id]);
+        let board = lead.scheduler.board().lock().unwrap();
+        assert_eq!(board.task_ids().unwrap(), vec![root_id, child_id]);
+        assert_eq!(board.attempts(child_id).unwrap().len(), 1);
+        assert_eq!(
+            board.task(root_id).unwrap().unwrap().status,
+            TaskStatus::Succeeded
+        );
+    }
+
+    struct RecoverFailure;
+
+    #[async_trait]
+    impl LeadBrain for RecoverFailure {
+        async fn decide(&mut self, ctx: &LeadContext) -> Result<LeadDecision, LeadBrainError> {
+            if ctx.results.is_empty() {
+                let (target, kind, objective) = if ctx.failures.is_empty() {
+                    ("worker-a", TaskKind::Bulk, "primary")
+                } else {
+                    assert!(ctx.failures[0].1.contains("primary unavailable"));
+                    (
+                        "utility-a",
+                        TaskKind::Utility,
+                        "recover from primary unavailable",
+                    )
+                };
+                let tasks = vec![TaskSpec {
+                    objective: objective.into(),
+                    kind,
+                    target: Some(target.into()),
+                    parent: None,
+                    context: Vec::new(),
+                }];
+                return Ok(if ctx.round == 0 {
+                    LeadDecision::Delegate(tasks)
+                } else {
+                    LeadDecision::FollowUp(tasks)
+                });
+            }
+            Ok(LeadDecision::Complete(TeamResult {
+                answer: ctx.results[0].1.summary.clone(),
+                task_refs: ctx.results.iter().map(|(id, _)| *id).collect(),
+                artifact_refs: Vec::new(),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn failure_only_context_can_drive_a_successful_follow_up() {
+        let drivers = BTreeMap::from([
+            ("worker-a".to_string(), err_driver("primary unavailable")),
+            ("utility-a".to_string(), ok_driver("recovered")),
+        ]);
+        let sched = Scheduler::new(trio_registry(), drivers, MemBoard::default(), 1);
+        let mut lead = Lead::new(Box::new(RecoverFailure), sched, 3, 2, "lead");
+        let result = lead.run("recover").await.unwrap();
+        assert_eq!(result.answer, "recovered");
+        assert_eq!(result.task_refs, vec![3]);
+        let board = lead.scheduler.board().lock().unwrap();
+        assert_eq!(board.task(2).unwrap().unwrap().status, TaskStatus::Failed);
+        assert_eq!(
+            board.task(3).unwrap().unwrap().status,
+            TaskStatus::Succeeded
+        );
+    }
+
+    #[tokio::test]
+    async fn follow_up_without_any_terminal_evidence_is_rejected() {
+        struct Premature;
+        #[async_trait]
+        impl LeadBrain for Premature {
+            async fn decide(&mut self, _: &LeadContext) -> Result<LeadDecision, LeadBrainError> {
+                Ok(LeadDecision::FollowUp(Vec::new()))
+            }
+        }
+        let sched = Scheduler::new(trio_registry(), full_drivers(), MemBoard::default(), 1);
+        let mut lead = Lead::new(Box::new(Premature), sched, 3, 2, "lead");
+        assert!(matches!(
+            lead.run("x").await,
+            Err(LeadError::FollowUpWithoutResult)
+        ));
     }
 
     // Seeded descendants count against `max_tasks`, so a resume cannot exceed

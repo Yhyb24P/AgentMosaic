@@ -428,6 +428,28 @@ impl TeamRunner {
         for descendant in descendants(&board, root_task_id)? {
             board.recover_interrupted_attempt(descendant)?;
         }
+        // Reopen the existing Lead attempt before an external turn restores
+        // or persists its binding. A failed root otherwise remains Failed
+        // while Codex Exec correctly requires a Running owner for that turn.
+        // Root settlement has always reused attempt 1; retain its binding.
+        let attempt = TaskAttempt {
+            task_id: root_task_id,
+            attempt: 1,
+            agent_id: lead.id.clone(),
+            status: TaskStatus::Running,
+            result: None,
+            error: None,
+        };
+        if board
+            .attempts(root_task_id)?
+            .iter()
+            .any(|row| row.attempt == 1)
+        {
+            board.complete_attempt(&attempt)?;
+        } else {
+            board.record_attempt(&attempt)?;
+        }
+        board.set_status(root_task_id, TaskStatus::Running)?;
         let scheduler = Scheduler::new(registry, drivers, board, self.options.max_retries)
             .with_sink(Arc::clone(&self.sink));
         let mut lead_loop = Lead::new(

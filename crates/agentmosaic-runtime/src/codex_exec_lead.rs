@@ -183,7 +183,8 @@ impl CodexExecLeadBrain {
 #[async_trait]
 impl LeadBrain for CodexExecLeadBrain {
     async fn decide(&mut self, ctx: &LeadContext) -> Result<LeadDecision, LeadBrainError> {
-        let reply = self.run_turn(ctx.root_task_id, &self.contract.render_exec_prompt(ctx))?;
+        let prompt = self.contract.render_exec_prompt(ctx)?;
+        let reply = self.run_turn(ctx.root_task_id, &prompt)?;
         match self.contract.parse_reply(&reply) {
             Ok(decision) => Ok(decision),
             Err(first) => {
