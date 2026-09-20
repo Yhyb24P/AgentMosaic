@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A resumed Lead can complete from already-successful descendants immediately;
   a failed root's Lead attempt becomes running before restoring its runtime binding.
 - A failed worker outcome can ground a follow-up even when no worker succeeded.
+- An ACP worker's peer result is read from the message text that follows its last
+  tool activity, so progress narration between tool calls no longer fails the
+  strict one-object contract; the whole turn is still recorded as its transcript.
 
 ## [0.3.0] - 2026-09-14
 

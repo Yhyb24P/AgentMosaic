@@ -982,7 +982,7 @@ async fn read_acp_turn(
     identity: &AcpEventIdentity,
     permission_policy: AcpPermissionPolicy,
 ) -> Result<String, agent_client_protocol::Error> {
-    let mut output = String::new();
+    let mut turn = TurnText::default();
     loop {
         match session.read_update().await? {
             SessionMessage::SessionMessage(dispatch) => {
@@ -990,9 +990,12 @@ async fn read_acp_turn(
                     .if_notification(async |notification: SessionNotification| {
                         let (delta, events) = map_acp_update(notification.update);
                         if let Some(delta) = delta {
-                            output.push_str(&delta);
+                            turn.push_message(&delta);
                         }
                         for event in events {
+                            if is_tool_activity(&event) {
+                                turn.note_tool_activity();
+                            }
                             identity.emit(&notification.session_id.to_string(), event)?;
                         }
                         Ok(())
@@ -1012,10 +1015,10 @@ async fn read_acp_turn(
                 identity.emit(
                     &session.session_id().to_string(),
                     RuntimeEvent::AssistantMessageCompleted {
-                        text: output.clone(),
+                        text: turn.transcript().to_string(),
                     },
                 )?;
-                return Ok(output);
+                return Ok(turn.result_candidate().to_string());
             }
             _ => {}
         }
@@ -1371,6 +1374,50 @@ fn bounded_follow_up(follow_up: &str, max: usize) -> String {
     .collect()
 }
 
+/// Assistant text observed during one ACP turn.
+///
+/// `transcript` is the whole turn and is what the durable runtime events carry.
+/// `result_candidate` keeps only the text emitted after the last tool activity.
+/// ACP peers narrate their progress between tool calls — Qwen Code emits message
+/// chunks such as "I'll start by reading the source files" before each call —
+/// and that narration is not part of the bounded peer result. Holding the whole
+/// transcript against the peer-result contract rejects a turn whose final
+/// message is exactly the required JSON object, so the contract is applied to
+/// the segment that follows the last tool activity.
+#[derive(Default)]
+struct TurnText {
+    transcript: String,
+    result_candidate: String,
+}
+
+impl TurnText {
+    fn push_message(&mut self, delta: &str) {
+        self.transcript.push_str(delta);
+        self.result_candidate.push_str(delta);
+    }
+
+    fn note_tool_activity(&mut self) {
+        self.result_candidate.clear();
+    }
+
+    fn transcript(&self) -> &str {
+        &self.transcript
+    }
+
+    fn result_candidate(&self) -> &str {
+        &self.result_candidate
+    }
+}
+
+fn is_tool_activity(event: &RuntimeEvent) -> bool {
+    matches!(
+        event,
+        RuntimeEvent::ToolCallStarted { .. }
+            | RuntimeEvent::ToolCallUpdated { .. }
+            | RuntimeEvent::ToolCallCompleted { .. }
+    )
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PeerResult {
@@ -1438,6 +1485,71 @@ mod tests {
             [RuntimeEvent::PlanUpdated { items }]
                 if items[0].text == "verify the result"
                     && items[0].status.as_deref() == Some("in_progress")
+        ));
+    }
+
+    #[test]
+    fn peer_result_ignores_narration_before_the_last_tool_activity() {
+        let mut turn = TurnText::default();
+        turn.push_message("\n\nI'll start by reading the source files.\n\n");
+        for event in [
+            RuntimeEvent::ToolCallStarted {
+                native_call_id: "call-1".into(),
+                tool: "read_file".into(),
+                input_summary: "read_file".into(),
+            },
+            RuntimeEvent::ToolCallCompleted {
+                native_call_id: "call-1".into(),
+                tool: "acp-tool".into(),
+                ok: true,
+                output_summary: "completed".into(),
+            },
+        ] {
+            if is_tool_activity(&event) {
+                turn.note_tool_activity();
+            }
+        }
+        turn.push_message("\n\nAll 3 tests fail.\n\n");
+        turn.note_tool_activity();
+        turn.push_message("{\"summary\":\"3 tests failed\"}");
+
+        assert!(parse_peer_result(turn.result_candidate(), 4096).is_ok());
+        // The whole turn is not the peer result: it carries the narration too.
+        assert!(parse_peer_result(turn.transcript(), 4096).is_err());
+        assert!(turn.transcript().contains("I'll start by reading"));
+    }
+
+    #[test]
+    fn peer_result_without_tool_activity_keeps_the_whole_turn() {
+        let mut turn = TurnText::default();
+        turn.push_message("{\"summary\":\"no tools were needed\"}");
+        assert_eq!(turn.result_candidate(), turn.transcript());
+        assert!(parse_peer_result(turn.result_candidate(), 4096).is_ok());
+    }
+
+    #[test]
+    fn only_tool_call_events_clear_the_result_segment() {
+        assert!(is_tool_activity(&RuntimeEvent::ToolCallStarted {
+            native_call_id: "c".into(),
+            tool: "t".into(),
+            input_summary: "t".into(),
+        }));
+        assert!(is_tool_activity(&RuntimeEvent::ToolCallUpdated {
+            native_call_id: "c".into(),
+            status: "in_progress".into(),
+            output_summary: None,
+        }));
+        assert!(is_tool_activity(&RuntimeEvent::ToolCallCompleted {
+            native_call_id: "c".into(),
+            tool: "t".into(),
+            ok: true,
+            output_summary: "completed".into(),
+        }));
+        assert!(!is_tool_activity(&RuntimeEvent::AssistantMessageDelta {
+            text: "hi".into(),
+        }));
+        assert!(!is_tool_activity(
+            &RuntimeEvent::AssistantMessageCompleted { text: "hi".into() }
         ));
     }
 
