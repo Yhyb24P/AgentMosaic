@@ -122,10 +122,11 @@ impl CodexExecLeadBrain {
                 .map_err(|error| LeadBrainError::Unavailable(error.to_string()))?,
         )
         .map_err(|error| LeadBrainError::Unavailable(error.to_string()))?;
-        let attempt = board
+        let attempts = board
             .attempts(root)
-            .map_err(|error| LeadBrainError::Unavailable(format!("{error:?}")))?
-            .into_iter()
+            .map_err(|error| LeadBrainError::Unavailable(format!("{error:?}")))?;
+        let attempt = attempts
+            .iter()
             .rev()
             .find(|attempt| attempt.agent_id == *agent_id && attempt.status == TaskStatus::Running)
             .ok_or_else(|| {
@@ -139,7 +140,20 @@ impl CodexExecLeadBrain {
             .filter(|binding| binding.runtime_kind == "codex-exec")
         {
             self.thread_id = binding.native_thread_id;
+            return Ok(());
         }
+        // Explicit inheritance: this attempt is new, so it has no binding row
+        // yet. A resumed Codex Lead continues the native thread its own earlier
+        // attempt recorded, and the new `(root, attempt)` row is written when
+        // that thread reports back. The earlier row stays exactly as it was —
+        // never re-opened — and a thread is never inherited across Leads.
+        self.thread_id = attempts
+            .iter()
+            .rev()
+            .filter(|row| row.attempt < attempt.attempt && row.agent_id == *agent_id)
+            .filter_map(|row| board.external_binding(root, row.attempt).ok().flatten())
+            .find(|binding| binding.runtime_kind == "codex-exec")
+            .and_then(|binding| binding.native_thread_id);
         Ok(())
     }
 

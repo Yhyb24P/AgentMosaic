@@ -30,10 +30,10 @@ use std::sync::Arc;
 
 use agentmosaic_storage::{AgentRegistryRecord, SqliteAgentRegistry, SqliteTaskBoard};
 use agentmosaic_team::{
-    bounded_event_text, reconstruct_team_result, AgentConfig, AgentDriver, AgentRegistry,
-    AgentTier, BoardError, DriverKind, Lead, LeadBrain, LeadBrainError, LeadError,
+    bounded_event_text, reconstruct_team_result, running_attempt, AgentConfig, AgentDriver,
+    AgentRegistry, AgentTier, BoardError, DriverKind, Lead, LeadBrain, LeadBrainError, LeadError,
     NoopRunEventSink, RegistryError, RunEvent, RunEventSink, Scheduler, TaskAttempt, TaskBoard,
-    TaskKind, TaskStatus, TeamResult,
+    TaskKind, TaskRecord, TaskStatus, TeamResult,
 };
 use rusqlite::Connection;
 
@@ -118,6 +118,15 @@ pub enum TeamRunnerError {
     UnknownRoot(u64),
     /// The named root task is not a reasoning task.
     RootNotReasoning { root: u64, kind: TaskKind },
+    /// The root is not in a state a resume may claim. A `Running` root is never
+    /// reclaimed implicitly, and a lost concurrent claim looks the same.
+    RootNotResumable { root: u64, status: TaskStatus },
+    /// The resume named a Lead other than the root's durable assignee.
+    CrossLeadTakeover {
+        root: u64,
+        durable: String,
+        requested: String,
+    },
     /// The Lead failed and the root could not be settled as failed.
     LeadAndSettleFailed { cause: String, settle: String },
 }
@@ -164,6 +173,19 @@ impl std::fmt::Display for TeamRunnerError {
                 f,
                 "task {root} is a {} task, not the reasoning root of a team run",
                 kind.as_str()
+            ),
+            Self::RootNotResumable { root, status } => write!(
+                f,
+                "root {root} is {} and was not reclaimed; close an interrupted running root with `am recover <database> {root}` first, then resume",
+                status.as_str()
+            ),
+            Self::CrossLeadTakeover {
+                root,
+                durable,
+                requested,
+            } => write!(
+                f,
+                "root {root} is owned by lead `{durable}`; this resume named `{requested}`, and a resume never replaces a root's durable lead"
             ),
             Self::LeadAndSettleFailed { cause, settle } => write!(
                 f,
@@ -391,25 +413,19 @@ impl TeamRunner {
                 kind: root.kind,
             });
         }
-        if root.status == TaskStatus::Succeeded {
-            // Idempotent, and deliberately independent of the current registry:
-            // the durable result is the answer, so an idempotent resume must not
-            // depend on drivers that will never run.
-            let result = reconstruct_team_result(&board, root_task_id)?;
-            let lead_agent = match root.assignee {
-                Some(assignee) => assignee,
-                None => resolve_lead(&self.records()?, self.options.lead_agent.as_deref())?.id,
-            };
-            return Ok(TeamRunOutcome {
-                root_task_id,
-                lead_agent,
-                result,
-            });
+        // Durable outcomes are returned without entering the Lead: a root that
+        // already succeeded, and the partial-final state a crash between the
+        // final refs and the root status leaves behind.
+        if let Some(outcome) = self.durable_outcome(&mut board, root_task_id, &root)? {
+            return Ok(outcome);
         }
         let objective = root.objective.clone();
         let records = self.records()?;
+        // The durable assignee is the canonical Lead: a resume never silently
+        // replaces one, and it fails before any mutation when an explicit
+        // `--lead` names a different agent.
+        let lead = canonical_resume_lead(&root, &records, self.options.lead_agent.as_deref())?;
         let registry = agent_registry(&records)?;
-        let lead = resolve_lead(&records, self.options.lead_agent.as_deref())?;
         // Every fallible configuration step happens before the board is
         // mutated, so a configuration error leaves the recoverable state for a
         // later resume instead of a half-driven run.
@@ -422,34 +438,28 @@ impl TeamRunner {
                 .collect(),
         )?;
         let drivers = self.drivers(&records)?;
+        // One atomic claim appends this execution's own attempt and moves the
+        // root to Running. A concurrent resume loses the compare-and-swap and
+        // never reaches the Lead runtime, and a Running root is never
+        // reclaimed implicitly.
+        if board.claim_root_attempt(root_task_id, &lead.id)?.is_none() {
+            let current = board
+                .task(root_task_id)?
+                .ok_or(TeamRunnerError::UnknownRoot(root_task_id))?;
+            if let Some(outcome) = self.durable_outcome(&mut board, root_task_id, &current)? {
+                return Ok(outcome);
+            }
+            return Err(TeamRunnerError::RootNotResumable {
+                root: root_task_id,
+                status: current.status,
+            });
+        }
         // Close every descendant attempt a process interruption left Running.
         // Recovery never replays the external work; the Lead decides what to do
         // next from the durable state.
         for descendant in descendants(&board, root_task_id)? {
             board.recover_interrupted_attempt(descendant)?;
         }
-        // Reopen the existing Lead attempt before an external turn restores
-        // or persists its binding. A failed root otherwise remains Failed
-        // while Codex Exec correctly requires a Running owner for that turn.
-        // Root settlement has always reused attempt 1; retain its binding.
-        let attempt = TaskAttempt {
-            task_id: root_task_id,
-            attempt: 1,
-            agent_id: lead.id.clone(),
-            status: TaskStatus::Running,
-            result: None,
-            error: None,
-        };
-        if board
-            .attempts(root_task_id)?
-            .iter()
-            .any(|row| row.attempt == 1)
-        {
-            board.complete_attempt(&attempt)?;
-        } else {
-            board.record_attempt(&attempt)?;
-        }
-        board.set_status(root_task_id, TaskStatus::Running)?;
         let scheduler = Scheduler::new(registry, drivers, board, self.options.max_retries)
             .with_sink(Arc::clone(&self.sink));
         let mut lead_loop = Lead::new(
@@ -464,6 +474,75 @@ impl TeamRunner {
         self.sink.emit(&RunEvent::RunResumed { root_task_id });
         self.drive(&mut lead_loop, root_task_id, &objective, &lead.id)
             .await
+    }
+
+    /// The durable outcome a resume must return without entering the Lead.
+    ///
+    /// A succeeded root is idempotent. So is the partial-final state a crash
+    /// between the Lead's final commit steps used to leave behind: the *latest*
+    /// attempt succeeded with a result and the final refs are complete. That
+    /// evidence is repaired to a succeeded root here — an earlier succeeded
+    /// attempt never implies the run finished.
+    fn durable_outcome(
+        &self,
+        board: &mut SqliteTaskBoard,
+        root_task_id: u64,
+        root: &TaskRecord,
+    ) -> Result<Option<TeamRunOutcome>, TeamRunnerError> {
+        if root.status == TaskStatus::Succeeded {
+            let result = reconstruct_team_result(board, root_task_id)?;
+            // Deliberately independent of the current registry: the durable
+            // result is the answer, so this must not need drivers that will
+            // never run.
+            let lead_agent = match &root.assignee {
+                Some(assignee) => assignee.clone(),
+                None => resolve_lead(&self.records()?, self.options.lead_agent.as_deref())?.id,
+            };
+            return Ok(Some(TeamRunOutcome {
+                root_task_id,
+                lead_agent,
+                result,
+            }));
+        }
+        let attempts = board.attempts(root_task_id)?;
+        let Some(latest) = attempts.last() else {
+            return Ok(None);
+        };
+        let Some(answer) = latest
+            .result
+            .as_deref()
+            .map(str::trim)
+            .filter(|answer| !answer.is_empty())
+            .filter(|_| latest.status == TaskStatus::Succeeded)
+        else {
+            return Ok(None);
+        };
+        let (task_refs, artifact_refs) = board.final_refs(root_task_id)?;
+        if task_refs.is_empty() {
+            return Ok(None);
+        }
+        // The durable evidence must be self-consistent: every selected task is
+        // a real, succeeded row of this board.
+        for &task_id in &task_refs {
+            match board.task(task_id)? {
+                Some(record) if record.status == TaskStatus::Succeeded => {}
+                _ => return Ok(None),
+            }
+        }
+        board.reconcile_root_final(root_task_id, latest.attempt)?;
+        let lead_agent = match &root.assignee {
+            Some(assignee) => assignee.clone(),
+            None => latest.agent_id.clone(),
+        };
+        Ok(Some(TeamRunOutcome {
+            root_task_id,
+            lead_agent,
+            result: TeamResult {
+                answer: answer.to_string(),
+                task_refs,
+                artifact_refs,
+            },
+        }))
     }
 
     /// Drive the Lead loop on an already-created root and settle the run's
@@ -513,9 +592,10 @@ impl TeamRunner {
         }
     }
 
-    /// Settle the root's Lead attempt as failed on a freshly reopened
+    /// Settle the root's own Lead attempt as failed on a freshly reopened
     /// connection (the original board lives inside the scheduler). A root that
-    /// is already succeeded is never rewritten.
+    /// is already succeeded is never rewritten, and the attempt this execution
+    /// recorded as `Running` is the row that settles — never a reused number.
     fn settle_root_failed(
         &self,
         root: u64,
@@ -523,23 +603,27 @@ impl TeamRunner {
         error: &str,
     ) -> Result<(), TeamRunnerError> {
         let mut board = self.open_board()?;
-        if board.task(root)?.map(|record| record.status) == Some(TaskStatus::Succeeded) {
-            return Ok(());
+        match board.task(root)? {
+            None => return Err(TeamRunnerError::UnknownRoot(root)),
+            Some(record) if record.status == TaskStatus::Succeeded => return Ok(()),
+            Some(_) => {}
         }
+        let attempts = board.attempts(root)?;
+        let Some(running) = running_attempt(&attempts, lead_id) else {
+            // Nothing is Running for this Lead, but the root must still not be
+            // left non-terminal.
+            board.set_status(root, TaskStatus::Failed)?;
+            return Ok(());
+        };
         let attempt = TaskAttempt {
             task_id: root,
-            attempt: 1,
+            attempt: running.attempt,
             agent_id: lead_id.to_string(),
             status: TaskStatus::Failed,
             result: None,
             error: Some(bounded(error, 4096)),
         };
-        if board.attempts(root)?.iter().any(|row| row.attempt == 1) {
-            board.complete_attempt(&attempt)?;
-        } else {
-            board.record_attempt(&attempt)?;
-        }
-        board.set_status(root, TaskStatus::Failed)?;
+        board.commit_root_failure(&attempt)?;
         Ok(())
     }
 
@@ -712,6 +796,36 @@ fn json_string_array(agent: &str, raw: Option<&str>) -> Result<Vec<String>, Team
         agent: agent.to_string(),
         detail: format!("expected a JSON string array: {error}"),
     })
+}
+
+/// Resolve the Lead a resume must use.
+///
+/// The durable `root.assignee` is authoritative: a resume continues the Lead
+/// the root already belongs to instead of re-resolving one from the registry.
+/// An explicit `--lead` is accepted only as an assertion of that same agent;
+/// naming a different agent fails before any durable mutation or runtime
+/// launch, because an implicit Lead takeover is not implemented. Only a legacy
+/// root with no durable assignee resolves a Lead here, and the claim persists
+/// that choice.
+fn canonical_resume_lead(
+    root: &TaskRecord,
+    records: &[AgentRegistryRecord],
+    requested: Option<&str>,
+) -> Result<AgentRegistryRecord, TeamRunnerError> {
+    let requested = requested.map(str::trim).filter(|value| !value.is_empty());
+    match root.assignee.as_deref() {
+        Some(durable) => {
+            if let Some(requested) = requested.filter(|requested| *requested != durable) {
+                return Err(TeamRunnerError::CrossLeadTakeover {
+                    root: root.id,
+                    durable: durable.to_string(),
+                    requested: requested.to_string(),
+                });
+            }
+            resolve_lead(records, Some(durable))
+        }
+        None => resolve_lead(records, requested),
+    }
 }
 
 /// Resolve the run's Lead.

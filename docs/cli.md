@@ -41,7 +41,7 @@ usage: am <init|agent|doctor|run|status|events|final|artifact|tui|advanced> [fie
 | `register` | Insert/update one Agent registry row. |
 | `registry` | List persisted Agent registrations. |
 | `run-team` | Run one objective through the whole team. |
-| `resume-team` | Re-drive a durable root task without replaying completed work. |
+| `resume-team` | Continue a durable root's own Lead on a new attempt, without replaying completed work. |
 | `run-acp` | Drive one bounded ACP worker task. |
 | `continue-acp` | Continue an existing ACP worker session. |
 | `submit` | Create one pending board task (no team run). |

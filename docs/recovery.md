@@ -19,11 +19,15 @@ am resume-team <database> /path/to/repo 1
   durable state, closes interrupted descendants without replaying them, and is
   idempotent on an already-succeeded root.
 
-For an unfinished root, `resume-team` marks the existing Lead attempt running
-before restoring its external runtime binding. If completed descendants already
-provide enough evidence, the Lead can finish immediately on the first resumed
-round without creating another task. A failed descendant is also valid evidence
-for a follow-up; a successful task is still required to ground the final answer.
+For an unfinished root, `resume-team` continues the root's durable Lead and appends a
+new attempt: a failed attempt keeps its own status, result and error, and never
+becomes running again. `--lead <agent-id>` only asserts that same agent; a resume
+refuses to replace a root's Lead. A `running` root is refused rather than reclaimed,
+so two live resumes can never both enter the Lead — close an interrupted one with
+`am recover` first. If completed descendants already provide enough evidence, the
+Lead can finish immediately on the first resumed round without creating another
+task. A failed descendant is also valid evidence for a follow-up; a successful task
+is still required to ground the final answer.
 
 External runtime bindings are marked `interrupted` for the closed attempts; inspect them
 with `am binding <database> <task-id>`.
@@ -45,5 +49,7 @@ grammar.
 - A root task cannot become `succeeded` after a Lead brain failure; the failure
   propagates instead of being swallowed.
 - `resume-team` on an already-succeeded root is a no-op rather than a replay.
+- A crash between the Lead's final refs and the root status is repaired from that
+  durable evidence, without replaying the Lead.
 - Read-only commands (`status`, `registry`, `artifact`, `binding`, `final`, `tui`) never
   start a driver or mutate runtime state.

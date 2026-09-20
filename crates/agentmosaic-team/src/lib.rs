@@ -17,8 +17,8 @@ mod scheduler;
 mod testutil;
 
 pub use board::{
-    AgentMessage, ArtifactMeta, BoardError, SelectedArtifactRef, TaskAttempt, TaskBoard,
-    TaskRecord, TaskStatus,
+    running_attempt, AgentMessage, ArtifactMeta, BoardError, SelectedArtifactRef, TaskAttempt,
+    TaskBoard, TaskRecord, TaskStatus,
 };
 pub use lead::{
     reconstruct_team_result, Lead, LeadBrain, LeadBrainError, LeadContext, LeadDecision, LeadError,

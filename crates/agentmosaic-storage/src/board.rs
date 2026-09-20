@@ -496,6 +496,58 @@ fn decode_stored_runtime_event(
     })
 }
 
+/// Replace the Lead's explicit final selection for `root_task` inside an open
+/// transaction. Shared by the standalone write and the root-final commit, so
+/// both persist exactly the same rows.
+fn write_final_refs(
+    tx: &rusqlite::Transaction<'_>,
+    root_task: u64,
+    task_refs: &[u64],
+    artifact_refs: &[SelectedArtifactRef],
+) -> Result<(), BoardError> {
+    let root_exists: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM team_tasks WHERE id = ?1)",
+            params![root_task as i64],
+            |row| row.get(0),
+        )
+        .map_err(|e| BoardError::Storage(e.to_string()))?;
+    if !root_exists {
+        return Err(BoardError::UnknownTask(root_task));
+    }
+    tx.execute(
+        "DELETE FROM team_final_task_refs WHERE root_task_id = ?1",
+        params![root_task as i64],
+    )
+    .map_err(|e| BoardError::Storage(e.to_string()))?;
+    tx.execute(
+        "DELETE FROM team_final_artifact_refs WHERE root_task_id = ?1",
+        params![root_task as i64],
+    )
+    .map_err(|e| BoardError::Storage(e.to_string()))?;
+    for task_id in task_refs {
+        tx.execute(
+            "INSERT INTO team_final_task_refs (root_task_id, selected_task_id) VALUES (?1, ?2)",
+            params![root_task as i64, *task_id as i64],
+        )
+        .map_err(|e| BoardError::Storage(e.to_string()))?;
+    }
+    for selected in artifact_refs {
+        tx.execute(
+            "INSERT INTO team_final_artifact_refs (root_task_id, task_id, path, sha256)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                root_task as i64,
+                selected.task_id as i64,
+                selected.artifact.path,
+                selected.artifact.sha256,
+            ],
+        )
+        .map_err(|e| BoardError::Storage(e.to_string()))?;
+    }
+    Ok(())
+}
+
 impl TaskBoard for SqliteTaskBoard {
     fn create_task(
         &mut self,
@@ -708,46 +760,199 @@ impl TaskBoard for SqliteTaskBoard {
             .conn
             .transaction()
             .map_err(|e| BoardError::Storage(e.to_string()))?;
-        let root_exists: bool = tx
+        write_final_refs(&tx, root_task, task_refs, artifact_refs)?;
+        tx.commit().map_err(|e| BoardError::Storage(e.to_string()))
+    }
+
+    fn claim_root_attempt(
+        &mut self,
+        root: u64,
+        lead_agent: &str,
+    ) -> Result<Option<u32>, BoardError> {
+        // IMMEDIATE begins the write transaction up front, so two concurrent
+        // resumes serialize here: the loser re-reads the status the winner
+        // committed and its compare-and-swap changes no row.
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        let row = tx.query_row(
+            "SELECT status, assignee FROM team_tasks WHERE id = ?1",
+            params![root as i64],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+        );
+        let (status, assignee) = match row {
+            Ok(row) => row,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Err(BoardError::UnknownTask(root)),
+            Err(e) => return Err(BoardError::Storage(e.to_string())),
+        };
+        if !matches!(status.as_str(), "failed" | "cancelled") {
+            return Ok(None);
+        }
+        if let Some(assignee) = assignee.as_deref() {
+            if assignee != lead_agent {
+                return Ok(None);
+            }
+        }
+        let running: i64 = tx
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM team_tasks WHERE id = ?1)",
-                params![root_task as i64],
+                "SELECT COUNT(*) FROM team_task_runs WHERE task_id = ?1 AND status = 'running'",
+                params![root as i64],
                 |row| row.get(0),
             )
             .map_err(|e| BoardError::Storage(e.to_string()))?;
-        if !root_exists {
-            return Err(BoardError::UnknownTask(root_task));
+        if running > 0 {
+            return Ok(None);
         }
-        tx.execute(
-            "DELETE FROM team_final_task_refs WHERE root_task_id = ?1",
-            params![root_task as i64],
-        )
-        .map_err(|e| BoardError::Storage(e.to_string()))?;
-        tx.execute(
-            "DELETE FROM team_final_artifact_refs WHERE root_task_id = ?1",
-            params![root_task as i64],
-        )
-        .map_err(|e| BoardError::Storage(e.to_string()))?;
-        for task_id in task_refs {
-            tx.execute(
-                "INSERT INTO team_final_task_refs (root_task_id, selected_task_id) VALUES (?1, ?2)",
-                params![root_task as i64, *task_id as i64],
+        let changed = tx
+            .execute(
+                "UPDATE team_tasks SET status = 'running', assignee = ?2
+                 WHERE id = ?1 AND status IN ('failed', 'cancelled')
+                   AND (assignee IS NULL OR assignee = ?2)",
+                params![root as i64, lead_agent],
             )
             .map_err(|e| BoardError::Storage(e.to_string()))?;
+        if changed == 0 {
+            return Ok(None);
         }
-        for selected in artifact_refs {
-            tx.execute(
-                "INSERT INTO team_final_artifact_refs (root_task_id, task_id, path, sha256)
-                 VALUES (?1, ?2, ?3, ?4)",
+        let next: i64 = tx
+            .query_row(
+                "SELECT COALESCE(MAX(attempt), 0) + 1 FROM team_task_runs WHERE task_id = ?1",
+                params![root as i64],
+                |row| row.get(0),
+            )
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        tx.execute(
+            "INSERT INTO team_task_runs (task_id, attempt, agent_id, status, result, error)
+             VALUES (?1, ?2, ?3, 'running', NULL, NULL)",
+            params![root as i64, next, lead_agent],
+        )
+        .map_err(|e| BoardError::Storage(e.to_string()))?;
+        tx.commit()
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        Ok(Some(next as u32))
+    }
+
+    fn commit_root_final(
+        &mut self,
+        attempt: &TaskAttempt,
+        task_refs: &[u64],
+        artifact_refs: &[SelectedArtifactRef],
+    ) -> Result<(), BoardError> {
+        if attempt.status != TaskStatus::Succeeded {
+            return Err(BoardError::Storage(
+                "a root final commit needs a succeeded attempt".into(),
+            ));
+        }
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        write_final_refs(&tx, attempt.task_id, task_refs, artifact_refs)?;
+        let changed = tx
+            .execute(
+                "UPDATE team_task_runs SET status = 'succeeded', result = ?3, error = NULL
+                 WHERE task_id = ?1 AND attempt = ?2",
                 params![
-                    root_task as i64,
-                    selected.task_id as i64,
-                    selected.artifact.path,
-                    selected.artifact.sha256,
+                    attempt.task_id as i64,
+                    attempt.attempt as i64,
+                    attempt.result
                 ],
             )
             .map_err(|e| BoardError::Storage(e.to_string()))?;
+        if changed == 0 {
+            return Err(BoardError::UnknownTask(attempt.task_id));
         }
+        tx.execute(
+            "UPDATE external_runtime_bindings SET lifecycle_state = 'completed'
+             WHERE team_task_id = ?1 AND attempt = ?2",
+            params![attempt.task_id as i64, attempt.attempt as i64],
+        )
+        .map_err(|e| BoardError::Storage(e.to_string()))?;
+        let changed = tx
+            .execute(
+                "UPDATE team_tasks SET status = 'succeeded' WHERE id = ?1",
+                params![attempt.task_id as i64],
+            )
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        if changed == 0 {
+            return Err(BoardError::UnknownTask(attempt.task_id));
+        }
+        tx.commit().map_err(|e| BoardError::Storage(e.to_string()))
+    }
+
+    fn commit_root_failure(&mut self, attempt: &TaskAttempt) -> Result<(), BoardError> {
+        if attempt.status != TaskStatus::Failed {
+            return Err(BoardError::Storage(
+                "a root failure commit needs a failed attempt".into(),
+            ));
+        }
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        let changed = tx
+            .execute(
+                "UPDATE team_task_runs SET status = 'failed', result = NULL, error = ?3
+                 WHERE task_id = ?1 AND attempt = ?2",
+                params![
+                    attempt.task_id as i64,
+                    attempt.attempt as i64,
+                    attempt.error
+                ],
+            )
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        if changed == 0 {
+            return Err(BoardError::UnknownTask(attempt.task_id));
+        }
+        tx.execute(
+            "UPDATE external_runtime_bindings SET lifecycle_state = 'failed'
+             WHERE team_task_id = ?1 AND attempt = ?2",
+            params![attempt.task_id as i64, attempt.attempt as i64],
+        )
+        .map_err(|e| BoardError::Storage(e.to_string()))?;
+        let changed = tx
+            .execute(
+                "UPDATE team_tasks SET status = 'failed' WHERE id = ?1",
+                params![attempt.task_id as i64],
+            )
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        if changed == 0 {
+            return Err(BoardError::UnknownTask(attempt.task_id));
+        }
+        tx.commit().map_err(|e| BoardError::Storage(e.to_string()))
+    }
+
+    fn reconcile_root_final(&mut self, root: u64, attempt: u32) -> Result<(), BoardError> {
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        let changed = tx
+            .execute(
+                "UPDATE team_tasks SET status = 'succeeded'
+                 WHERE id = ?1 AND status <> 'succeeded'",
+                params![root as i64],
+            )
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        if changed == 0 {
+            let exists: i64 = tx
+                .query_row(
+                    "SELECT COUNT(*) FROM team_tasks WHERE id = ?1",
+                    params![root as i64],
+                    |row| row.get(0),
+                )
+                .map_err(|e| BoardError::Storage(e.to_string()))?;
+            if exists == 0 {
+                return Err(BoardError::UnknownTask(root));
+            }
+        }
+        tx.execute(
+            "UPDATE external_runtime_bindings SET lifecycle_state = 'completed'
+             WHERE team_task_id = ?1 AND attempt = ?2 AND lifecycle_state <> 'completed'",
+            params![root as i64, attempt as i64],
+        )
+        .map_err(|e| BoardError::Storage(e.to_string()))?;
         tx.commit().map_err(|e| BoardError::Storage(e.to_string()))
     }
 
@@ -989,6 +1194,73 @@ mod tests {
         );
         assert!(board.messages_to("lead").expect("messages").is_empty());
         assert!(board.artifacts(task).expect("artifacts").is_empty());
+    }
+
+    #[test]
+    fn a_rejected_root_final_commit_rolls_back_entirely() {
+        let mut board = SqliteTaskBoard::in_memory().expect("board");
+        let root = board
+            .create_task("team objective", None, TaskKind::Reasoning, None)
+            .expect("root");
+        let child = board
+            .create_task("selected worker", Some(root), TaskKind::Bulk, None)
+            .expect("child");
+        board
+            .record_attempt(&TaskAttempt {
+                task_id: root,
+                attempt: 1,
+                agent_id: "lead".into(),
+                status: TaskStatus::Running,
+                result: None,
+                error: None,
+            })
+            .expect("running attempt");
+        board
+            .set_status(root, TaskStatus::Running)
+            .expect("running root");
+        // The fault rejects the commit's last step, so the refs and the attempt
+        // written before it must roll back with it.
+        board
+            .conn
+            .execute_batch(
+                "CREATE TRIGGER reject_root_success BEFORE UPDATE ON team_tasks
+                 WHEN NEW.status = 'succeeded'
+                 BEGIN SELECT RAISE(ABORT, 'root success rejected'); END;",
+            )
+            .expect("test trigger");
+
+        let error = board
+            .commit_root_final(
+                &TaskAttempt {
+                    task_id: root,
+                    attempt: 1,
+                    agent_id: "lead".into(),
+                    status: TaskStatus::Succeeded,
+                    result: Some("answer".into()),
+                    error: None,
+                },
+                &[child],
+                &[SelectedArtifactRef {
+                    task_id: child,
+                    artifact: ArtifactMeta {
+                        path: "selected.txt".into(),
+                        sha256: "a".repeat(64),
+                    },
+                }],
+            )
+            .expect_err("the injected rejection must abort the commit");
+        assert!(matches!(error, BoardError::Storage(_)));
+        let attempts = board.attempts(root).expect("attempts");
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].status, TaskStatus::Running);
+        assert!(attempts[0].result.is_none());
+        assert_eq!(
+            board.task(root).expect("task").expect("exists").status,
+            TaskStatus::Running
+        );
+        let (task_refs, artifact_refs) = board.final_refs(root).expect("refs");
+        assert!(task_refs.is_empty());
+        assert!(artifact_refs.is_empty());
     }
 
     #[test]

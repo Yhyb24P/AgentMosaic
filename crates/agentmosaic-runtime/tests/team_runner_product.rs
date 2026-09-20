@@ -13,7 +13,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use agentmosaic_runtime::{TeamRunOptions, TeamRunner, TeamRunnerError};
 use agentmosaic_storage::{AgentRegistryRecord, SqliteAgentRegistry, SqliteTaskBoard};
-use agentmosaic_team::{reconstruct_team_result, TaskAttempt, TaskBoard, TaskKind, TaskStatus};
+use agentmosaic_team::{
+    reconstruct_team_result, ArtifactMeta, SelectedArtifactRef, TaskAttempt, TaskBoard, TaskKind,
+    TaskStatus,
+};
 use rusqlite::Connection;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -186,6 +189,130 @@ fn delegate_two_worker_tasks_reply() -> String {
         ],
     })
     .to_string()
+}
+
+/// The body of a JSON string literal for `text`, without its quotes: an exec
+/// Lead reports its decision as the JSON-string `text` of one event.
+#[cfg(unix)]
+fn json_string_body(text: &str) -> String {
+    let encoded = serde_json::to_string(text).unwrap();
+    encoded[1..encoded.len() - 1].to_string()
+}
+
+/// A real Codex Exec Lead whose process is a shell script. It counts every
+/// launch, continues the native thread it is asked to resume (and invents a
+/// fresh one otherwise), and answers with the launch's own scripted reply.
+#[cfg(unix)]
+struct ExecLeadScript {
+    executable: PathBuf,
+    launches: PathBuf,
+}
+
+#[cfg(unix)]
+impl ExecLeadScript {
+    fn new(fixture: &Fixture, name: &str, replies: &[String], delay_seconds: u32) -> Self {
+        let dir = fixture.root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let launches = dir.join("launches");
+        let counter = dir.join("threads");
+        let replies_file = dir.join("replies");
+        let executable = dir.join("lead.sh");
+        std::fs::write(
+            &replies_file,
+            replies
+                .iter()
+                .map(|reply| json_string_body(reply))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        let script = [
+            "#!/bin/sh".to_string(),
+            "prompt=$(cat)".to_string(),
+            "[ -n \"$prompt\" ] || exit 9".to_string(),
+            format!("printf 'x' >> '{}'", launches.display()),
+            format!(
+                "n=0; [ -f '{}' ] && n=$(cat '{}'); n=$((n+1)); printf '%s' \"$n\" > '{}'",
+                counter.display(),
+                counter.display(),
+                counter.display()
+            ),
+            format!("body=$(sed -n \"${{n}}p\" '{}')", replies_file.display()),
+            "resumed=no".to_string(),
+            "for a in \"$@\"; do [ \"$a\" = resume ] && resumed=yes; last=$a; done".to_string(),
+            "if [ \"$resumed\" = yes ]; then tid=$last; else tid=thread-$n; fi".to_string(),
+            match delay_seconds {
+                0 => String::new(),
+                seconds => format!("sleep {seconds}"),
+            },
+            "printf '%s\\n' \"{\\\"type\\\":\\\"thread.started\\\",\\\"thread_id\\\":\\\"$tid\\\"}\" \"{\\\"type\\\":\\\"item.completed\\\",\\\"item\\\":{\\\"type\\\":\\\"agent_message\\\",\\\"text\\\":\\\"$body\\\"}}\"".to_string(),
+        ]
+        .join("\n");
+        std::fs::write(&executable, script).unwrap();
+        let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+        std::fs::set_permissions(&executable, permissions).unwrap();
+        Self {
+            executable,
+            launches,
+        }
+    }
+
+    /// The durable registry row that drives this script as a Codex Exec Lead.
+    fn record(&self, id: &str) -> AgentRegistryRecord {
+        AgentRegistryRecord {
+            id: id.into(),
+            name: id.into(),
+            tier: "reasoner".into(),
+            driver_kind: Some("codex-exec".into()),
+            executable: Some(self.executable.display().to_string()),
+            runtime_version: None,
+            driver_args_json: Some("[]".into()),
+            max_concurrency: Some(1),
+            tags_json: Some("[]".into()),
+            driver_config_json: None,
+        }
+    }
+
+    /// How many Lead processes this script actually served.
+    fn launches(&self) -> usize {
+        std::fs::metadata(&self.launches)
+            .map(|metadata| metadata.len() as usize)
+            .unwrap_or(0)
+    }
+}
+
+/// Every durable row a resume must leave untouched, plus the exact board file
+/// bytes. A refused resume is proven by comparing this before and after.
+fn board_state(fixture: &Fixture) -> String {
+    let mut dump = format!(
+        "{:x}",
+        Sha256::digest(std::fs::read(&fixture.database).unwrap())
+    );
+    let connection = Connection::open(&fixture.database).unwrap();
+    for table in [
+        "team_tasks",
+        "team_task_runs",
+        "external_runtime_bindings",
+        "team_final_task_refs",
+        "team_final_artifact_refs",
+    ] {
+        let mut statement = connection
+            .prepare(&format!("SELECT * FROM {table}"))
+            .unwrap();
+        let columns = statement.column_count();
+        let mut rows = statement.query([]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            dump.push('\n');
+            for index in 0..columns {
+                dump.push_str(&format!(
+                    "{:?}|",
+                    row.get::<_, rusqlite::types::Value>(index).unwrap()
+                ));
+            }
+        }
+    }
+    dump
 }
 
 #[tokio::test]
@@ -382,7 +509,97 @@ async fn resume_on_a_succeeded_root_is_idempotent_and_replays_nothing() {
     assert_eq!(after, before, "resume created no task and no attempt");
 }
 
-// Resume recovers an interrupted descendant with the board's no-replay
+// A root left Running is never reclaimed implicitly: two live resumes must not
+// both enter the Lead runtime. The explicit recovery primitive closes the
+// interrupted attempt, and the next resume appends its own.
+#[tokio::test]
+async fn resume_refuses_a_running_root_until_recovery_closes_it() {
+    let fixture = Fixture::new("resume-running-root");
+    let sha256 = fixture.write_worker_artifact();
+    register_trio(
+        &fixture,
+        &[
+            delegate_reply(),
+            complete_reply(2, Some(WORKER_ARTIFACT), &sha256),
+        ],
+        "lead",
+    );
+    {
+        let mut board = fixture.open_board();
+        let root = board
+            .create_task(
+                "recover the objective",
+                None,
+                TaskKind::Reasoning,
+                Some("lead".into()),
+            )
+            .unwrap();
+        board.assign(root, "lead").unwrap();
+        board
+            .record_attempt(&TaskAttempt {
+                task_id: root,
+                attempt: 1,
+                agent_id: "lead".into(),
+                status: TaskStatus::Running,
+                result: None,
+                error: None,
+            })
+            .unwrap();
+        board.set_status(root, TaskStatus::Running).unwrap();
+    }
+
+    let runner = runner(&fixture);
+    let error = runner
+        .resume(1)
+        .await
+        .expect_err("a running root is not reclaimed");
+    assert!(
+        matches!(
+            error,
+            TeamRunnerError::RootNotResumable {
+                root: 1,
+                status: TaskStatus::Running
+            }
+        ),
+        "unexpected error: {error}"
+    );
+    assert!(error.to_string().contains("am recover"), "{error}");
+    let board = fixture.open_board();
+    assert_eq!(
+        board.attempts(1).unwrap().len(),
+        1,
+        "no attempt was appended"
+    );
+    drop(board);
+    assert!(!fixture.state.exists(), "no lead runtime was entered");
+
+    // What `am recover <database> <root>` does, then resume.
+    let mut board = fixture.open_board();
+    board.recover_interrupted_attempt(1).unwrap();
+    drop(board);
+    let outcome = runner.resume(1).await.expect("resume completes");
+
+    assert_eq!(outcome.root_task_id, 1);
+    assert_eq!(outcome.lead_agent, "lead");
+    assert_eq!(outcome.result.answer, LEAD_ANSWER);
+    let board = fixture.open_board();
+    let root_attempts = board.attempts(1).unwrap();
+    assert_eq!(root_attempts.len(), 2);
+    assert_eq!(root_attempts[0].status, TaskStatus::Failed);
+    assert!(root_attempts[0]
+        .error
+        .as_deref()
+        .unwrap()
+        .contains("interrupted before terminal driver result"));
+    assert_eq!(root_attempts[1].status, TaskStatus::Succeeded);
+    assert_eq!(root_attempts[1].result.as_deref(), Some(LEAD_ANSWER));
+    assert_eq!(
+        board.task(1).unwrap().unwrap().status,
+        TaskStatus::Succeeded
+    );
+}
+
+// Resume closes an interrupted descendant with the board's no-replay
 // primitive, then continues the Lead from the durable state.
 #[tokio::test]
 async fn resume_recovers_interrupted_descendants_without_replaying_them() {
@@ -409,17 +626,19 @@ async fn resume_recovers_interrupted_descendants_without_replaying_them() {
             )
             .unwrap();
         board.assign(root, "lead").unwrap();
+        // The interrupted Lead attempt was already closed by the explicit
+        // recovery primitive; only the descendant is still Running.
         board
             .record_attempt(&TaskAttempt {
                 task_id: root,
                 attempt: 1,
                 agent_id: "lead".into(),
-                status: TaskStatus::Running,
+                status: TaskStatus::Failed,
                 result: None,
-                error: None,
+                error: Some("interrupted synthesis".into()),
             })
             .unwrap();
-        board.set_status(root, TaskStatus::Running).unwrap();
+        board.set_status(root, TaskStatus::Failed).unwrap();
         let child = board
             .create_task(
                 "interrupted bulk",
@@ -461,12 +680,17 @@ async fn resume_recovers_interrupted_descendants_without_replaying_them() {
         .contains("interrupted before terminal driver result"));
     assert_eq!(board.task(2).unwrap().unwrap().status, TaskStatus::Failed);
     assert!(board.artifacts(2).unwrap().is_empty());
-    // The root's own pre-existing attempt was settled in place, not duplicated.
-    assert_eq!(board.attempts(1).unwrap().len(), 1);
+    // The root's own failed attempt is preserved; the resume appended its own.
+    let root_attempts = board.attempts(1).unwrap();
+    assert_eq!(root_attempts.len(), 2);
+    assert_eq!(root_attempts[0].status, TaskStatus::Failed);
     assert_eq!(
-        board.attempts(1).unwrap()[0].result.as_deref(),
-        Some(LEAD_ANSWER)
+        root_attempts[0].error.as_deref(),
+        Some("interrupted synthesis")
     );
+    assert_eq!(root_attempts[1].attempt, 2);
+    assert_eq!(root_attempts[1].status, TaskStatus::Succeeded);
+    assert_eq!(root_attempts[1].result.as_deref(), Some(LEAD_ANSWER));
     assert_eq!(
         board.task(1).unwrap().unwrap().status,
         TaskStatus::Succeeded
@@ -656,38 +880,200 @@ async fn a_configuration_error_never_leaves_a_root_behind() {
     );
 }
 
-// A failed root is resumable: once the registry is corrected, the Lead is
-// driven again and its pre-existing attempt row is settled in place.
+/// Gate A: a failed root resumes by appending a new attempt. Attempt history
+/// is append-only, so the failed attempt keeps its own error and is never
+/// rewritten into a success.
+#[tokio::test]
+async fn failed_root_resume_appends_new_attempt() {
+    let fixture = Fixture::new("resume-after-failure");
+    let sha256 = fixture.write_worker_artifact();
+    register_trio(&fixture, &["not a decision".to_string()], "lead");
+    let runner = runner(&fixture);
+    runner
+        .run("deliver the objective")
+        .await
+        .expect_err("the first run fails");
+    let board = fixture.open_board();
+    assert_eq!(board.task(1).unwrap().unwrap().status, TaskStatus::Failed);
+    let failed = board.attempts(1).unwrap();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].status, TaskStatus::Failed);
+    let first_error = failed[0]
+        .error
+        .clone()
+        .expect("the failed attempt kept its error");
+    drop(board);
+
+    // Correct the Lead's configuration and resume the same durable root.
+    fixture.register(&codex_agent(
+        "lead",
+        &fixture,
+        &[
+            delegate_reply(),
+            complete_reply(2, Some(WORKER_ARTIFACT), &sha256),
+        ],
+    ));
+    let outcome = runner.resume(1).await.expect("the resumed run completes");
+
+    assert_eq!(outcome.root_task_id, 1);
+    assert_eq!(outcome.result.answer, LEAD_ANSWER);
+    assert_eq!(outcome.result.task_refs, vec![2]);
+    let board = fixture.open_board();
+    let attempts = board.attempts(1).unwrap();
+    assert_eq!(attempts.len(), 2, "resume appends a new attempt");
+    assert_eq!(attempts[0].attempt, 1);
+    assert_eq!(attempts[0].status, TaskStatus::Failed);
+    assert_eq!(attempts[0].error.as_deref(), Some(first_error.as_str()));
+    assert_eq!(attempts[0].result, None);
+    assert_eq!(attempts[1].attempt, 2);
+    assert_eq!(attempts[1].status, TaskStatus::Succeeded);
+    assert_eq!(attempts[1].result.as_deref(), Some(LEAD_ANSWER));
+    assert_eq!(attempts[1].agent_id, "lead");
+    assert_eq!(
+        board.task(1).unwrap().unwrap().status,
+        TaskStatus::Succeeded
+    );
+}
+
+/// Gate G: a Codex Exec root's bindings are per attempt. The failed attempt's
+/// binding is preserved terminal, the resumed attempt owns its own row, and the
+/// native thread is inherited from the same Lead's earlier attempt.
 #[tokio::test]
 #[cfg(unix)]
-async fn failed_exec_lead_resume_marks_root_running_and_completes_existing_work() {
-    let fixture = Fixture::new("failed-exec-resume");
-    let mut record = codex_agent("lead", &fixture, &[]);
-    record.driver_kind = Some("codex-exec".into());
-    record.executable = Some("sh".into());
-    let reply = complete_reply(2, None, "");
-    let event = json!({"type":"item.completed", "item":{"type":"agent_message", "text":reply}});
-    record.driver_args_json = Some(json!(["-c", format!(
-        "prompt=$(cat); [ -n \"$prompt\" ] || exit 9; printf '%s\\n' '{{\"type\":\"thread.started\",\"thread_id\":\"resumed-thread\"}}' '{event}'"
-    )]).to_string());
-    record.driver_config_json = None;
-    fixture.register(&record);
+async fn root_exec_binding_history_is_one_row_per_attempt() {
+    let fixture = Fixture::new("binding-history");
+    let script = ExecLeadScript::new(
+        &fixture,
+        "lead",
+        &[
+            "this is not a JSON decision".to_string(),
+            "this is not a JSON decision".to_string(),
+            complete_reply(2, None, ""),
+        ],
+        0,
+    );
     fixture.register(&acp_agent("worker", "worker", &[]));
+    fixture.register(&script.record("lead"));
+
+    // Attempt 1 really runs the external Lead and fails on its invalid
+    // decision, so its binding row is written before the failure settles.
+    let runner = runner(&fixture);
+    runner
+        .run("finish existing work")
+        .await
+        .expect_err("the first attempt fails on the invalid decision");
+
+    let board = fixture.open_board();
+    let first = board
+        .external_binding(1, 1)
+        .unwrap()
+        .expect("attempt 1 binding");
+    assert_eq!(first.agent_id, "lead");
+    assert_eq!(first.lifecycle_state, "failed");
+    assert_eq!(first.native_thread_id.as_deref(), Some("thread-1"));
+    assert_eq!(board.attempts(1).unwrap()[0].status, TaskStatus::Failed);
+    drop(board);
+
+    // Work that already succeeded before the interruption. It is never re-run.
+    {
+        let mut board = fixture.open_board();
+        let child = board
+            .create_task(
+                "already done",
+                Some(1),
+                TaskKind::Bulk,
+                Some("worker".into()),
+            )
+            .unwrap();
+        assert_eq!(child, 2);
+        board.assign(child, "worker").unwrap();
+        board
+            .record_attempt(&TaskAttempt {
+                task_id: child,
+                attempt: 1,
+                agent_id: "worker".into(),
+                status: TaskStatus::Succeeded,
+                result: Some("durable work".into()),
+                error: None,
+            })
+            .unwrap();
+        board.set_status(child, TaskStatus::Succeeded).unwrap();
+    }
+
+    let outcome = runner
+        .resume(1)
+        .await
+        .expect("the resumed attempt completes");
+    assert_eq!(outcome.lead_agent, "lead");
+    assert_eq!(outcome.result.task_refs, vec![2]);
+    let board = fixture.open_board();
+    // Attempt 1 is untouched, and attempt 2 owns the inherited native thread.
+    let first_after = board.external_binding(1, 1).unwrap().unwrap();
+    assert_eq!(
+        first_after, first,
+        "the earlier attempt's binding is preserved"
+    );
+    let second = board
+        .external_binding(1, 2)
+        .unwrap()
+        .expect("attempt 2 binding");
+    assert_eq!(second.agent_id, "lead");
+    assert_eq!(second.lifecycle_state, "completed");
+    assert_eq!(second.native_thread_id, first_after.native_thread_id);
+    let attempts = board.attempts(1).unwrap();
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[0].status, TaskStatus::Failed);
+    assert_eq!(attempts[1].status, TaskStatus::Succeeded);
+    // The succeeded child was never re-scheduled: one attempt, still one.
+    assert_eq!(board.attempts(2).unwrap().len(), 1);
+    assert_eq!(
+        script.launches(),
+        3,
+        "one failing resolve plus its correction, then one resumed turn"
+    );
+}
+
+// Resume refuses a root it cannot reason about.
+#[tokio::test]
+async fn resume_rejects_an_unknown_or_non_reasoning_root() {
+    let fixture = Fixture::new("resume-rejects");
+    fixture.register(&acp_agent("worker", "worker", &[]));
+    fixture.register(&acp_agent("utility", "utility", &[]));
+    fixture.register(&codex_agent("lead", &fixture, &[delegate_reply()]));
+    let runner = runner(&fixture);
+    let error = runner.resume(99).await.expect_err("unknown root");
+    assert!(matches!(error, TeamRunnerError::UnknownRoot(99)));
+    let bulk = {
+        let mut board = fixture.open_board();
+        board
+            .create_task("a bulk task", None, TaskKind::Bulk, None)
+            .unwrap()
+    };
+    let error = runner.resume(bulk).await.expect_err("not a reasoning root");
+    assert!(matches!(
+        error,
+        TeamRunnerError::RootNotReasoning { root, .. } if root == bulk
+    ));
+}
+
+/// The durable shape an interruption leaves behind: a root whose Lead attempt
+/// already failed, and one child whose work succeeded.
+fn failed_root_with_succeeded_child(fixture: &Fixture, lead: &str) -> u64 {
     let mut board = fixture.open_board();
     let root = board
         .create_task(
             "finish existing work",
             None,
             TaskKind::Reasoning,
-            Some("lead".into()),
+            Some(lead.into()),
         )
         .unwrap();
-    board.assign(root, "lead").unwrap();
+    board.assign(root, lead).unwrap();
     board
         .record_attempt(&TaskAttempt {
             task_id: root,
             attempt: 1,
-            agent_id: "lead".into(),
+            agent_id: lead.into(),
             status: TaskStatus::Failed,
             result: None,
             error: Some("interrupted synthesis".into()),
@@ -714,90 +1100,335 @@ async fn failed_exec_lead_resume_marks_root_running_and_completes_existing_work(
         })
         .unwrap();
     board.set_status(child, TaskStatus::Succeeded).unwrap();
-    drop(board);
-    let result = runner(&fixture).resume(root).await.unwrap();
-    assert_eq!(result.result.task_refs, vec![child]);
+    assert_eq!(child, root + 1);
+    root
+}
+
+/// Gate B: the durable root assignee is the canonical Lead. A registry that has
+/// since become ambiguous must not change which agent a resume continues as.
+#[tokio::test]
+async fn resume_uses_durable_root_assignee() {
+    let fixture = Fixture::new("resume-durable-assignee");
+    fixture.register(&acp_agent("worker", "worker", &[]));
+    fixture.register(&codex_agent(
+        "lead-a",
+        &fixture,
+        &[complete_reply(2, None, "")],
+    ));
+    // A second reasoner makes a registry-only resolution ambiguous: only the
+    // root's own assignee can decide which Lead resumes.
+    fixture.register(&codex_agent(
+        "lead-b",
+        &fixture,
+        &[complete_reply(2, None, "")],
+    ));
+    let root = failed_root_with_succeeded_child(&fixture, "lead-a");
+
+    let outcome = runner(&fixture)
+        .resume(root)
+        .await
+        .expect("resume continues the durable lead");
+
+    assert_eq!(outcome.lead_agent, "lead-a");
+    assert_eq!(outcome.result.task_refs, vec![2]);
     let board = fixture.open_board();
-    assert_eq!(board.task_ids().unwrap(), vec![root, child]);
-    assert_eq!(board.attempts(child).unwrap().len(), 1);
     assert_eq!(
-        board.attempts(root).unwrap()[0].status,
-        TaskStatus::Succeeded
+        board.task(root).unwrap().unwrap().assignee.as_deref(),
+        Some("lead-a")
+    );
+    let attempts = board.attempts(root).unwrap();
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[1].agent_id, "lead-a");
+    assert_eq!(attempts[1].status, TaskStatus::Succeeded);
+}
+
+/// The legacy branch of the canonical-Lead rule: a root with no durable
+/// assignee resolves a Lead once, and the claim persists that choice.
+#[tokio::test]
+async fn resume_resolves_and_persists_a_legacy_root_lead() {
+    let fixture = Fixture::new("resume-legacy-assignee");
+    fixture.register(&acp_agent("worker", "worker", &[]));
+    fixture.register(&codex_agent(
+        "lead",
+        &fixture,
+        &[complete_reply(2, None, "")],
+    ));
+    let root = failed_root_with_succeeded_child(&fixture, "lead");
+    Connection::open(&fixture.database)
+        .unwrap()
+        .execute(
+            "UPDATE team_tasks SET assignee = NULL WHERE id = ?1",
+            rusqlite::params![root as i64],
+        )
+        .unwrap();
+
+    let outcome = runner(&fixture)
+        .resume(root)
+        .await
+        .expect("resume resolves the legacy lead");
+
+    assert_eq!(outcome.lead_agent, "lead");
+    let board = fixture.open_board();
+    assert_eq!(
+        board.task(root).unwrap().unwrap().assignee.as_deref(),
+        Some("lead"),
+        "the resolved lead is persisted by the claim"
+    );
+    let attempts = board.attempts(root).unwrap();
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[1].agent_id, "lead");
+}
+
+/// Gate C: an explicit `--lead` naming another agent fails before any durable
+/// mutation or runtime launch. A resume never takes a root over.
+#[tokio::test]
+async fn resume_rejects_cross_lead_takeover_before_mutation() {
+    let fixture = Fixture::new("resume-cross-lead");
+    fixture.register(&acp_agent("worker", "worker", &[]));
+    fixture.register(&codex_agent(
+        "lead-a",
+        &fixture,
+        &[complete_reply(2, None, "")],
+    ));
+    fixture.register(&codex_agent(
+        "lead-b",
+        &fixture,
+        &[complete_reply(2, None, "")],
+    ));
+    let root = failed_root_with_succeeded_child(&fixture, "lead-a");
+    let before = board_state(&fixture);
+
+    let runner = TeamRunner::new(
+        &fixture.database,
+        &fixture.repo,
+        TeamRunOptions {
+            lead_agent: Some("lead-b".into()),
+            ..TeamRunOptions::default()
+        },
+    );
+    let error = runner
+        .resume(root)
+        .await
+        .expect_err("a resume never replaces the durable lead");
+    assert!(
+        matches!(error, TeamRunnerError::CrossLeadTakeover { root: 1, .. }),
+        "unexpected error: {error}"
+    );
+    assert!(
+        error.to_string().contains("lead-a") && error.to_string().contains("lead-b"),
+        "{error}"
     );
     assert_eq!(
-        board
-            .external_binding(root, 1)
-            .unwrap()
-            .unwrap()
-            .native_thread_id
-            .as_deref(),
-        Some("resumed-thread")
+        board_state(&fixture),
+        before,
+        "a refused takeover mutates nothing"
+    );
+    assert!(!fixture.state.exists(), "no lead runtime was launched");
+}
+
+/// Gate D: the window between durable final refs and the root status is
+/// reconciled from that evidence. The Lead is never re-entered, and the
+/// persisted result and refs come back unchanged.
+#[tokio::test]
+async fn partial_final_is_reconciled_without_lead_replay() {
+    let fixture = Fixture::new("partial-final");
+    let sha256 = fixture.write_worker_artifact();
+    fixture.register(&acp_agent("worker", "worker", &[WORKER_ARTIFACT]));
+    fixture.register(&codex_agent("lead", &fixture, &[]));
+    let mut board = fixture.open_board();
+    let root = board
+        .create_task(
+            "finish the objective",
+            None,
+            TaskKind::Reasoning,
+            Some("lead".into()),
+        )
+        .unwrap();
+    board.assign(root, "lead").unwrap();
+    let child = board
+        .create_task(
+            "worker artifact",
+            Some(root),
+            TaskKind::Bulk,
+            Some("worker".into()),
+        )
+        .unwrap();
+    board.assign(child, "worker").unwrap();
+    board
+        .record_attempt(&TaskAttempt {
+            task_id: child,
+            attempt: 1,
+            agent_id: "worker".into(),
+            status: TaskStatus::Succeeded,
+            result: Some("worker result".into()),
+            error: None,
+        })
+        .unwrap();
+    board.set_status(child, TaskStatus::Succeeded).unwrap();
+    let artifact = ArtifactMeta {
+        path: WORKER_ARTIFACT.into(),
+        sha256,
+    };
+    board.record_artifact(child, &artifact).unwrap();
+    // Exactly the crash window: refs and a succeeded root attempt are durable,
+    // but the root itself never settled.
+    board
+        .record_final_refs(
+            root,
+            &[child],
+            &[SelectedArtifactRef {
+                task_id: child,
+                artifact: artifact.clone(),
+            }],
+        )
+        .unwrap();
+    board
+        .record_attempt(&TaskAttempt {
+            task_id: root,
+            attempt: 1,
+            agent_id: "lead".into(),
+            status: TaskStatus::Succeeded,
+            result: Some(LEAD_ANSWER.into()),
+            error: None,
+        })
+        .unwrap();
+    board.set_status(root, TaskStatus::Running).unwrap();
+    drop(board);
+
+    let outcome = runner(&fixture)
+        .resume(root)
+        .await
+        .expect("the partial final reconciles");
+
+    assert_eq!(outcome.lead_agent, "lead");
+    assert_eq!(outcome.result.answer, LEAD_ANSWER);
+    assert_eq!(outcome.result.task_refs, vec![child]);
+    assert_eq!(outcome.result.artifact_refs.len(), 1);
+    assert_eq!(outcome.result.artifact_refs[0].artifact, artifact);
+    let board = fixture.open_board();
+    assert_eq!(
+        board.task(root).unwrap().unwrap().status,
+        TaskStatus::Succeeded
+    );
+    let root_attempts = board.attempts(root).unwrap();
+    assert_eq!(root_attempts.len(), 1, "no attempt was replayed");
+    assert_eq!(root_attempts[0].result.as_deref(), Some(LEAD_ANSWER));
+    let (refs, artifacts) = board.final_refs(root).unwrap();
+    assert_eq!(refs, vec![child]);
+    assert_eq!(artifacts.len(), 1);
+    assert!(
+        !fixture.state.exists(),
+        "the lead runtime was never entered"
     );
 }
 
+/// Gate E: a final commit is one transaction. The injected fault rejects the
+/// last step — the root's own success — so every earlier step must roll back
+/// with it rather than leaving a succeeded attempt behind.
 #[tokio::test]
-async fn resume_re_drives_a_failed_root() {
-    let fixture = Fixture::new("resume-after-failure");
+async fn a_rejected_root_final_commit_leaves_no_partial_final() {
+    let fixture = Fixture::new("atomic-final");
     let sha256 = fixture.write_worker_artifact();
-    register_trio(&fixture, &["not a decision".to_string()], "lead");
-    let runner = runner(&fixture);
-    runner
-        .run("deliver the objective")
-        .await
-        .expect_err("the first run fails");
-    assert_eq!(
-        fixture.open_board().task(1).unwrap().unwrap().status,
-        TaskStatus::Failed
-    );
-
-    // Correct the Lead's configuration and resume the same durable root.
-    fixture.register(&codex_agent(
-        "lead",
+    register_trio(
         &fixture,
         &[
             delegate_reply(),
             complete_reply(2, Some(WORKER_ARTIFACT), &sha256),
         ],
-    ));
-    let outcome = runner.resume(1).await.expect("the resumed run completes");
-
-    assert_eq!(outcome.root_task_id, 1);
-    assert_eq!(outcome.result.answer, LEAD_ANSWER);
-    assert_eq!(outcome.result.task_refs, vec![2]);
-    let board = fixture.open_board();
-    let attempts = board.attempts(1).unwrap();
-    assert_eq!(
-        attempts.len(),
-        1,
-        "the failed attempt row is settled in place"
+        "lead",
     );
-    assert_eq!(attempts[0].status, TaskStatus::Succeeded);
-    assert_eq!(attempts[0].result.as_deref(), Some(LEAD_ANSWER));
+    Connection::open(&fixture.database)
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER reject_root_success BEFORE UPDATE ON team_tasks
+             WHEN NEW.status = 'succeeded' AND NEW.kind = 'reasoning'
+             BEGIN SELECT RAISE(ABORT, 'injected root success rejection'); END;",
+        )
+        .unwrap();
+
+    let error = runner(&fixture)
+        .run("deliver the objective")
+        .await
+        .expect_err("the injected failure aborts the run");
+    assert!(matches!(error, TeamRunnerError::Lead(_)), "{error}");
+
+    let board = fixture.open_board();
+    let root_attempts = board.attempts(1).unwrap();
+    assert_eq!(root_attempts.len(), 1);
+    assert_eq!(root_attempts[0].status, TaskStatus::Failed);
+    assert!(
+        root_attempts[0].result.is_none(),
+        "the rejected answer is not durable"
+    );
+    let (refs, artifacts) = board.final_refs(1).unwrap();
+    assert!(
+        refs.is_empty() && artifacts.is_empty(),
+        "the rejected selection rolled back with the commit"
+    );
+    assert_eq!(board.task(1).unwrap().unwrap().status, TaskStatus::Failed);
+    // The delegated work that did succeed is untouched: only the root's own
+    // final commit was rejected.
+    assert_eq!(board.attempts(2).unwrap()[0].status, TaskStatus::Succeeded);
+}
+
+/// Gate F: two concurrent resumes of the same failed root have exactly one
+/// claimant. The loser fails before it can enter the Lead runtime, so neither a
+/// duplicate attempt nor a duplicate Lead process can appear.
+#[tokio::test]
+#[cfg(unix)]
+async fn concurrent_resume_has_single_claimant() {
+    let fixture = Fixture::new("concurrent-resume");
+    // A real exec Lead that takes seconds: both resumes reach the claim while
+    // the claimant is provably still running.
+    let script = ExecLeadScript::new(&fixture, "lead", &[complete_reply(2, None, "")], 3);
+    fixture.register(&acp_agent("worker", "worker", &[]));
+    fixture.register(&script.record("lead"));
+    let root = failed_root_with_succeeded_child(&fixture, "lead");
+
+    let resume_on_its_own_thread = |database: PathBuf, repo: PathBuf| {
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let runner = TeamRunner::new(&database, &repo, TeamRunOptions::default());
+            runtime.block_on(runner.resume(root))
+        })
+    };
+    let first = resume_on_its_own_thread(fixture.database.clone(), fixture.repo.clone());
+    let second = resume_on_its_own_thread(fixture.database.clone(), fixture.repo.clone());
+    let outcomes = [first.join().unwrap(), second.join().unwrap()];
+
+    let claimants = outcomes.iter().filter(|outcome| outcome.is_ok()).count();
+    let refusals: Vec<&TeamRunnerError> = outcomes
+        .iter()
+        .filter_map(|outcome| outcome.as_ref().err())
+        .collect();
+    assert_eq!(
+        claimants, 1,
+        "exactly one resume may enter the lead: {outcomes:?}"
+    );
+    assert_eq!(refusals.len(), 1);
+    assert!(
+        matches!(
+            refusals[0],
+            TeamRunnerError::RootNotResumable { root: 1, .. }
+        ),
+        "{}",
+        refusals[0]
+    );
+    let board = fixture.open_board();
+    let root_attempts = board.attempts(1).unwrap();
+    assert_eq!(
+        root_attempts.len(),
+        2,
+        "only the claimant appended an attempt"
+    );
+    assert_eq!(root_attempts[0].status, TaskStatus::Failed);
+    assert_eq!(root_attempts[1].status, TaskStatus::Succeeded);
     assert_eq!(
         board.task(1).unwrap().unwrap().status,
         TaskStatus::Succeeded
     );
-}
-
-// Resume refuses a root it cannot reason about.
-#[tokio::test]
-async fn resume_rejects_an_unknown_or_non_reasoning_root() {
-    let fixture = Fixture::new("resume-rejects");
-    fixture.register(&acp_agent("worker", "worker", &[]));
-    fixture.register(&acp_agent("utility", "utility", &[]));
-    fixture.register(&codex_agent("lead", &fixture, &[delegate_reply()]));
-    let runner = runner(&fixture);
-    let error = runner.resume(99).await.expect_err("unknown root");
-    assert!(matches!(error, TeamRunnerError::UnknownRoot(99)));
-    let bulk = {
-        let mut board = fixture.open_board();
-        board
-            .create_task("a bulk task", None, TaskKind::Bulk, None)
-            .unwrap()
-    };
-    let error = runner.resume(bulk).await.expect_err("not a reasoning root");
-    assert!(matches!(
-        error,
-        TeamRunnerError::RootNotReasoning { root, .. } if root == bulk
-    ));
+    assert_eq!(script.launches(), 1, "the lead runtime was launched once");
 }

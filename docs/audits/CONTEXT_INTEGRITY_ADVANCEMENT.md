@@ -32,10 +32,13 @@ SQLite stays v12 and the Lead decision wire is unchanged.
    results. Either a success or a failure can now ground a follow-up. An empty
    context still cannot, and final completion still needs a successful task.
 6. Resuming a failed Codex Exec root left its Lead attempt failed, so binding
-   restoration refused to start. `TeamRunner::resume` now marks the existing
-   Lead attempt and root running before driving the brain. This preserves the
-   existing attempt-1 settlement convention and its foreign binding. Successful
-   roots still return before this code and remain byte-for-byte unchanged.
+   restoration refused to start. `TeamRunner::resume` now drives the Lead on a
+   *new* attempt owned by the root's durable assignee, so the failed attempt
+   keeps its row and its foreign binding and the new attempt inherits that same
+   Lead's native thread. Successful roots still return before this code and
+   remain unchanged. (An earlier revision of this fix re-opened attempt 1 in
+   place, which rewrote failed history; the root recovery work on this branch
+   retires it — see `docs/recovery.md` and the root recovery tests.)
 
 ## Deterministic evidence
 

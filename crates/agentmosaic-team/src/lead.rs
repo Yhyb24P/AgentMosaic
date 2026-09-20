@@ -16,7 +16,8 @@
 use async_trait::async_trait;
 
 use crate::board::{
-    AgentMessage, BoardError, SelectedArtifactRef, TaskAttempt, TaskBoard, TaskStatus,
+    running_attempt, AgentMessage, BoardError, SelectedArtifactRef, TaskAttempt, TaskBoard,
+    TaskStatus,
 };
 use crate::registry::{AgentTaskResult, TaskKind};
 use crate::run_event::{bounded_event_text, LeadPhase, RunEvent};
@@ -218,12 +219,31 @@ impl<B: TaskBoard + Send + 'static> Lead<B> {
     /// Run the plan-follow-up-synthesis loop for `objective`.
     pub async fn run(&mut self, objective: &str) -> Result<TeamResult, LeadError> {
         // Record the objective as a durable root task (T02/T16); the delegated
-        // subtasks hang off it, and the final answer is persisted on it.
+        // subtasks hang off it, and the final answer is persisted on it. The
+        // root's own Lead attempt is recorded Running first, so this execution
+        // owns an independent attempt row exactly like a product run does.
         let root_id = {
             let mut board = self.scheduler.board().lock().unwrap();
-            board
+            let root = board
                 .create_task(objective, None, TaskKind::Reasoning, None)
-                .map_err(LeadError::Board)?
+                .map_err(LeadError::Board)?;
+            board
+                .assign(root, &self.lead_agent)
+                .map_err(LeadError::Board)?;
+            board
+                .record_attempt(&TaskAttempt {
+                    task_id: root,
+                    attempt: 1,
+                    agent_id: self.lead_agent.clone(),
+                    status: TaskStatus::Running,
+                    result: None,
+                    error: None,
+                })
+                .map_err(LeadError::Board)?;
+            board
+                .set_status(root, TaskStatus::Running)
+                .map_err(LeadError::Board)?;
+            root
         };
         self.root_id = Some(root_id);
         self.run_rounds(objective).await
@@ -454,34 +474,32 @@ impl<B: TaskBoard + Send + 'static> Lead<B> {
     /// Persist the final answer and settle the root task as succeeded, so the
     /// objective and the final result are both reconstructable from the board.
     ///
-    /// The root's Lead attempt row may already exist when the loop was started
-    /// with `run_on_root` (the product runner records it). `record_attempt` is
-    /// INSERT-only, so an existing row with the same attempt number is settled
-    /// with `complete_attempt` instead of being inserted twice.
+    /// Every execution records its own root attempt as `Running` before the
+    /// external Lead turn (the product runner and a resume both do), so the row
+    /// this settles is this execution's attempt rather than a reused number.
+    /// The refs, the attempt, its binding, and the root status are one atomic
+    /// commit: a crash cannot expose a succeeded attempt next to a root that
+    /// still looks resumable.
     fn persist_final(&self, root_id: u64, result: &TeamResult) -> Result<(), LeadError> {
         let mut board = self.scheduler.board().lock().unwrap();
-        // Persist explicit selections before the root task becomes visible as
-        // succeeded. A crash can leave a non-terminal root with refs, never a
-        // terminal final result whose grounding is absent.
-        board
-            .record_final_refs(root_id, &result.task_refs, &result.artifact_refs)
-            .map_err(LeadError::Board)?;
+        let attempts = board.attempts(root_id).map_err(LeadError::Board)?;
+        let attempt = running_attempt(&attempts, &self.lead_agent)
+            .map(|running| running.attempt)
+            .ok_or_else(|| {
+                LeadError::Board(BoardError::Storage(
+                    "the root has no running Lead attempt to settle".into(),
+                ))
+            })?;
         let attempt = TaskAttempt {
             task_id: root_id,
-            attempt: 1,
+            attempt,
             agent_id: self.lead_agent.clone(),
             status: TaskStatus::Succeeded,
             result: Some(result.answer.clone()),
             error: None,
         };
-        let existing = board.attempts(root_id).map_err(LeadError::Board)?;
-        if existing.iter().any(|a| a.attempt == attempt.attempt) {
-            board.complete_attempt(&attempt).map_err(LeadError::Board)?;
-        } else {
-            board.record_attempt(&attempt).map_err(LeadError::Board)?;
-        }
         board
-            .set_status(root_id, TaskStatus::Succeeded)
+            .commit_root_final(&attempt, &result.task_refs, &result.artifact_refs)
             .map_err(LeadError::Board)?;
         Ok(())
     }
