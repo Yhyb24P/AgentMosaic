@@ -19,6 +19,12 @@ am resume-team <database> /path/to/repo 1
   durable state, closes interrupted descendants without replaying them, and is
   idempotent on an already-succeeded root.
 
+For an unfinished root, `resume-team` marks the existing Lead attempt running
+before restoring its external runtime binding. If completed descendants already
+provide enough evidence, the Lead can finish immediately on the first resumed
+round without creating another task. A failed descendant is also valid evidence
+for a follow-up; a successful task is still required to ground the final answer.
+
 External runtime bindings are marked `interrupted` for the closed attempts; inspect them
 with `am binding <database> <task-id>`.
 

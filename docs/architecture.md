@@ -98,3 +98,23 @@ Task/result/artifact/final-reference semantics and the runtime wire strings
 (`TaskKind`, `DriverKind`) are stable identifiers; they are not renamed by branding
 work. The Lead's strict decision wire is checked in at
 `contracts/lead_decision.schema.json`.
+
+## Lead context limits
+
+Both Codex Lead adapters use the same JSON context renderer. It measures the
+actual serialized bytes, including escaping, and reduces textual excerpts to
+fit. Omitted text ends in ` [truncated]`. Agent IDs, task IDs, artifact paths
+and SHA-256 digests are never abbreviated; each artifact includes its owning
+task ID. Task and artifact selection is still verified against the board.
+
+The default `max_prompt_bytes` is 32,768: it bounds the context turn including
+its prefix and reply instruction. Codex Exec additionally sends the fixed Lead
+developer contract on each normal turn; this setting does not bound provider
+history, runtime instructions or token usage. The app-server sends that contract
+when starting the thread.
+
+If complete references and minimum text excerpts (a 64-byte source-text cap per
+field, including the truncation marker) cannot fit, rendering fails before the
+Lead turn starts. The root records a capacity error. Reduce the team/task/artifact
+size, shorten agent identifiers, or configure a larger `max_prompt_bytes` through
+the advanced registry options. The renderer never sends a partial JSON document.

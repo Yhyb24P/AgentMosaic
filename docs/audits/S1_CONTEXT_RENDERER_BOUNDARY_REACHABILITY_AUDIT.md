@@ -1,5 +1,13 @@
 # S1 Context Renderer Boundary & Reachability Audit
 
+Historical baseline: all measurements below describe `8088252`, before the
+context-integrity repair. Follow-up code review corrected the result-reachability
+classification: 31 long summaries can fit within the public 32-task limit;
+the earlier blanket "hidden compatibility surface only" claim was wrong.
+The short-summary threshold of 722 tasks still requires the advanced surface.
+Current repair and verification evidence belongs in
+`CONTEXT_INTEGRITY_ADVANCEMENT.md`, not in these historical measurements.
+
 The single question this audit answers:
 
 > Can the renderer's L2 whole-payload truncation happen in a state the current
@@ -116,15 +124,17 @@ reach such a state is section 4, and it is a separate proof.
 |---|---|---|---|---|---|
 | candidates | `agent_registry` rows; `am agent add <id> …` (public) | none | **none: no id length and no agent-count validation** | **REACHABLE** | `registry_store.rs:51-67` inserts the id verbatim; `agent.rs`/`registry.rs` contain no id length/charset/count check; a 33,000-character id was accepted and stored (`id_len=33000`) |
 | artifacts | driver `artifact_paths` from repeatable `--artifact RELPATH`; rows written per task on success | none per task | **none: no count cap on `artifact_paths`** | **REACHABLE** (config), not re-reproduced | `driver_factory.rs:417` `string_array(...)` has no length cap; every driver collects configured paths (`collect_artifacts`) |
-| results | succeeded descendants; `Lead::context` reads every child's attempt result | `DEFAULT_MAX_TASKS=32` under `am run` | `run-team/resume-team --max-tasks N` parses any `u32 > 0` (`parse_positive_u32`, advanced.rs:785-793) | **REACHABLE only through the hidden compatibility surface**; UNREACHABLE via `am run` | 722 results needed; `am run` cannot exceed 32 children |
+| results | succeeded descendants; `Lead::context` reads every child's attempt result | `DEFAULT_MAX_TASKS=32` under `am run` | `run-team/resume-team --max-tasks N` parses any `u32 > 0` (`parse_positive_u32`, advanced.rs:785-793) | **REACHABLE through public `am run` for long summaries**; short-summary 722-row case requires advanced options | Section 3 measures 31 results with 4,096-byte summaries; both public task limits permit 32, and the default ACP result bound is 16,384 bytes |
 | failures | failed descendant attempts, bounded error text | same as results | same as results | **REACHABLE only through the hidden compatibility surface** | 756 failures needed |
 | messages | Lead-addressed `messages` rows | none | **no production writer** | **UNREACHABLE_UNDER_CURRENT_PRODUCT / NO_PRODUCT_WRITER** | every product driver returns `message: None` (`acp_worker.rs:677,700,823`, `claude_cli_driver.rs:212`, `codex_team_driver.rs:210`, `codex_exec_driver.rs:309`); `record_message` production call sites: none (only the trait, the impl, tests) |
 | objective | `am run "<objective>"` free text | L1-bounded at render time | user input length unbounded, but L1 caps it at `per_text` | **UNREACHABLE** for L2 | measured: a 100,000-byte objective renders as 4,217 bytes and never reaches L2 |
 | runtime events | observation plane | n/a | n/a | **UNREACHABLE** (not rendered) | no event field in `LeadContext` |
 
-So the two vectors that reach L2 **through the public CLI alone** are candidate
-ids and configured artifact paths; results/failures need the hidden
-compatibility command; messages have no writer at all; the objective cannot.
+Candidate ids, configured artifact paths, and long result summaries can reach
+L2 **through the public CLI alone**. The measured short-summary and short-error
+high-count cases need the compatibility command. Messages have no writer.
+The objective-only ASCII cases measured here do not reach L2; that does not
+prove a general property for arbitrary JSON-escaped text.
 
 ## 5. S1-C — minimal real reproduction
 
