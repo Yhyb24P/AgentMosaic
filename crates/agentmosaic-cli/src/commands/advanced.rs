@@ -90,7 +90,7 @@ pub fn override_task(database: &str, fields: &[String]) -> Result<String, String
         .task(task)
         .map_err(|e| format!("override: {e:?}"))?
         .ok_or_else(|| format!("override: missing task {task}"))?;
-    if record.kind == TaskKind::Reasoning {
+    if is_team_run_root(record.kind, record.parent_task) {
         return Err(format!(
             "override: task {task} is the reasoning root of a team run; a root's durable Lead cannot be replaced with `am override`"
         ));
@@ -149,10 +149,11 @@ pub fn resume(database: &str, fields: &[String]) -> Result<String, String> {
         .task(task)
         .map_err(|e| format!("resume: {e:?}"))?
         .ok_or_else(|| format!("resume: missing task {task}"))?;
-    // A reasoning root's own resume entry point is `resume-team`, which claims
-    // the root and appends its attempt. Moving it to Pending here would leave a
+    // A team root's own resume entry point is `resume-team`, which claims the
+    // root and appends its attempt. Moving it to Pending here would leave a
     // state `resume-team` refuses, so this refuses instead and mutates nothing.
-    if record.kind == TaskKind::Reasoning {
+    // A reasoning *child* is an ordinary delegated task and resumes normally.
+    if is_team_run_root(record.kind, record.parent_task) {
         return Err(format!(
             "resume: task {task} is the reasoning root of a team run; continue it with `am resume-team <database> <repo> {task}`"
         ));

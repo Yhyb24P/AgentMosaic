@@ -825,6 +825,80 @@ fn continue_acp_refuses_team_root_without_mutation() {
     fixture.assert_untouched(&before);
 }
 
+/// A reasoning task *with* a parent is an ordinary delegated task, not a team
+/// root: the root guards must let it through both compatibility spellings.
+/// Shared by the two positive regressions below.
+fn reasoning_child(name: &str, status: TaskStatus) -> (Scratch, u64) {
+    let scratch = Scratch::new(name);
+    let mut board =
+        SqliteTaskBoard::open(rusqlite::Connection::open(&scratch.database).expect("open board"))
+            .expect("board");
+    let root = board
+        .create_task(
+            "team objective",
+            None,
+            TaskKind::Reasoning,
+            Some("lead".into()),
+        )
+        .expect("root");
+    board.assign(root, "lead").expect("assign root");
+    let child = board
+        .create_task(
+            "delegated reasoning",
+            Some(root),
+            TaskKind::Reasoning,
+            Some("reasoner-a".into()),
+        )
+        .expect("child");
+    board.assign(child, "reasoner-a").expect("assign child");
+    board.set_status(child, status).expect("child status");
+    (scratch, child)
+}
+
+/// The reasoning child is schedulable again: `am resume` moves it to pending
+/// and leaves its parent root alone.
+#[test]
+fn resume_allows_reasoning_child() {
+    let (scratch, child) = reasoning_child("resume_reasoning_child", TaskStatus::Failed);
+    let database = scratch.db();
+    let dir = scratch.dir();
+
+    let resumed = ok_in(dir, &["resume", &database, &child.to_string()]);
+    assert_eq!(resumed.trim(), format!("resumed task={child}"));
+    let board = ok_in(dir, &["status", &database]);
+    assert!(
+        board.contains(&format!("task={child} status=pending")),
+        "{board}"
+    );
+    assert!(
+        board.contains("task=1 status=assigned assignee=lead"),
+        "the parent root is untouched: {board}"
+    );
+}
+
+/// The reasoning child can be reassigned: `am override` moves it to assigned
+/// with the new agent.
+#[test]
+fn override_allows_reasoning_child() {
+    let (scratch, child) = reasoning_child("override_reasoning_child", TaskStatus::Failed);
+    let database = scratch.db();
+    let dir = scratch.dir();
+
+    let overridden = ok_in(
+        dir,
+        &["override", &database, &child.to_string(), "reasoner-b"],
+    );
+    assert_eq!(
+        overridden.trim(),
+        format!("overrode task={child} agent=reasoner-b")
+    );
+    let board = ok_in(dir, &["status", &database]);
+    assert!(
+        board.contains(&format!("task={child} status=assigned assignee=reasoner-b")),
+        "{board}"
+    );
+}
+
 /// `run-acp`, `continue-acp` and `binding` fail on a fixture with no bound
 /// session, and each failure is that command's own — it names itself.
 #[test]
