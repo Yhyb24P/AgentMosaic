@@ -51,6 +51,12 @@ pub fn registry(database: &str, limit: Option<&str>) -> Result<String, String> {
 pub fn submit(database: &str, fields: &[String]) -> Result<String, String> {
     let mut board = project::open(database)?;
     let kind = parse_kind(fields.first())?;
+    if is_team_run_root(kind, None) {
+        return Err(
+            "submit: a reasoning root is created by `am run-team <database> <repo> \"<objective>\"`; submit creates schedulable worker tasks"
+                .into(),
+        );
+    }
     let objective = fields.get(1..).unwrap_or_default().join(" ");
     if objective.trim().is_empty() {
         return Err("missing objective".into());
@@ -191,6 +197,18 @@ pub fn binding(database: &str, fields: &[String]) -> Result<String, String> {
         binding.lifecycle_state,
         binding.native_thread_id.is_some(),
     ))
+}
+
+/// Whether a task is the user-visible root of a team run: exactly the shape
+/// `root_tasks()` reports (`parent_task IS NULL` and `kind = reasoning`).
+///
+/// Only `run-team` creates one and only `resume-team` advances it. Every other
+/// spelling that could create or drive that shape refuses it before mutating
+/// anything, because each of them bypasses the root's claim, its canonical Lead
+/// and its final commit. A reasoning task *with* a parent is an ordinary
+/// delegated task and is not affected.
+fn is_team_run_root(kind: TaskKind, parent: Option<u64>) -> bool {
+    kind == TaskKind::Reasoning && parent.is_none()
 }
 
 fn parse_kind(value: Option<&String>) -> Result<TaskKind, String> {
@@ -351,6 +369,11 @@ pub fn run_acp(database: &str, fields: &[String]) -> Result<String, String> {
         .task(task_id)
         .map_err(|e| format!("run-acp: {e:?}"))?
         .ok_or_else(|| format!("run-acp: missing task {task_id}"))?;
+    if is_team_run_root(task.kind, task.parent_task) {
+        return Err(format!(
+            "run-acp: task {task_id} is the reasoning root of a team run; a root is advanced by `am resume-team`, never as an ACP worker task"
+        ));
+    }
     if matches!(task.status, TaskStatus::Succeeded | TaskStatus::Running) {
         return Err("run-acp requires a pending, assigned, failed, or cancelled task".into());
     }
@@ -608,6 +631,11 @@ pub fn continue_acp(database: &str, fields: &[String]) -> Result<String, String>
         .task(task_id)
         .map_err(|e| format!("continue-acp: {e:?}"))?
         .ok_or_else(|| format!("continue-acp: missing task {task_id}"))?;
+    if is_team_run_root(task.kind, task.parent_task) {
+        return Err(format!(
+            "continue-acp: task {task_id} is the reasoning root of a team run; a root is advanced by `am resume-team`, never as an ACP worker task"
+        ));
+    }
     if !matches!(
         task.status,
         TaskStatus::Pending | TaskStatus::Assigned | TaskStatus::Failed | TaskStatus::Cancelled
