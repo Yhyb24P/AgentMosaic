@@ -8,6 +8,82 @@ fn cli() -> Command {
     Command::new(env!("CARGO_BIN_EXE_am"))
 }
 
+#[test]
+#[cfg(unix)]
+fn oversized_public_agent_id_fails_without_launching_either_lead_runtime() {
+    for adapter in ["codex-exec", "codex-app-server"] {
+        let root = temporary_project("context_capacity");
+        fs::create_dir_all(&root).unwrap();
+        assert!(Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success());
+        assert!(cli()
+            .current_dir(&root)
+            .arg("init")
+            .output()
+            .unwrap()
+            .status
+            .success());
+        let long_id = "w".repeat(33000);
+        for (id, role, kind) in [
+            ("lead", "reasoner", adapter),
+            (long_id.as_str(), "worker", "acp"),
+        ] {
+            let output = cli()
+                .current_dir(&root)
+                .args([
+                    "agent",
+                    "add",
+                    id,
+                    "--role",
+                    role,
+                    "--adapter",
+                    kind,
+                    "--",
+                    "sh",
+                    "-c",
+                    "touch runtime-started; exit 91",
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let output = cli()
+            .current_dir(&root)
+            .args(["run", "--quiet", "inspect this project"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("context capacity exceeded"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !root.join("runtime-started").exists(),
+            "no runtime may start with unusable context"
+        );
+        let conn = rusqlite::Connection::open(root.join(".agentmosaic/state.db")).unwrap();
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM team_tasks WHERE parent_task IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "failed");
+        drop(conn);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
 fn temporary_project(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "agentmosaic_{name}_{}_{}",

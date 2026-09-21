@@ -115,6 +115,48 @@ impl std::fmt::Display for BoardError {
     }
 }
 
+/// The number the next attempt of a task takes: one past the highest attempt
+/// number already persisted. Attempt history is append-only, so a later run
+/// never reuses a terminal attempt's number.
+fn next_attempt_number(attempts: &[TaskAttempt]) -> u32 {
+    attempts
+        .iter()
+        .map(|attempt| attempt.attempt)
+        .max()
+        .unwrap_or(0)
+        + 1
+}
+
+/// The newest `Running` attempt of `task` owned by `agent`, if any.
+///
+/// Attempts are appended in order, so the last matching row is the attempt a
+/// live execution of that agent is settling — not an earlier terminal one.
+pub fn running_attempt<'a>(attempts: &'a [TaskAttempt], agent: &str) -> Option<&'a TaskAttempt> {
+    attempts
+        .iter()
+        .rev()
+        .find(|attempt| attempt.agent_id == agent && attempt.status == TaskStatus::Running)
+}
+
+/// Whether a resume may claim a root in `status` whose latest attempt is
+/// `latest_attempt`.
+///
+/// `Failed`/`Cancelled` are the normal resumable states. A `Running` root is
+/// resumable only with the durable evidence that no execution is still in
+/// flight: its latest attempt already settled as `Failed` and — checked by the
+/// caller — no attempt is `Running`. That shape is the residue the old,
+/// non-atomic failure settlement could leave behind (the attempt settled, the
+/// root status never did), and it is repaired by the same claim that appends
+/// the next attempt. Any other `Running` root is never reclaimed implicitly:
+/// two live resumes must not both enter the Lead runtime.
+pub fn root_claim_is_resumable(status: TaskStatus, latest_attempt: Option<TaskStatus>) -> bool {
+    match status {
+        TaskStatus::Failed | TaskStatus::Cancelled => true,
+        TaskStatus::Running => latest_attempt == Some(TaskStatus::Failed),
+        TaskStatus::Pending | TaskStatus::Assigned | TaskStatus::Succeeded => false,
+    }
+}
+
 /// The durable task board.
 ///
 /// Implementations persist tasks, attempts, messages, and artifacts so that a
@@ -196,6 +238,93 @@ pub trait TaskBoard {
         task_refs: &[u64],
         artifact_refs: &[SelectedArtifactRef],
     ) -> Result<(), BoardError>;
+    /// Claim one more Lead attempt for a resumable root.
+    ///
+    /// The claim is a compare-and-swap on the root's durable status: exactly one
+    /// caller can move a resumable root (`Failed`/`Cancelled`) to `Running` and
+    /// append the next `Running` attempt owned by `lead_agent`. Returns the new
+    /// attempt number, or `None` when the root is no longer resumable — because
+    /// it already succeeded, is still `Running`, still carries a `Running`
+    /// attempt, belongs to another Lead, or another resume claimed it first.
+    ///
+    /// A `Running` root is never reclaimed implicitly: two live resumes must not
+    /// both enter the Lead runtime. Close an interrupted process with the
+    /// explicit recovery primitive first, then resume. Attempt history is
+    /// append-only, so a claim never rewrites a previous attempt row.
+    fn claim_root_attempt(
+        &mut self,
+        root: u64,
+        lead_agent: &str,
+    ) -> Result<Option<u32>, BoardError> {
+        let record = self.task(root)?.ok_or(BoardError::UnknownTask(root))?;
+        if let Some(assignee) = record.assignee.as_deref() {
+            if assignee != lead_agent {
+                return Ok(None);
+            }
+        }
+        let attempts = self.attempts(root)?;
+        if attempts.iter().any(|row| row.status == TaskStatus::Running) {
+            return Ok(None);
+        }
+        let latest = attempts.last().map(|row| row.status);
+        if !root_claim_is_resumable(record.status, latest) {
+            return Ok(None);
+        }
+        let next = next_attempt_number(&attempts);
+        self.assign(root, lead_agent)?;
+        self.record_attempt(&TaskAttempt {
+            task_id: root,
+            attempt: next,
+            agent_id: lead_agent.to_string(),
+            status: TaskStatus::Running,
+            result: None,
+            error: None,
+        })?;
+        self.set_status(root, TaskStatus::Running)?;
+        Ok(Some(next))
+    }
+    /// Atomically commit a root's final result.
+    ///
+    /// The Lead-selected refs, the settling attempt, its external runtime
+    /// binding, and the root's terminal status become visible together. A
+    /// commit that cannot complete leaves none of them behind, so
+    /// `attempt Succeeded` can never be observed next to a non-terminal root.
+    fn commit_root_final(
+        &mut self,
+        attempt: &TaskAttempt,
+        task_refs: &[u64],
+        artifact_refs: &[SelectedArtifactRef],
+    ) -> Result<(), BoardError> {
+        if attempt.status != TaskStatus::Succeeded {
+            return Err(BoardError::Storage(
+                "a root final commit needs a succeeded attempt".into(),
+            ));
+        }
+        self.record_final_refs(attempt.task_id, task_refs, artifact_refs)?;
+        self.complete_attempt(attempt)?;
+        self.set_status(attempt.task_id, TaskStatus::Succeeded)
+    }
+    /// Atomically settle a root as failed.
+    ///
+    /// The failed attempt, its external runtime binding, and the root's
+    /// terminal status become visible together, so a crash cannot leave
+    /// `attempt Failed` next to a non-terminal root.
+    fn commit_root_failure(&mut self, attempt: &TaskAttempt) -> Result<(), BoardError> {
+        if attempt.status != TaskStatus::Failed {
+            return Err(BoardError::Storage(
+                "a root failure commit needs a failed attempt".into(),
+            ));
+        }
+        self.complete_attempt(attempt)?;
+        self.set_status(attempt.task_id, TaskStatus::Failed)
+    }
+    /// Repair a root whose terminal evidence is already durable but whose
+    /// status was never committed: the latest attempt succeeded with a result
+    /// and the final refs exist. The Lead is never re-entered to reconcile.
+    fn reconcile_root_final(&mut self, root: u64, attempt: u32) -> Result<(), BoardError> {
+        let _ = attempt;
+        self.set_status(root, TaskStatus::Succeeded)
+    }
     /// Read exactly the final references selected for `root_task`, rather
     /// than inferring them from every successful descendant.
     fn final_refs(

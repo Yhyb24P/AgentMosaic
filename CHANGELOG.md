@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Lead context stays valid JSON within its byte budget, including escaped and
+  multilingual results. Text reductions are marked; complete IDs, artifact
+  paths and digests survive, or the run reports a capacity error before the turn.
+- Lead context carries each artifact's owning task ID for exact final selection.
+- A resumed Lead can complete from already-successful descendants immediately.
+  A resume continues the root's durable assignee, never replaces it, and
+  appends its own attempt: a failed attempt is preserved instead of being
+  reopened and rewritten into a success.
+- A root's final result and failure are each one transaction, so the durable
+  board cannot show a succeeded attempt next to a non-terminal root; a database
+  already left in that window is reconciled from its own evidence without
+  replaying the Lead.
+- A `Running` root is refused instead of reclaimed, so two live resumes cannot
+  both enter the Lead; `am recover <database> <root>` closes an interrupted one.
+- A Codex Exec root records one binding per attempt and resumes its own native
+  thread without rewriting the earlier attempt's binding.
+- A failed worker outcome can ground a follow-up even when no worker succeeded.
+- An ACP worker's peer result is read from the message text that follows its last
+  tool activity, so progress narration between tool calls no longer fails the
+  strict one-object contract; the whole turn is still recorded as its transcript.
+
 ## [0.3.0] - 2026-09-14
 
 The interface milestone: `am` becomes a team interface rather than an engineering

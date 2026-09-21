@@ -21,6 +21,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use agentmosaic_storage::{
+    AgentRegistryRecord, ExternalRuntimeBinding, SqliteAgentRegistry, SqliteTaskBoard,
+};
+use agentmosaic_team::{TaskAttempt, TaskBoard, TaskKind, TaskStatus};
 use serde_json::json;
 
 const LEAD_ANSWER: &str = "lead synthesized final answer";
@@ -445,6 +449,453 @@ fn the_board_control_commands_route_and_persist() {
         board().contains(&format!("task={task} status=pending")),
         "{}",
         board()
+    );
+}
+
+/// The reasoning root of a team run has its own resume entry point. `am resume`
+/// refuses it and mutates nothing: moving a root to Pending would leave a state
+/// `resume-team` refuses, which is the conflict this pins.
+#[test]
+fn resume_refuses_a_reasoning_root_without_mutating_it() {
+    let scratch = Scratch::new("resume_reasoning_root");
+    let database = scratch.db();
+    let dir = scratch.dir();
+
+    // A cancelled root is exactly the shape `am resume` used to accept.
+    let root = {
+        let mut board = SqliteTaskBoard::open(
+            rusqlite::Connection::open(&scratch.database).expect("open board"),
+        )
+        .expect("board");
+        let root = board
+            .create_task(
+                "team objective",
+                None,
+                TaskKind::Reasoning,
+                Some("lead".into()),
+            )
+            .expect("root");
+        board.assign(root, "lead").expect("assign");
+        board
+            .set_status(root, TaskStatus::Cancelled)
+            .expect("status");
+        root
+    };
+    let root = root.to_string();
+    let before = std::fs::read(&scratch.database).expect("the board file");
+
+    let message = err_in(dir, &["resume", &database, &root]);
+    assert!(message.contains("resume-team"), "{message}");
+
+    let after = std::fs::read(&scratch.database).expect("the board file");
+    assert_eq!(before, after, "a refused resume must not mutate the board");
+    assert!(
+        ok_in(dir, &["status", &database]).contains(&format!("task={root} status=cancelled")),
+        "the cancelled root keeps its status"
+    );
+}
+
+/// A root's durable Lead is what a resume continues, and the compatibility
+/// `override` moves its target to `Assigned`, a state no resume can claim.
+/// Replacing a root's Lead would also bypass the cross-Lead protection, so the
+/// command refuses a reasoning root before any mutation.
+#[test]
+fn override_refuses_reasoning_root_without_mutation() {
+    let scratch = Scratch::new("override_reasoning_root");
+    let database = scratch.db();
+    let dir = scratch.dir();
+    // A root with real history: its own attempt and an external binding, so the
+    // refusal can be shown to leave all three untouched.
+    let root = {
+        let mut board = SqliteTaskBoard::open(
+            rusqlite::Connection::open(&scratch.database).expect("open board"),
+        )
+        .expect("board");
+        let root = board
+            .create_task(
+                "team objective",
+                None,
+                TaskKind::Reasoning,
+                Some("lead".into()),
+            )
+            .expect("root");
+        board.assign(root, "lead").expect("assign");
+        board
+            .record_attempt(&TaskAttempt {
+                task_id: root,
+                attempt: 1,
+                agent_id: "lead".into(),
+                status: TaskStatus::Failed,
+                result: None,
+                error: Some("interrupted synthesis".into()),
+            })
+            .expect("attempt");
+        board.set_status(root, TaskStatus::Failed).expect("status");
+        board
+            .upsert_external_binding(&ExternalRuntimeBinding {
+                team_task_id: root,
+                attempt: 1,
+                agent_id: "lead".into(),
+                runtime_kind: "codex-exec".into(),
+                native_thread_id: Some("thread-1".into()),
+                native_turn_id: None,
+                lifecycle_state: "failed".into(),
+            })
+            .expect("binding");
+        root
+    };
+    let root_arg = root.to_string();
+    let before = std::fs::read(&scratch.database).expect("the board file");
+
+    let message = err_in(dir, &["override", &database, &root_arg, "worker-override"]);
+    assert!(message.contains("reasoning root"), "{message}");
+
+    assert_eq!(
+        std::fs::read(&scratch.database).expect("the board file"),
+        before,
+        "a refused override must not mutate the board"
+    );
+    let connection = rusqlite::Connection::open(&scratch.database).expect("reopen");
+    let (status, assignee): (String, Option<String>) = connection
+        .query_row(
+            "SELECT status, assignee FROM team_tasks WHERE id = ?1",
+            [root as i64],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("root row");
+    assert_eq!(status, "failed");
+    assert_eq!(assignee.as_deref(), Some("lead"));
+    let attempts: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM team_task_runs WHERE task_id = ?1",
+            [root as i64],
+            |row| row.get(0),
+        )
+        .expect("attempt count");
+    assert_eq!(attempts, 1);
+    let bindings: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM external_runtime_bindings WHERE team_task_id = ?1",
+            [root as i64],
+            |row| row.get(0),
+        )
+        .expect("binding count");
+    assert_eq!(bindings, 1);
+}
+
+/// `submit` creates schedulable worker tasks; a team root has to come from
+/// `run-team`, because `root_tasks()` reports the shape it would otherwise
+/// write and no resume ever claims a `Pending` root.
+#[test]
+fn submit_refuses_reasoning_root_without_mutation() {
+    let scratch = Scratch::new("submit_reasoning_root");
+    let database = scratch.db();
+    let dir = scratch.dir();
+    // Materialize the board, then prove the refusal writes nothing to it.
+    ok_in(dir, &["registry", &database]);
+    let before = std::fs::read(&scratch.database).expect("the board file");
+
+    let message = err_in(dir, &["submit", &database, "reasoning", "team objective"]);
+    assert!(message.contains("run-team"), "{message}");
+
+    assert_eq!(
+        std::fs::read(&scratch.database).expect("the board file"),
+        before,
+        "a refused submit must not mutate the board"
+    );
+    assert!(ok_in(dir, &["status", &database]).trim().is_empty());
+}
+
+/// The team root is not an ACP worker task. Both ACP spellings refuse it before
+/// any mutation or runtime start, so neither can bypass the root's canonical
+/// Lead, its claim, or its final commit.
+#[cfg(unix)]
+struct AcpRootFixture {
+    scratch: Scratch,
+    root: u64,
+    source: u64,
+    launch_marker: PathBuf,
+}
+
+#[cfg(unix)]
+impl AcpRootFixture {
+    fn new(name: &str) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+
+        let scratch = Scratch::new(name);
+        let launch_marker = scratch.dir().join("acp-launched");
+        let script = scratch.dir().join("acp.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nprintf x >> '{}'\nexit 9\n",
+                launch_marker.display()
+            ),
+        )
+        .expect("acp script");
+        let mut permissions = std::fs::metadata(&script)
+            .expect("script metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script, permissions).expect("script mode");
+        SqliteAgentRegistry::open(&scratch.database)
+            .expect("registry")
+            .upsert_agent(&AgentRegistryRecord {
+                id: "acp-worker".into(),
+                name: "acp-worker".into(),
+                tier: "worker".into(),
+                driver_kind: Some("acp".into()),
+                executable: Some(script.display().to_string()),
+                runtime_version: None,
+                driver_args_json: Some("[]".into()),
+                max_concurrency: Some(1),
+                tags_json: Some("[]".into()),
+                driver_config_json: None,
+            })
+            .expect("registered acp agent");
+        let mut board = SqliteTaskBoard::open(
+            rusqlite::Connection::open(&scratch.database).expect("open board"),
+        )
+        .expect("board");
+        // A real root with its own history.
+        let root = board
+            .create_task(
+                "team objective",
+                None,
+                TaskKind::Reasoning,
+                Some("lead".into()),
+            )
+            .expect("root");
+        board.assign(root, "lead").expect("assign root");
+        board
+            .record_attempt(&TaskAttempt {
+                task_id: root,
+                attempt: 1,
+                agent_id: "lead".into(),
+                status: TaskStatus::Failed,
+                result: None,
+                error: Some("interrupted synthesis".into()),
+            })
+            .expect("root attempt");
+        board
+            .set_status(root, TaskStatus::Failed)
+            .expect("root status");
+        board
+            .upsert_external_binding(&ExternalRuntimeBinding {
+                team_task_id: root,
+                attempt: 1,
+                agent_id: "lead".into(),
+                runtime_kind: "codex-exec".into(),
+                native_thread_id: Some("thread-1".into()),
+                native_turn_id: None,
+                lifecycle_state: "failed".into(),
+            })
+            .expect("root binding");
+        // A completed ACP source task, so `continue-acp`'s own validation is
+        // satisfiable and only the root guard can refuse.
+        let source = board
+            .create_task(
+                "acp source",
+                None,
+                TaskKind::Bulk,
+                Some("acp-worker".into()),
+            )
+            .expect("source");
+        board.assign(source, "acp-worker").expect("assign source");
+        board
+            .record_attempt(&TaskAttempt {
+                task_id: source,
+                attempt: 1,
+                agent_id: "acp-worker".into(),
+                status: TaskStatus::Succeeded,
+                result: Some("source result".into()),
+                error: None,
+            })
+            .expect("source attempt");
+        board
+            .set_status(source, TaskStatus::Succeeded)
+            .expect("source status");
+        board
+            .upsert_external_binding(&ExternalRuntimeBinding {
+                team_task_id: source,
+                attempt: 1,
+                agent_id: "acp-worker".into(),
+                runtime_kind: "acp".into(),
+                native_thread_id: Some("acp-session-1".into()),
+                native_turn_id: None,
+                lifecycle_state: "completed".into(),
+            })
+            .expect("source binding");
+        Self {
+            scratch,
+            root,
+            source,
+            launch_marker,
+        }
+    }
+
+    fn database(&self) -> String {
+        self.scratch.db()
+    }
+
+    /// The evidence a refusal must not change, stated row by row.
+    fn assert_untouched(&self, before: &[u8]) {
+        assert_eq!(
+            std::fs::read(&self.scratch.database).expect("the board file"),
+            before,
+            "a refused root guard must not mutate the board"
+        );
+        let connection = rusqlite::Connection::open(&self.scratch.database).expect("reopen");
+        let (status, assignee): (String, Option<String>) = connection
+            .query_row(
+                "SELECT status, assignee FROM team_tasks WHERE id = ?1",
+                [self.root as i64],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("root row");
+        assert_eq!(status, "failed");
+        assert_eq!(assignee.as_deref(), Some("lead"));
+        let attempts: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM team_task_runs WHERE task_id = ?1",
+                [self.root as i64],
+                |row| row.get(0),
+            )
+            .expect("attempt count");
+        assert_eq!(attempts, 1);
+        let bindings: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM external_runtime_bindings WHERE team_task_id = ?1",
+                [self.root as i64],
+                |row| row.get(0),
+            )
+            .expect("binding count");
+        assert_eq!(bindings, 1);
+        assert!(
+            !self.launch_marker.exists(),
+            "the ACP runtime must not be launched"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn run_acp_refuses_team_root_without_mutation() {
+    let fixture = AcpRootFixture::new("run_acp_root_guard");
+    let before = std::fs::read(&fixture.scratch.database).expect("the board file");
+    let working = fixture.scratch.dir().to_string_lossy().into_owned();
+
+    let message = err_in(
+        fixture.scratch.dir(),
+        &[
+            "run-acp",
+            &fixture.database(),
+            &fixture.root.to_string(),
+            "acp-worker",
+            &working,
+            "-",
+            "5",
+        ],
+    );
+    assert!(message.contains("reasoning root"), "{message}");
+    fixture.assert_untouched(&before);
+}
+
+#[cfg(unix)]
+#[test]
+fn continue_acp_refuses_team_root_without_mutation() {
+    let fixture = AcpRootFixture::new("continue_acp_root_guard");
+    let before = std::fs::read(&fixture.scratch.database).expect("the board file");
+    let working = fixture.scratch.dir().to_string_lossy().into_owned();
+
+    let message = err_in(
+        fixture.scratch.dir(),
+        &[
+            "continue-acp",
+            &fixture.database(),
+            &fixture.root.to_string(),
+            "acp-worker",
+            &fixture.source.to_string(),
+            &working,
+            "-",
+            "5",
+        ],
+    );
+    assert!(message.contains("reasoning root"), "{message}");
+    fixture.assert_untouched(&before);
+}
+
+/// A reasoning task *with* a parent is an ordinary delegated task, not a team
+/// root: the root guards must let it through both compatibility spellings.
+/// Shared by the two positive regressions below.
+fn reasoning_child(name: &str, status: TaskStatus) -> (Scratch, u64) {
+    let scratch = Scratch::new(name);
+    let mut board =
+        SqliteTaskBoard::open(rusqlite::Connection::open(&scratch.database).expect("open board"))
+            .expect("board");
+    let root = board
+        .create_task(
+            "team objective",
+            None,
+            TaskKind::Reasoning,
+            Some("lead".into()),
+        )
+        .expect("root");
+    board.assign(root, "lead").expect("assign root");
+    let child = board
+        .create_task(
+            "delegated reasoning",
+            Some(root),
+            TaskKind::Reasoning,
+            Some("reasoner-a".into()),
+        )
+        .expect("child");
+    board.assign(child, "reasoner-a").expect("assign child");
+    board.set_status(child, status).expect("child status");
+    (scratch, child)
+}
+
+/// The reasoning child is schedulable again: `am resume` moves it to pending
+/// and leaves its parent root alone.
+#[test]
+fn resume_allows_reasoning_child() {
+    let (scratch, child) = reasoning_child("resume_reasoning_child", TaskStatus::Failed);
+    let database = scratch.db();
+    let dir = scratch.dir();
+
+    let resumed = ok_in(dir, &["resume", &database, &child.to_string()]);
+    assert_eq!(resumed.trim(), format!("resumed task={child}"));
+    let board = ok_in(dir, &["status", &database]);
+    assert!(
+        board.contains(&format!("task={child} status=pending")),
+        "{board}"
+    );
+    assert!(
+        board.contains("task=1 status=assigned assignee=lead"),
+        "the parent root is untouched: {board}"
+    );
+}
+
+/// The reasoning child can be reassigned: `am override` moves it to assigned
+/// with the new agent.
+#[test]
+fn override_allows_reasoning_child() {
+    let (scratch, child) = reasoning_child("override_reasoning_child", TaskStatus::Failed);
+    let database = scratch.db();
+    let dir = scratch.dir();
+
+    let overridden = ok_in(
+        dir,
+        &["override", &database, &child.to_string(), "reasoner-b"],
+    );
+    assert_eq!(
+        overridden.trim(),
+        format!("overrode task={child} agent=reasoner-b")
+    );
+    let board = ok_in(dir, &["status", &database]);
+    assert!(
+        board.contains(&format!("task={child} status=assigned assignee=reasoner-b")),
+        "{board}"
     );
 }
 

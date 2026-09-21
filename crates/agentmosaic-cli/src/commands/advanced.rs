@@ -51,6 +51,12 @@ pub fn registry(database: &str, limit: Option<&str>) -> Result<String, String> {
 pub fn submit(database: &str, fields: &[String]) -> Result<String, String> {
     let mut board = project::open(database)?;
     let kind = parse_kind(fields.first())?;
+    if is_team_run_root(kind, None) {
+        return Err(
+            "submit: a reasoning root is created by `am run-team <database> <repo> \"<objective>\"`; submit creates schedulable worker tasks"
+                .into(),
+        );
+    }
     let objective = fields.get(1..).unwrap_or_default().join(" ");
     if objective.trim().is_empty() {
         return Err("missing objective".into());
@@ -76,6 +82,19 @@ pub fn override_task(database: &str, fields: &[String]) -> Result<String, String
     let agent = fields
         .get(1)
         .ok_or_else(|| "missing agent id".to_string())?;
+    // A root's durable Lead is the canonical Lead a resume continues, and
+    // `assign` would also move it to `Assigned`, a state no resume can claim.
+    // Replacing a root's Lead is not supported, so this refuses before any
+    // mutation instead of leaving a root nothing can pick up.
+    let record = board
+        .task(task)
+        .map_err(|e| format!("override: {e:?}"))?
+        .ok_or_else(|| format!("override: missing task {task}"))?;
+    if is_team_run_root(record.kind, record.parent_task) {
+        return Err(format!(
+            "override: task {task} is the reasoning root of a team run; a root's durable Lead cannot be replaced with `am override`"
+        ));
+    }
     board
         .assign(task, agent)
         .map_err(|e| format!("override: {e:?}"))?;
@@ -130,6 +149,15 @@ pub fn resume(database: &str, fields: &[String]) -> Result<String, String> {
         .task(task)
         .map_err(|e| format!("resume: {e:?}"))?
         .ok_or_else(|| format!("resume: missing task {task}"))?;
+    // A team root's own resume entry point is `resume-team`, which claims the
+    // root and appends its attempt. Moving it to Pending here would leave a
+    // state `resume-team` refuses, so this refuses instead and mutates nothing.
+    // A reasoning *child* is an ordinary delegated task and resumes normally.
+    if is_team_run_root(record.kind, record.parent_task) {
+        return Err(format!(
+            "resume: task {task} is the reasoning root of a team run; continue it with `am resume-team <database> <repo> {task}`"
+        ));
+    }
     if !matches!(record.status, TaskStatus::Failed | TaskStatus::Cancelled) {
         return Err("resume requires failed or cancelled task".into());
     }
@@ -170,6 +198,18 @@ pub fn binding(database: &str, fields: &[String]) -> Result<String, String> {
         binding.lifecycle_state,
         binding.native_thread_id.is_some(),
     ))
+}
+
+/// Whether a task is the user-visible root of a team run: exactly the shape
+/// `root_tasks()` reports (`parent_task IS NULL` and `kind = reasoning`).
+///
+/// Only `run-team` creates one and only `resume-team` advances it. Every other
+/// spelling that could create or drive that shape refuses it before mutating
+/// anything, because each of them bypasses the root's claim, its canonical Lead
+/// and its final commit. A reasoning task *with* a parent is an ordinary
+/// delegated task and is not affected.
+fn is_team_run_root(kind: TaskKind, parent: Option<u64>) -> bool {
+    kind == TaskKind::Reasoning && parent.is_none()
 }
 
 fn parse_kind(value: Option<&String>) -> Result<TaskKind, String> {
@@ -330,6 +370,11 @@ pub fn run_acp(database: &str, fields: &[String]) -> Result<String, String> {
         .task(task_id)
         .map_err(|e| format!("run-acp: {e:?}"))?
         .ok_or_else(|| format!("run-acp: missing task {task_id}"))?;
+    if is_team_run_root(task.kind, task.parent_task) {
+        return Err(format!(
+            "run-acp: task {task_id} is the reasoning root of a team run; a root is advanced by `am resume-team`, never as an ACP worker task"
+        ));
+    }
     if matches!(task.status, TaskStatus::Succeeded | TaskStatus::Running) {
         return Err("run-acp requires a pending, assigned, failed, or cancelled task".into());
     }
@@ -587,6 +632,11 @@ pub fn continue_acp(database: &str, fields: &[String]) -> Result<String, String>
         .task(task_id)
         .map_err(|e| format!("continue-acp: {e:?}"))?
         .ok_or_else(|| format!("continue-acp: missing task {task_id}"))?;
+    if is_team_run_root(task.kind, task.parent_task) {
+        return Err(format!(
+            "continue-acp: task {task_id} is the reasoning root of a team run; a root is advanced by `am resume-team`, never as an ACP worker task"
+        ));
+    }
     if !matches!(
         task.status,
         TaskStatus::Pending | TaskStatus::Assigned | TaskStatus::Failed | TaskStatus::Cancelled

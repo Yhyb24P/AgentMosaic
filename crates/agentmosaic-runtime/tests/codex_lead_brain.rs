@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use agentmosaic_runtime::{CodexLeadBrain, CodexLeadConfig, LaunchSpec};
 use agentmosaic_team::{
     AgentMessage, AgentTaskResult, ArtifactMeta, LeadBrain, LeadBrainError, LeadContext,
-    LeadDecision, TaskKind,
+    LeadDecision, SelectedArtifactRef, TaskKind,
 };
 use serde_json::Value;
 
@@ -182,9 +182,12 @@ fn context(round: u32) -> LeadContext {
                 },
             ),
         ],
-        artifacts: vec![ArtifactMeta {
-            path: "result.txt".into(),
-            sha256: SHA.into(),
+        artifacts: vec![SelectedArtifactRef {
+            task_id: 2,
+            artifact: ArtifactMeta {
+                path: "result.txt".into(),
+                sha256: SHA.into(),
+            },
         }],
         failures: Vec::new(),
         messages: vec![AgentMessage {

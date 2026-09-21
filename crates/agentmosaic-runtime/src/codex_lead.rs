@@ -202,7 +202,7 @@ impl CodexLeadBrain {
     /// reply strictly. A rejected reply earns exactly one correction turn on
     /// the same thread; a second rejection is final.
     fn decide_turn(&mut self, ctx: &LeadContext) -> Result<LeadDecision, LeadBrainError> {
-        let prompt = self.render_prompt(ctx);
+        let prompt = self.render_prompt(ctx)?;
         let reply = self.run_turn(&prompt)?;
         match self.parse_reply(&reply) {
             Ok(decision) => Ok(decision),
@@ -237,34 +237,63 @@ impl CodexLeadBrain {
     /// instruction. Only durable board facts are rendered (task ids, bounded
     /// result summaries, artifact digests, bounded errors, messages) — never
     /// hidden model reasoning.
-    pub(crate) fn render_prompt(&self, ctx: &LeadContext) -> String {
+    pub(crate) fn render_prompt(&self, ctx: &LeadContext) -> Result<String, LeadBrainError> {
         let budget = self
             .config
             .max_prompt_bytes
             .saturating_sub(PROMPT_PREFIX.len() + PROMPT_SUFFIX.len() + 2);
-        let context = self.render_context(ctx, budget);
-        format!("{PROMPT_PREFIX}{context}\n{PROMPT_SUFFIX}")
+        let context = self.render_context(ctx, budget)?;
+        Ok(format!("{PROMPT_PREFIX}{context}\n{PROMPT_SUFFIX}"))
     }
 
     /// `codex app-server` receives this contract once as developer
     /// instructions, but stateless `codex exec` has no equivalent thread
     /// configuration. Include it in every Exec Lead turn so the rendered
     /// context never refers to instructions that were not actually sent.
-    pub(crate) fn render_exec_prompt(&self, ctx: &LeadContext) -> String {
-        format!("{DEVELOPER_INSTRUCTIONS}\n\n{}", self.render_prompt(ctx))
+    pub(crate) fn render_exec_prompt(&self, ctx: &LeadContext) -> Result<String, LeadBrainError> {
+        // max_prompt_bytes bounds the context turn, as for app-server. Exec
+        // additionally transports this fixed contract on each normal turn.
+        Ok(format!(
+            "{DEVELOPER_INSTRUCTIONS}\n\n{}",
+            self.render_prompt(ctx)?
+        ))
     }
 
-    fn render_context(&self, ctx: &LeadContext, budget: usize) -> String {
-        let entries =
-            ctx.results.len() + ctx.artifacts.len() + ctx.failures.len() + ctx.messages.len() + 1;
-        let per_text = (budget / entries.max(1)).clamp(64, 4096);
+    fn render_context(&self, ctx: &LeadContext, budget: usize) -> Result<String, LeadBrainError> {
+        // Account for JSON escaping and all metadata using actual serialized
+        // bytes. Never cut identifiers, references, or the serialized document.
+        // Keep at least a small excerpt of each text; refuse a context whose
+        // complete references and minimum excerpts cannot fit.
+        let mut low = 64;
+        let mut high = 4096;
+        let mut best = Self::context_payload(ctx, low);
+        if best.len() > budget {
+            return Err(LeadBrainError::Rejected(format!(
+                "Lead context capacity exceeded: complete references and minimum text need {} bytes; budget is {budget}. Reduce the team, task or artifact count, shorten agent identifiers, or increase max_prompt_bytes.",
+                best.len()
+            )));
+        }
+        while low < high {
+            let mid = low + (high - low).div_ceil(2);
+            let rendered = Self::context_payload(ctx, mid);
+            if rendered.len() <= budget {
+                low = mid;
+                best = rendered;
+            } else {
+                high = mid - 1;
+            }
+        }
+        Ok(best)
+    }
+
+    fn context_payload(ctx: &LeadContext, per_text: usize) -> String {
         let results: Vec<Value> = ctx
             .results
             .iter()
             .map(|(task_id, result)| {
                 json!({
                     "task_id": task_id,
-                    "summary": bound_utf8(&result.summary, per_text),
+                    "summary": excerpt(&result.summary, per_text),
                 })
             })
             .collect();
@@ -273,8 +302,9 @@ impl CodexLeadBrain {
             .iter()
             .map(|artifact| {
                 json!({
-                    "path": bound_utf8(&artifact.path, per_text),
-                    "sha256": artifact.sha256,
+                    "task_id": artifact.task_id,
+                    "path": artifact.artifact.path,
+                    "sha256": artifact.artifact.sha256,
                 })
             })
             .collect();
@@ -284,7 +314,7 @@ impl CodexLeadBrain {
             .map(|(task_id, error)| {
                 json!({
                     "task_id": task_id,
-                    "error": bound_utf8(error, per_text),
+                    "error": excerpt(error, per_text),
                 })
             })
             .collect();
@@ -295,13 +325,13 @@ impl CodexLeadBrain {
                 json!({
                     "from": message.from_agent,
                     "to": message.to_agent,
-                    "body": bound_utf8(&message.body, per_text),
+                    "body": excerpt(&message.body, per_text),
                 })
             })
             .collect();
         let payload = json!({
             "root_task_id": ctx.root_task_id,
-            "objective": bound_utf8(&ctx.objective, per_text),
+            "objective": excerpt(&ctx.objective, per_text),
             "round": ctx.round,
             "candidates": ctx.candidates,
             "results": results,
@@ -309,7 +339,7 @@ impl CodexLeadBrain {
             "failures": failures,
             "messages": messages,
         });
-        bound_utf8(&payload.to_string(), budget)
+        payload.to_string()
     }
 
     /// Parse the reply strictly: after trimming ASCII whitespace only it must
@@ -621,11 +651,26 @@ fn bound_utf8(text: &str, max_bytes: usize) -> String {
     text[..end].to_owned()
 }
 
+/// Mark omitted text explicitly. The cap applies to source text bytes; JSON
+/// escaping is accounted for by the caller's serialized-size search.
+fn excerpt(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_owned();
+    }
+    const MARKER: &str = " [truncated]";
+    format!(
+        "{}{MARKER}",
+        bound_utf8(text, max_bytes.saturating_sub(MARKER.len()))
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use agentmosaic_team::{AgentMessage, AgentTaskResult, ArtifactMeta, LeadContext};
+    use agentmosaic_team::{
+        AgentMessage, AgentTaskResult, ArtifactMeta, LeadContext, SelectedArtifactRef,
+    };
 
     use super::{CodexLeadBrain, CodexLeadConfig};
     use crate::LaunchSpec;
@@ -665,9 +710,12 @@ mod tests {
                     )
                 })
                 .collect(),
-            artifacts: vec![ArtifactMeta {
-                path: "result.txt".into(),
-                sha256: "a".repeat(64),
+            artifacts: vec![SelectedArtifactRef {
+                task_id: 2,
+                artifact: ArtifactMeta {
+                    path: "result.txt".into(),
+                    sha256: "a".repeat(64),
+                },
             }],
             failures: vec![(99, "boom".into())],
             messages: vec![AgentMessage {
@@ -737,7 +785,7 @@ mod tests {
     #[test]
     fn prompt_is_bounded_and_carries_only_board_facts() {
         let brain = brain();
-        let prompt = brain.render_prompt(&context());
+        let prompt = brain.render_prompt(&context()).unwrap();
         assert!(prompt.len() <= 4096, "prompt was {} bytes", prompt.len());
         assert!(prompt.starts_with("Current lead context (compact JSON):"));
         assert!(prompt.contains("\"candidates\""));
@@ -751,10 +799,10 @@ mod tests {
     }
 
     #[test]
-    fn tiny_budget_still_bounds_the_prompt() {
+    fn tiny_budget_refuses_context_that_cannot_preserve_all_references() {
         let brain = CodexLeadBrain::new(config(1024), vec!["worker-a".into()]).unwrap();
-        let prompt = brain.render_prompt(&huge_context());
-        assert!(prompt.len() <= 1024, "prompt was {} bytes", prompt.len());
+        let error = brain.render_prompt(&huge_context()).unwrap_err();
+        assert!(error.to_string().contains("context capacity exceeded"));
         let correction = brain.correction_prompt(&"bad".repeat(4096));
         assert!(correction.len() <= 1024);
         assert!(correction.ends_with("developer instructions specify."));
@@ -762,12 +810,98 @@ mod tests {
 
     #[test]
     fn an_overflowing_context_is_truncated_within_the_bound() {
-        let brain = brain();
-        let prompt = brain.render_prompt(&huge_context());
-        assert!(prompt.len() <= 4096, "prompt was {} bytes", prompt.len());
-        // Per-summary truncation happens before the whole-prompt bound, so no
-        // single result can crowd out every other entry.
-        assert!(prompt.contains("\"candidates\""));
+        let brain = CodexLeadBrain::new(config(8192), vec!["worker-a".into()]).unwrap();
+        let prompt = brain.render_prompt(&huge_context()).unwrap();
+        assert!(prompt.len() <= 8192, "prompt was {} bytes", prompt.len());
+        let json = prompt
+            .strip_prefix(super::PROMPT_PREFIX)
+            .unwrap()
+            .strip_suffix(&format!("\n{}", super::PROMPT_SUFFIX))
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_str(json).unwrap();
+        assert_eq!(payload["results"].as_array().unwrap().len(), 40);
+        assert_eq!(payload["artifacts"][0]["task_id"], 2);
+        assert!(payload["results"][0]["summary"]
+            .as_str()
+            .unwrap()
+            .ends_with(" [truncated]"));
+    }
+
+    #[test]
+    fn default_task_budget_preserves_json_and_all_result_ids() {
+        let brain = CodexLeadBrain::new(config(32768), vec!["worker-a".into()]).unwrap();
+        for count in [8, 31, 32] {
+            for text in ["x", "\"\\\n\t", "中文🦀"] {
+                let mut ctx = huge_context();
+                ctx.results.truncate(count);
+                for (_, result) in &mut ctx.results {
+                    result.summary = text.repeat(4096);
+                }
+                let prompt = brain.render_prompt(&ctx).unwrap();
+                assert!(prompt.len() <= 32768);
+                let json = prompt
+                    .strip_prefix(super::PROMPT_PREFIX)
+                    .unwrap()
+                    .strip_suffix(&format!("\n{}", super::PROMPT_SUFFIX))
+                    .unwrap();
+                let payload: serde_json::Value = serde_json::from_str(json).unwrap();
+                assert_eq!(payload["results"].as_array().unwrap().len(), count);
+                for (index, result) in payload["results"].as_array().unwrap().iter().enumerate() {
+                    assert_eq!(result["task_id"], index + 2);
+                    assert!(!result["summary"].as_str().unwrap().is_empty());
+                }
+                assert_eq!(payload["candidates"], serde_json::json!(ctx.candidates));
+            }
+        }
+    }
+
+    #[test]
+    fn artifact_identity_and_ownership_survive_text_reduction() {
+        let brain = CodexLeadBrain::new(config(8192), vec!["worker-a".into()]).unwrap();
+        let mut ctx = huge_context();
+        let path = format!("{}result.json", "目录/".repeat(60));
+        ctx.artifacts = vec![
+            SelectedArtifactRef {
+                task_id: 2,
+                artifact: ArtifactMeta {
+                    path: path.clone(),
+                    sha256: "a".repeat(64),
+                },
+            },
+            SelectedArtifactRef {
+                task_id: 3,
+                artifact: ArtifactMeta {
+                    path: path.clone(),
+                    sha256: "b".repeat(64),
+                },
+            },
+        ];
+        let payload: serde_json::Value =
+            serde_json::from_str(&brain.render_context(&ctx, 7978).unwrap()).unwrap();
+        for (index, artifact) in payload["artifacts"].as_array().unwrap().iter().enumerate() {
+            assert_eq!(artifact["path"], path);
+            assert_eq!(artifact["task_id"], index + 2);
+            assert_eq!(artifact["sha256"], ctx.artifacts[index].artifact.sha256);
+        }
+    }
+
+    #[test]
+    fn excessive_metadata_fails_before_spawning_a_lead() {
+        let mut brain = brain();
+        let mut ctx = context();
+        ctx.candidates.push("w".repeat(33000));
+        assert!(brain
+            .decide_turn(&ctx)
+            .unwrap_err()
+            .to_string()
+            .contains("context capacity exceeded"));
+        assert!(brain.server.is_none());
+        assert!(brain.thread_id.is_none());
+        assert!(brain.render_exec_prompt(&ctx).is_err());
+
+        ctx = context();
+        ctx.artifacts = vec![ctx.artifacts[0].clone(); 300];
+        assert!(brain.render_prompt(&ctx).is_err());
     }
 
     #[test]
@@ -874,16 +1008,18 @@ mod tests {
 
     #[test]
     fn exec_prompt_carries_the_contract_that_app_server_gets_at_thread_start() {
-        let prompt = brain().render_exec_prompt(&LeadContext {
-            root_task_id: 9,
-            objective: "delegate safely".into(),
-            round: 0,
-            candidates: vec!["worker-a".into()],
-            results: Vec::new(),
-            artifacts: Vec::new(),
-            failures: Vec::new(),
-            messages: Vec::new(),
-        });
+        let prompt = brain()
+            .render_exec_prompt(&LeadContext {
+                root_task_id: 9,
+                objective: "delegate safely".into(),
+                round: 0,
+                candidates: vec!["worker-a".into()],
+                results: Vec::new(),
+                artifacts: Vec::new(),
+                failures: Vec::new(),
+                messages: Vec::new(),
+            })
+            .unwrap();
         assert!(prompt.contains("You are the Lead of a heterogeneous coding agent team"));
         assert!(prompt.contains("exactly one JSON object"));
         assert!(prompt.contains("\"root_task_id\":9"));
