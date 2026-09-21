@@ -255,8 +255,7 @@ Refactoring was deliberately not done: no evidence-based correctness defect just
 ## 10. Known untested areas and remaining risks
 
 - Remote CI (`rust-candidate`) on `candidate_sha` was **not** run: the workflow is
-  `workflow_dispatch` and dispatch needs the branch pushed / authorization. G10 is
-  therefore `BLOCKED`, not `PASS`.
+  `workflow_dispatch`. It is now run: see section 11 for the passing remote run.
 - Windows/macOS distribution: not built (Linux `x86_64` only).
 - Installer smoke: not covered (see section 6).
 - Live qualification is machine-dependent: it needs already-authenticated `codex` and
@@ -267,6 +266,20 @@ Refactoring was deliberately not done: no evidence-based correctness defect just
   `codex-app-server` lead, `claude-cli`, and other ACP peers were not re-run live.
 
 ## 11. Verdict
+
+### Remote CI (G10)
+
+```text
+gh workflow run rust-candidate --ref task/v05-team-runner-rc -f ref=<candidate_sha>
+run 35643390303  rust-candidate  conclusion=success
+  ✓ identity gate   ✓ fmt   ✓ clippy --locked   ✓ tests --locked   ✓ release build
+  ✓ diff hygiene    ✓ published v0.3 migration   ✓ authentic v8 migration
+  ✓ copied-binary normal-path smoke
+```
+
+Draft PR #23 (`task/v05-team-runner-rc` → `main`) carries the same code; the merge-tree
+checks `rust` and `rust_quality` both pass on it. The candidate workflow is triggered
+again on the final branch head so the green run names the exact frozen head.
 
 ```text
 BASE_SHA=fb23184e6e50ba89ed9f4a09941eaa33bfbf9d73
@@ -283,10 +296,9 @@ RC_CANDIDATE_READY=true
 PUBLIC_RELEASE_READY=false
 ```
 
-G0–G9 and G11 are satisfied with the evidence above. G10 (remote `rust-candidate` on the
-exact candidate SHA) is `BLOCKED` on dispatch authorization; it is the one gate that keeps
-RC_CANDIDATE_READY from being a remote-CI claim rather than a local one. `PUBLIC_RELEASE_READY`
-is `false` because tag / Release are a separate, explicitly authorized step.
+G0–G11 are satisfied with the evidence above, including a green remote `rust-candidate` run
+that now covers the copied-binary normal-path smoke. `PUBLIC_RELEASE_READY` is `false`
+because tag / Release are a separate, explicitly authorized step.
 
 ## 12. Repository governance (recommendation only — not executed)
 
