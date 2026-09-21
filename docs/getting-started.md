@@ -33,15 +33,17 @@ An external runtime retains its own login, credentials, provider, model and laun
 profile; AgentMosaic only stores the argv it should execute.
 
 ```bash
-am agent add lead --role reasoner --adapter codex-app-server -- codex
+am agent add lead --role reasoner --adapter codex-exec -- codex
 am agent add worker --role worker --adapter acp -- qwen --acp
 ```
 
 Everything after `--` is persisted opaque argv. Do not put credentials in it. A local
-launcher keeps its exact argv, but the launch command registered for `codex-app-server`
-must remain valid when AgentMosaic appends `app-server --stdio`. Named Codex profiles are
-not currently a portable app-server configuration mechanism; use app-server-compatible
-`-c` overrides, or a wrapper that expands to them.
+launcher keeps its exact argv, but the launch command registered for `codex-exec` must
+remain valid when AgentMosaic appends `exec --json`. `codex-exec` is the canonical/default
+reference Lead; `codex-app-server` stays a compatibility Lead runtime, and its launch
+command must additionally remain valid when AgentMosaic appends `app-server --stdio`.
+Named Codex profiles are not currently a portable app-server configuration mechanism;
+use app-server-compatible `-c` overrides, or a wrapper that expands to them.
 
 `--adapter` accepts `acp`, `codex-app-server`, `codex-exec` or `claude-cli`. A `utility`
 Agent is registered the same way with `--role utility`. `am agent list` prints the
@@ -80,9 +82,13 @@ am run "produce worker.txt and summarize it"
 `am run` discovers the project state and runs the whole team: it opens/migrates the
 board, loads the persisted agent registry, builds the validated registry, resolves the
 Lead, constructs the real drivers, creates one durable root `reasoning` task plus its Lead
-attempt, and runs a resident Codex `CodexLeadBrain` through `Lead` + `Scheduler`.
-Delegated tasks execute on real Qwen workers over ACP, and the final visible Codex answer
-plus the exact selected task/artifact refs are persisted on the root.
+attempt, and drives the Lead through `Lead` + `Scheduler`. The Lead runs in whichever
+external runtime its registration selects — the canonical `codex-exec` Lead
+(`codex exec --json`) or the compatibility `codex-app-server` Lead — and the two have
+different process lifetimes: `codex-exec` starts a `codex exec` process per turn, while
+`codex-app-server` keeps one resident process. Delegated tasks execute on real Qwen
+workers over ACP, and the final visible Lead answer plus the exact selected task/artifact
+refs are persisted on the root.
 
 Progress and lifecycle go to stderr, so stdout carries the final answer alone:
 

@@ -162,7 +162,7 @@ fn init_teaches_lead_and_worker_without_naming_the_state_path() {
     assert!(text.contains("Lead"), "{text}");
     assert!(text.contains("Worker"), "{text}");
     assert!(
-        text.contains("am agent add lead --role reasoner --adapter codex-app-server -- codex"),
+        text.contains("am agent add lead --role reasoner --adapter codex-exec -- codex"),
         "{text}"
     );
     assert!(

@@ -31,3 +31,13 @@ interrupt are driven through the same driver boundary.
 The driver kind string for this boundary is `acp` and is persisted verbatim in the
 registry and bindings. Renaming the product does not rename persisted protocol or wire
 strings.
+
+## Wire version
+
+The stable ACP wire protocol this boundary speaks is **ACP v1**. A peer is compatible when
+it speaks the ACP v1 wire protocol.
+
+The Rust crate version and the wire protocol version are different things: the workspace
+dependency `agent-client-protocol = 2.1.0` is a *package* version. It is not "ACP v2", and
+it does not change the wire protocol — bumping the crate never renames the protocol. The
+same rule holds for the ACP package version vendored inside a runtime like Qwen Code.

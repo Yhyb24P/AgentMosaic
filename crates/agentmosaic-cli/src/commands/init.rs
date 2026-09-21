@@ -10,7 +10,7 @@ use agentmosaic_storage::SqliteAgentRegistry;
 use crate::project::{self, PROJECT_DIR};
 
 /// The Lead onboarding command: the product's default reasoning runtime.
-const LEAD_ADD: &str = "am agent add lead --role reasoner --adapter codex-app-server -- codex";
+const LEAD_ADD: &str = "am agent add lead --role reasoner --adapter codex-exec -- codex";
 /// The Worker onboarding command: the product's default ACP runtime.
 const WORKER_ADD: &str = "am agent add worker --role worker --adapter acp -- qwen --acp";
 

@@ -39,7 +39,7 @@ am init
 
 am agent add lead \
   --role reasoner \
-  --adapter codex-app-server -- codex
+  --adapter codex-exec -- codex
 
 am agent add worker \
   --role worker \
@@ -72,13 +72,15 @@ am agent add utility --role utility --adapter acp -- <program> --acp
 ```
 
 A local launcher keeps its own argv, but the launch command registered for
-`codex-app-server` must remain valid when AgentMosaic appends `app-server --stdio`. Named
-Codex profiles are not currently a portable app-server configuration mechanism; use
-app-server-compatible `-c` overrides, or a wrapper that expands to them. `codex` on its
-own is a valid launcher:
+`codex-exec` must remain valid when AgentMosaic appends `exec --json`, so `codex` on its
+own is a valid launcher. The same `codex` binary also backs the `codex-app-server`
+compatibility runtime, whose launch command must additionally remain valid when
+AgentMosaic appends `app-server --stdio`; named Codex profiles are not currently a
+portable app-server configuration mechanism, so use app-server-compatible `-c`
+overrides, or a wrapper that expands to them:
 
 ```bash
-am agent add lead --role reasoner --adapter codex-app-server -- codex
+am agent add lead --role reasoner --adapter codex-app-server -- codex   # compatibility Lead
 ```
 
 `am agent add --max-events N` raises the per-turn Codex event budget when a real run has
@@ -153,11 +155,13 @@ ACP-compatible coding runtimes communicate with AgentMosaic over a bounded worke
 boundary. The ACP driver takes one scheduler task and returns a bounded structured result
 plus artifact hashes; the SQLite board remains the authoritative source of state.
 
-Codex is the current reference high-reasoning Lead, reached through `codex-exec` (the
-default, driving `codex exec --json`) or through the resident `codex-app-server`
-compatibility runtime. Its thread stays resident across planning, follow-up and
-synthesis, and the external thread/turn binding is persisted. Any Agent or runtime that
-satisfies the same boundary can take that role.
+Codex is the current reference high-reasoning Lead. `codex-exec` is the canonical/default
+Lead runtime: it drives the stable `codex exec --json` machine interface and persists the
+foreign thread, so a resumed run continues that thread. The `codex-app-server`
+compatibility runtime keeps one resident `codex app-server` process whose thread stays
+resident across planning, follow-up and synthesis; it persists the external thread/turn
+binding the same way. Either way, any Agent or runtime that satisfies the same boundary
+can take the Lead role.
 
 ## Durability and recovery
 
@@ -192,6 +196,7 @@ the [CLI reference](docs/cli.md).
 - [Codex runtime](docs/runtimes/codex.md)
 - [ACP runtime](docs/runtimes/acp.md)
 - [Qwen Code runtime](docs/runtimes/qwen-code.md)
+- [Status](docs/status.md)
 - [Release history](docs/releases/v0.1.0.md) / [History](docs/history.md)
 
 ## Build from source
