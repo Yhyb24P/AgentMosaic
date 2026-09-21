@@ -46,7 +46,7 @@ usage: am <init|agent|doctor|run|status|events|final|artifact|tui|advanced> [fie
 | `continue-acp` | Continue an existing ACP worker session. |
 | `submit` | Create one pending board task (no team run). |
 | `cancel` | Cancel a task. |
-| `override` | Reassign a task to an explicit agent. |
+| `override` | Reassign a non-root task to an explicit agent. |
 | `recover` | Close one interrupted attempt. |
 | `recover-all` | Close all interrupted attempts. |
 | `resume` | Reopen a task for scheduling. |

@@ -76,6 +76,19 @@ pub fn override_task(database: &str, fields: &[String]) -> Result<String, String
     let agent = fields
         .get(1)
         .ok_or_else(|| "missing agent id".to_string())?;
+    // A root's durable Lead is the canonical Lead a resume continues, and
+    // `assign` would also move it to `Assigned`, a state no resume can claim.
+    // Replacing a root's Lead is not supported, so this refuses before any
+    // mutation instead of leaving a root nothing can pick up.
+    let record = board
+        .task(task)
+        .map_err(|e| format!("override: {e:?}"))?
+        .ok_or_else(|| format!("override: missing task {task}"))?;
+    if record.kind == TaskKind::Reasoning {
+        return Err(format!(
+            "override: task {task} is the reasoning root of a team run; a root's durable Lead cannot be replaced with `am override`"
+        ));
+    }
     board
         .assign(task, agent)
         .map_err(|e| format!("override: {e:?}"))?;

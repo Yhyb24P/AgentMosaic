@@ -21,6 +21,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use agentmosaic_storage::{ExternalRuntimeBinding, SqliteTaskBoard};
+use agentmosaic_team::{TaskAttempt, TaskBoard, TaskKind, TaskStatus};
 use serde_json::json;
 
 const LEAD_ANSWER: &str = "lead synthesized final answer";
@@ -475,6 +477,94 @@ fn resume_refuses_a_reasoning_root_without_mutating_it() {
         ok_in(dir, &["status", &database]).contains(&format!("task={root} status=cancelled")),
         "the cancelled root keeps its status"
     );
+}
+
+/// A root's durable Lead is what a resume continues, and the compatibility
+/// `override` moves its target to `Assigned`, a state no resume can claim.
+/// Replacing a root's Lead would also bypass the cross-Lead protection, so the
+/// command refuses a reasoning root before any mutation.
+#[test]
+fn override_refuses_reasoning_root_without_mutation() {
+    let scratch = Scratch::new("override_reasoning_root");
+    let database = scratch.db();
+    let dir = scratch.dir();
+    // A root with real history: its own attempt and an external binding, so the
+    // refusal can be shown to leave all three untouched.
+    let root = {
+        let mut board = SqliteTaskBoard::open(
+            rusqlite::Connection::open(&scratch.database).expect("open board"),
+        )
+        .expect("board");
+        let root = board
+            .create_task(
+                "team objective",
+                None,
+                TaskKind::Reasoning,
+                Some("lead".into()),
+            )
+            .expect("root");
+        board.assign(root, "lead").expect("assign");
+        board
+            .record_attempt(&TaskAttempt {
+                task_id: root,
+                attempt: 1,
+                agent_id: "lead".into(),
+                status: TaskStatus::Failed,
+                result: None,
+                error: Some("interrupted synthesis".into()),
+            })
+            .expect("attempt");
+        board.set_status(root, TaskStatus::Failed).expect("status");
+        board
+            .upsert_external_binding(&ExternalRuntimeBinding {
+                team_task_id: root,
+                attempt: 1,
+                agent_id: "lead".into(),
+                runtime_kind: "codex-exec".into(),
+                native_thread_id: Some("thread-1".into()),
+                native_turn_id: None,
+                lifecycle_state: "failed".into(),
+            })
+            .expect("binding");
+        root
+    };
+    let root_arg = root.to_string();
+    let before = std::fs::read(&scratch.database).expect("the board file");
+
+    let message = err_in(dir, &["override", &database, &root_arg, "worker-override"]);
+    assert!(message.contains("reasoning root"), "{message}");
+
+    assert_eq!(
+        std::fs::read(&scratch.database).expect("the board file"),
+        before,
+        "a refused override must not mutate the board"
+    );
+    let connection = rusqlite::Connection::open(&scratch.database).expect("reopen");
+    let (status, assignee): (String, Option<String>) = connection
+        .query_row(
+            "SELECT status, assignee FROM team_tasks WHERE id = ?1",
+            [root as i64],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("root row");
+    assert_eq!(status, "failed");
+    assert_eq!(assignee.as_deref(), Some("lead"));
+    let attempts: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM team_task_runs WHERE task_id = ?1",
+            [root as i64],
+            |row| row.get(0),
+        )
+        .expect("attempt count");
+    assert_eq!(attempts, 1);
+    let bindings: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM external_runtime_bindings WHERE team_task_id = ?1",
+            [root as i64],
+            |row| row.get(0),
+        )
+        .expect("binding count");
+    assert_eq!(bindings, 1);
 }
 
 /// `run-acp`, `continue-acp` and `binding` fail on a fixture with no bound
