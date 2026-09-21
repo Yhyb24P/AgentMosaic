@@ -448,6 +448,35 @@ fn the_board_control_commands_route_and_persist() {
     );
 }
 
+/// The reasoning root of a team run has its own resume entry point. `am resume`
+/// refuses it and mutates nothing: moving a root to Pending would leave a state
+/// `resume-team` refuses, which is the conflict this pins.
+#[test]
+fn resume_refuses_a_reasoning_root_without_mutating_it() {
+    let scratch = Scratch::new("resume_reasoning_root");
+    let database = scratch.db();
+    let dir = scratch.dir();
+
+    let root = ok_in(dir, &["submit", &database, "reasoning", "team objective"])
+        .trim()
+        .strip_prefix("submitted task=")
+        .expect("submit's own payload")
+        .to_string();
+    // Failed/cancelled is exactly the shape `am resume` used to accept.
+    ok_in(dir, &["cancel", &database, &root]);
+    let before = std::fs::read(&scratch.database).expect("the board file");
+
+    let message = err_in(dir, &["resume", &database, &root]);
+    assert!(message.contains("resume-team"), "{message}");
+
+    let after = std::fs::read(&scratch.database).expect("the board file");
+    assert_eq!(before, after, "a refused resume must not mutate the board");
+    assert!(
+        ok_in(dir, &["status", &database]).contains(&format!("task={root} status=cancelled")),
+        "the cancelled root keeps its status"
+    );
+}
+
 /// `run-acp`, `continue-acp` and `binding` fail on a fixture with no bound
 /// session, and each failure is that command's own — it names itself.
 #[test]

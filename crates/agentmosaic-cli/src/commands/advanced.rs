@@ -130,6 +130,14 @@ pub fn resume(database: &str, fields: &[String]) -> Result<String, String> {
         .task(task)
         .map_err(|e| format!("resume: {e:?}"))?
         .ok_or_else(|| format!("resume: missing task {task}"))?;
+    // A reasoning root's own resume entry point is `resume-team`, which claims
+    // the root and appends its attempt. Moving it to Pending here would leave a
+    // state `resume-team` refuses, so this refuses instead and mutates nothing.
+    if record.kind == TaskKind::Reasoning {
+        return Err(format!(
+            "resume: task {task} is the reasoning root of a team run; continue it with `am resume-team <database> <repo> {task}`"
+        ));
+    }
     if !matches!(record.status, TaskStatus::Failed | TaskStatus::Cancelled) {
         return Err("resume requires failed or cancelled task".into());
     }

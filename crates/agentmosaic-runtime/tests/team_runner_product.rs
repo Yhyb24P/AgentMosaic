@@ -599,6 +599,88 @@ async fn resume_refuses_a_running_root_until_recovery_closes_it() {
     );
 }
 
+// The residue the old, non-atomic failure settlement could leave behind: the
+// root's attempt settled failed while the root status never did. That evidence
+// proves no execution is in flight, so a resume repairs the root and appends
+// its own attempt instead of being refused forever. A `Running` root without
+// that evidence is still never reclaimed.
+#[tokio::test]
+async fn a_running_root_with_a_settled_failed_attempt_is_reconciled() {
+    let fixture = Fixture::new("running-root-residue");
+    fixture.register(&acp_agent("worker", "worker", &[]));
+    fixture.register(&codex_agent(
+        "lead",
+        &fixture,
+        &[complete_reply(2, None, "")],
+    ));
+    let root = failed_root_with_succeeded_child(&fixture, "lead");
+    Connection::open(&fixture.database)
+        .unwrap()
+        .execute(
+            "UPDATE team_tasks SET status = 'running' WHERE id = ?1",
+            rusqlite::params![root as i64],
+        )
+        .unwrap();
+
+    let outcome = runner(&fixture)
+        .resume(root)
+        .await
+        .expect("the settled attempt's residue is reconciled");
+
+    assert_eq!(outcome.result.answer, LEAD_ANSWER);
+    let board = fixture.open_board();
+    assert_eq!(
+        board.task(root).unwrap().unwrap().status,
+        TaskStatus::Succeeded
+    );
+    let root_attempts = board.attempts(root).unwrap();
+    assert_eq!(root_attempts.len(), 2);
+    assert_eq!(root_attempts[0].status, TaskStatus::Failed);
+    assert_eq!(
+        root_attempts[0].error.as_deref(),
+        Some("interrupted synthesis")
+    );
+    assert_eq!(root_attempts[1].status, TaskStatus::Succeeded);
+
+    // A `Running` root with no attempt evidence at all must not be reclaimed:
+    // only the shape whose own rows say the attempt settled is repaired.
+    let bare_fixture = Fixture::new("running-root-no-evidence");
+    bare_fixture.register(&acp_agent("worker", "worker", &[]));
+    bare_fixture.register(&codex_agent(
+        "lead",
+        &bare_fixture,
+        &[complete_reply(2, None, "")],
+    ));
+    let mut board = bare_fixture.open_board();
+    let bare = board
+        .create_task(
+            "no attempt evidence",
+            None,
+            TaskKind::Reasoning,
+            Some("lead".into()),
+        )
+        .unwrap();
+    board.assign(bare, "lead").unwrap();
+    board.set_status(bare, TaskStatus::Running).unwrap();
+    drop(board);
+    let error = runner(&bare_fixture)
+        .resume(bare)
+        .await
+        .expect_err("no attempt evidence is not reclaimable");
+    assert!(
+        matches!(
+            error,
+            TeamRunnerError::RootNotResumable {
+                root,
+                status: TaskStatus::Running
+            } if root == bare
+        ),
+        "unexpected error: {error}"
+    );
+    assert!(bare_fixture.open_board().attempts(bare).unwrap().is_empty());
+    assert!(!bare_fixture.state.exists(), "no lead runtime was entered");
+}
+
 // Resume closes an interrupted descendant with the board's no-replay
 // primitive, then continues the Lead from the durable state.
 #[tokio::test]

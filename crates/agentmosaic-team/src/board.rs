@@ -138,6 +138,25 @@ pub fn running_attempt<'a>(attempts: &'a [TaskAttempt], agent: &str) -> Option<&
         .find(|attempt| attempt.agent_id == agent && attempt.status == TaskStatus::Running)
 }
 
+/// Whether a resume may claim a root in `status` whose latest attempt is
+/// `latest_attempt`.
+///
+/// `Failed`/`Cancelled` are the normal resumable states. A `Running` root is
+/// resumable only with the durable evidence that no execution is still in
+/// flight: its latest attempt already settled as `Failed` and — checked by the
+/// caller — no attempt is `Running`. That shape is the residue the old,
+/// non-atomic failure settlement could leave behind (the attempt settled, the
+/// root status never did), and it is repaired by the same claim that appends
+/// the next attempt. Any other `Running` root is never reclaimed implicitly:
+/// two live resumes must not both enter the Lead runtime.
+pub fn root_claim_is_resumable(status: TaskStatus, latest_attempt: Option<TaskStatus>) -> bool {
+    match status {
+        TaskStatus::Failed | TaskStatus::Cancelled => true,
+        TaskStatus::Running => latest_attempt == Some(TaskStatus::Failed),
+        TaskStatus::Pending | TaskStatus::Assigned | TaskStatus::Succeeded => false,
+    }
+}
+
 /// The durable task board.
 ///
 /// Implementations persist tasks, attempts, messages, and artifacts so that a
@@ -238,9 +257,6 @@ pub trait TaskBoard {
         lead_agent: &str,
     ) -> Result<Option<u32>, BoardError> {
         let record = self.task(root)?.ok_or(BoardError::UnknownTask(root))?;
-        if !matches!(record.status, TaskStatus::Failed | TaskStatus::Cancelled) {
-            return Ok(None);
-        }
         if let Some(assignee) = record.assignee.as_deref() {
             if assignee != lead_agent {
                 return Ok(None);
@@ -248,6 +264,10 @@ pub trait TaskBoard {
         }
         let attempts = self.attempts(root)?;
         if attempts.iter().any(|row| row.status == TaskStatus::Running) {
+            return Ok(None);
+        }
+        let latest = attempts.last().map(|row| row.status);
+        if !root_claim_is_resumable(record.status, latest) {
             return Ok(None);
         }
         let next = next_attempt_number(&attempts);

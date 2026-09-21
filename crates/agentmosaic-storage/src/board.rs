@@ -1,11 +1,11 @@
 //! The SQLite implementation of the team's durable task board.
 
 use agentmosaic_team::{
-    AgentMessage, ArtifactMeta, BoardError, RuntimeEventPolicy, RuntimeEventRecord,
-    SelectedArtifactRef, TaskAttempt, TaskBoard, TaskKind, TaskRecord, TaskStatus,
-    MAX_DURABLE_RUNTIME_PAYLOAD_BYTES,
+    root_claim_is_resumable, AgentMessage, ArtifactMeta, BoardError, RuntimeEventPolicy,
+    RuntimeEventRecord, SelectedArtifactRef, TaskAttempt, TaskBoard, TaskKind, TaskRecord,
+    TaskStatus, MAX_DURABLE_RUNTIME_PAYLOAD_BYTES,
 };
-use rusqlite::{params, Connection, Row, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use std::time::Duration;
 
 use crate::schema::{migrate, SCHEMA};
@@ -786,9 +786,6 @@ impl TaskBoard for SqliteTaskBoard {
             Err(rusqlite::Error::QueryReturnedNoRows) => return Err(BoardError::UnknownTask(root)),
             Err(e) => return Err(BoardError::Storage(e.to_string())),
         };
-        if !matches!(status.as_str(), "failed" | "cancelled") {
-            return Ok(None);
-        }
         if let Some(assignee) = assignee.as_deref() {
             if assignee != lead_agent {
                 return Ok(None);
@@ -804,12 +801,28 @@ impl TaskBoard for SqliteTaskBoard {
         if running > 0 {
             return Ok(None);
         }
+        let latest: Option<String> = tx
+            .query_row(
+                "SELECT status FROM team_task_runs WHERE task_id = ?1
+                 ORDER BY attempt DESC LIMIT 1",
+                params![root as i64],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        let observed = TaskStatus::restore(&status);
+        let resumable = observed.is_some_and(|status| {
+            root_claim_is_resumable(status, latest.as_deref().and_then(TaskStatus::restore))
+        });
+        if !resumable {
+            return Ok(None);
+        }
         let changed = tx
             .execute(
                 "UPDATE team_tasks SET status = 'running', assignee = ?2
-                 WHERE id = ?1 AND status IN ('failed', 'cancelled')
+                 WHERE id = ?1 AND status = ?3
                    AND (assignee IS NULL OR assignee = ?2)",
-                params![root as i64, lead_agent],
+                params![root as i64, lead_agent, status],
             )
             .map_err(|e| BoardError::Storage(e.to_string()))?;
         if changed == 0 {
