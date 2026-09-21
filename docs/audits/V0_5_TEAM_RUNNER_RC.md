@@ -231,6 +231,27 @@ The only Rust change is the `am init` onboarding hint (`codex-app-server` →
 push or ruleset change was executed. No `.db`, raw transcript, credential or temporary
 evidence is tracked.
 
+## Bounded P0/P1 code review (T6)
+
+Reviewed only for defects that would break team-runner reliability, with the existing
+deterministic suite as the evidence for each area. No reproducible P0/P1 defect was found
+this round, so no code was changed for it.
+
+| Area | Evidence | Result |
+|---|---|---|
+| root / task state transitions | `scheduler::tests::failed_task_retries_then_reassigns`, `team_runner_product` attempt-history tests (all pass) | ok |
+| retry / resume attempt numbering | `failed_root_resume_appends_new_attempt`, `root_exec_binding_history_is_one_row_per_attempt` | ok |
+| scheduler concurrency quota | `scheduler::tests::same_agent_respects_max_concurrency`, `independent_tasks_run_concurrently`, `capacity_queued_task_stays_assigned_until_driver_can_start` (G4) | ok |
+| artifact ownership / hash | `normal-path-smoke.sh` asserts owner task + SHA-256 == file SHA-256; the live smoke re-checks on disk | ok |
+| final grounding | negative control: an ungrounded selection is refused and the root fails closed | ok |
+| copied-binary / runtime path | this round's normal-path gate and live gate both run a binary copied outside the source tree | ok |
+| runtime process cleanup / absolute timeout | `acp_m2_lifecycle` suite (cancel, crash, repair, hang) | ok |
+| durable binding | `codex_exec_lead` + `binding` readback; the live smoke shows `lifecycle_state=completed` on the worker attempt | ok |
+| normal vs advanced CLI root invariants | `submit`, `override`, `resume`, `run-acp`, `continue-acp` all refuse a team root (`advanced.rs` guards; `compatibility_matrix` passes) | ok |
+| context-capacity failure fails closed | `project_onboarding::oversized_public_agent_id_fails_without_launching_either_lead_runtime` (no runtime starts; the root is left failed) | ok |
+
+Refactoring was deliberately not done: no evidence-based correctness defect justified it.
+
 ## 10. Known untested areas and remaining risks
 
 - Remote CI (`rust-candidate`) on `candidate_sha` was **not** run: the workflow is
