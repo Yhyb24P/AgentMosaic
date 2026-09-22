@@ -13,7 +13,7 @@ recovery semantics changed.
 ```text
 BASE_MAIN_SHA=fb23184e6e50ba89ed9f4a09941eaa33bfbf9d73
 PRE_C1_PR_HEAD=42b4e9dacd0343bf5d841e65f7510bc7d18b69af
-C1_CANDIDATE_SHA=4572d3d4b4f8b38cf82fd60ec4ac84ccbc908386
+C1_CANDIDATE_SHA=4a88e85c09fbe50a48dc216e00d19078aaf8ce34
 C1_EVIDENCE_HEAD_SHA=reported in the final PR / C1 closeout; intentionally not self-recorded
 PR=23
 branch=task/v05-team-runner-rc
@@ -117,8 +117,10 @@ resumed that same root with `--lead lead`.
 The gate was run against the cargo-dist extracted `am`; it verified the same
 worker task and artifact before and after, exact artifact bytes and digest,
 worker launch count 1, worker attempt count 1, root attempt count 1 then 2,
-canonical Lead `lead`, final answer grounding, and the same CodexExec native
-thread on both root attempts. Thread ids were compared ephemerally in Python
+canonical Lead `lead`, resumed `task_refs` and `artifact_refs` selecting that
+original worker and SHA, final answer grounding, and the same CodexExec native
+thread on both root attempts. It also confirmed the hanger remained running at
+the interruption boundary before explicit root recovery. Thread ids were compared ephemerally in Python
 against this test's temporary database; neither id nor any raw transcript was
 printed or retained.
 
@@ -128,8 +130,12 @@ WORKER_ATTEMPTS=1->1
 WORKER_LAUNCHES=1
 CANONICAL_LEAD=lead
 LEAD_THREAD_REUSED=true
+FINAL_TASK_REF_MATCH=true
+FINAL_ARTIFACT_REF_MATCH=true
 RECOVERY_LIVE_END_TO_END=PASS
 ```
+
+The provisional candidate `4572d3d4b4f8b38cf82fd60ec4ac84ccbc908386` and its evidence descendant were superseded after review found the live-recovery harness did not assert resumed final refs or hanger residue. One earlier run reached the 120-second wait bound without durable worker success (`worker success not durable`). Its temporary fixture was cleaned by the harness, and that failure summary is preserved here. At that point the harness had no sanitized task-state receipt, so the result could not distinguish model delay from runtime delay; there was no evidence of a product defect. We classified the evidence gap as a harness limitation (B), increased the bounded window to 240 seconds, added sanitized state on timeout, and added final-ref and hanger-residue assertions. The single explained rerun on the new frozen candidate passed all assertions. The failure record was not removed.
 
 ## cargo-dist provenance and archive checks
 
@@ -143,7 +149,7 @@ the archive.
 
 ```text
 archive=agentmosaic-cli-x86_64-unknown-linux-gnu.tar.xz
-archive_sha256=a58d0bfa9a675d141d99d917b1242aaafaf4fd5e6614fa97ae5c5b0bfd898fe4
+archive_sha256=72cedb709e7a9fe895a937b5c30fa2c78e429c14b1614f2cbbfd143076550246
 sidecar_sha256=verified (sha256sum -c: OK)
 extracted_am_sha256=84896e6caf3470a98d08657b11f73584f73f29d9fbc1081edc6d06cfa1e1c9bb
 extracted_am_version=am 0.5.0-dev
@@ -159,10 +165,10 @@ The candidate workflow now prints `QUALIFIED_SHA` after checkout and fails if a
 40-character requested SHA does not exactly equal the checked-out HEAD.
 
 ```text
-rust-candidate_run_id=35780104053
+rust-candidate_run_id=35781520077
 workflow_conclusion=success
 job_candidate=success
-QUALIFIED_SHA=4572d3d4b4f8b38cf82fd60ec4ac84ccbc908386
+QUALIFIED_SHA=4a88e85c09fbe50a48dc216e00d19078aaf8ce34
 QUALIFIED_SHA_matches_C1_CANDIDATE_SHA=true
 ```
 
