@@ -46,8 +46,8 @@ OBJECTIVE="In this repository, delegate exactly one bulk task to worker and exac
 set -m
 "${AM}" run --json "${OBJECTIVE}" >"${WORK}/run.out" 2>"${WORK}/run.err" & RUN_PID=$!
 set +m
-ROOT_ID=; WORKER_ID=; HANGER_ID=
-for _ in $(seq 1 240); do
+ROOT_ID=; WORKER_ID=; HANGER_ID=; WINDOW_READY=no
+for _ in $(seq 1 480); do
   if ! kill -0 "${RUN_PID}" 2>/dev/null; then break; fi
   STATUS="$("${AM}" status "${DB}" 2>/dev/null || true)"
   ROOT_ID="$(printf '%s\n' "$STATUS" | awk '$1 ~ /^task=/ && /parent=-/ {sub("task=", "", $1); print $1; exit}')"
@@ -56,10 +56,18 @@ for _ in $(seq 1 240); do
   if [[ -n "$ROOT_ID" && -n "$WORKER_ID" && -n "$HANGER_ID" ]] && \
      printf '%s\n' "$STATUS" | grep -Eq "task=${ROOT_ID} status=running assignee=lead attempts=1" && \
      printf '%s\n' "$STATUS" | grep -Eq "task=${WORKER_ID} status=succeeded assignee=worker attempts=1" && \
-     printf '%s\n' "$STATUS" | grep -Eq "task=${HANGER_ID} status=running assignee=hanger"; then break; fi
+     printf '%s\n' "$STATUS" | grep -Eq "task=${HANGER_ID} status=running assignee=hanger"; then WINDOW_READY=yes; break; fi
   sleep .5
 done
-[[ -n "$ROOT_ID" && -n "$WORKER_ID" && -n "$HANGER_ID" ]] || { echo 'recovery live gate: task window not reached' >&2; cat "${WORK}/run.err" >&2; exit 1; }
+if [[ "$WINDOW_READY" != yes ]]; then
+  echo "RECOVERY_LIVE_FAILURE=worker_hanger_window_not_reached"
+  echo "FAILURE_CLASS=bounded_live_runtime_or_model_delay"
+  echo "WORKER_LAUNCHES=$(wc -c <"${COUNTER}" | tr -d ' ')"
+  echo "LAST_BOARD_STATUS_BEGIN"
+  "${AM}" status "$DB" 2>/dev/null | awk '{print $1, $2, $3, $4, $5}' || true
+  echo "LAST_BOARD_STATUS_END"
+  exit 1
+fi
 STATUS="$("${AM}" status "${DB}")"
 printf '%s\n' "$STATUS" | grep -Eq "task=${ROOT_ID} status=running assignee=lead attempts=1" || { echo 'root not running at interruption window' >&2; exit 1; }
 printf '%s\n' "$STATUS" | grep -Eq "task=${WORKER_ID} status=succeeded assignee=worker attempts=1" || { echo 'worker success not durable' >&2; exit 1; }
@@ -76,9 +84,12 @@ wait "$RUN_PID" 2>/dev/null || true; RUN_PID=
 STATUS="$("${AM}" status "$DB")"
 printf '%s\n' "$STATUS" | grep -Eq "task=${ROOT_ID} status=running assignee=lead attempts=1" || { echo 'root state changed before recover' >&2; exit 1; }
 printf '%s\n' "$STATUS" | grep -Eq "task=${WORKER_ID} status=succeeded assignee=worker attempts=1" || { echo 'worker state changed before recover' >&2; exit 1; }
+printf '%s\n' "$STATUS" | grep -Eq "task=${HANGER_ID} status=running assignee=hanger attempts=1" || { echo 'hanger interruption residue was not present' >&2; exit 1; }
 "${AM}" recover "$DB" "$ROOT_ID" >/dev/null
 RESUME="$("${AM}" resume-team "$DB" "$REPO" "$ROOT_ID" --lead lead)"
 printf '%s\n' "$RESUME" | grep -q "$TOKEN" || { echo 'resumed result lost token' >&2; exit 1; }
+printf '%s\n' "$RESUME" | grep -Fxq "task_refs: ${WORKER_ID}" || { echo 'resumed final task ref did not select the original worker' >&2; exit 1; }
+printf '%s\n' "$RESUME" | grep -Fxq "artifact_refs: task=${WORKER_ID} path=worker.txt sha256=${SHA_BEFORE}" || { echo 'resumed final artifact ref did not select the original worker artifact' >&2; exit 1; }
 STATUS="$("${AM}" status "$DB")"
 printf '%s\n' "$STATUS" | grep -Eq "task=${ROOT_ID} status=succeeded assignee=lead attempts=2" || { echo 'root did not succeed at attempt 2' >&2; exit 1; }
 printf '%s\n' "$STATUS" | grep -Eq "task=${WORKER_ID} status=succeeded assignee=worker attempts=1" || { echo 'worker replayed or rewritten' >&2; exit 1; }
@@ -110,6 +121,9 @@ WORKER_ATTEMPTS=1->1
 WORKER_LAUNCHES=1
 WORKER_ARTIFACT_SHA256=${SHA_BEFORE}
 CANONICAL_LEAD=lead
+FINAL_TASK_REF_MATCH=true
+FINAL_ARTIFACT_REF_MATCH=true
+FINAL_GROUNDING=PASS
 LEAD_THREAD_REUSED=true
 RECOVERY_LIVE_END_TO_END=PASS
 RECEIPT
