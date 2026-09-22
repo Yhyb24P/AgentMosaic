@@ -44,6 +44,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Clean tree
         run: test -z "$(git status --porcelain)"
+      - name: Exact candidate identity
+        shell: bash
+        env:
+          REQUESTED_REF: ${{ inputs.ref }}
+        run: |
+          QUALIFIED_SHA="$(git rev-parse HEAD)"
+          echo "QUALIFIED_SHA=${QUALIFIED_SHA}"
+          if [[ "${REQUESTED_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            test "${QUALIFIED_SHA}" = "${REQUESTED_REF}"
+          fi
       - name: Identity gate
         run: scripts/ci/check_identity.sh
       - name: Format

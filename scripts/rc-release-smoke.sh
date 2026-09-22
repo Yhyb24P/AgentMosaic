@@ -87,38 +87,56 @@ OBJECTIVE="Objective: in this Git repository, create the file worker.txt contain
 echo "### run --json (one live heterogeneous team run)"
 RUN="$("${CLI}" run --json "${OBJECTIVE}")"
 echo "${RUN}"
-printf '%s' "${RUN}" | grep -q '"status":"succeeded"' || fail "run did not succeed: ${RUN}"
-printf '%s' "${RUN}" | grep -q "${TOKEN}" || fail "run answer lost the token: ${RUN}"
+JSON_INPUT="${RUN}" python3 - "${TOKEN}" <<'CHECK' || fail "run status/answer invalid"
+import json, sys
+d=json.loads(__import__("os").environ["JSON_INPUT"])
+assert d["status"] == "succeeded" and sys.argv[1] in d["answer"]
+CHECK
 
-RUN_ID="$(printf '%s' "${RUN}" | sed -n 's/.*"run_id":\([0-9]*\).*/\1/p')"
+RUN_ID="$(JSON_INPUT="${RUN}" python3 -c 'import json,os; print(json.loads(os.environ["JSON_INPUT"])["run_id"])')"
 [ -n "${RUN_ID}" ] || fail "run payload carried no run_id: ${RUN}"
-RUN_ANSWER="$(printf '%s' "${RUN}" | sed -n 's/.*"answer":"\([^"]*\)".*/\1/p')"
+RUN_ANSWER="$(JSON_INPUT="${RUN}" python3 -c 'import json,os; print(json.loads(os.environ["JSON_INPUT"])["answer"])')"
 echo
 
 echo "### status --json (fresh process)"
 STATUS="$("${CLI}" status --json)"
 echo "${STATUS}"
-printf '%s' "${STATUS}" | grep -q "\"run_id\":${RUN_ID}" || fail "status is not for run ${RUN_ID}: ${STATUS}"
+JSON_INPUT="${STATUS}" python3 - "${RUN_ID}" <<'CHECK' || fail "status is not for run ${RUN_ID}"
+import json, os, sys
+assert json.loads(os.environ["JSON_INPUT"])["run_id"] == int(sys.argv[1])
+CHECK
 echo
 
 echo "### final --json ${RUN_ID} (fresh process)"
 FINAL="$("${CLI}" final --json "${RUN_ID}")"
 echo "${FINAL}"
-printf '%s' "${FINAL}" | grep -q "\"answer\":\"${RUN_ANSWER}\"" || fail "final did not reproduce the run answer: ${FINAL}"
+JSON_INPUT="${FINAL}" python3 - "${RUN_ID}" "${RUN_ANSWER}" <<'CHECK' || fail "final did not reproduce run id and answer"
+import json, os, sys
+d=json.loads(os.environ["JSON_INPUT"])
+assert d["run_id"] == int(sys.argv[1]) and d["answer"] == sys.argv[2]
+CHECK
 echo
 
 echo "### artifact read-back and independent checks"
 
 # The worker task is the child of the root that owns worker.txt.
-WORKER_TASK_ID="$(printf '%s' "${STATUS}" | tr '}' '\n' | grep -F '"path":"worker.txt"' | sed -n 's/.*"task_id":\([0-9]*\).*/\1/p' | head -n1)"
+WORKER_TASK_ID="$(JSON_INPUT="${STATUS}" python3 -c 'import json,os; d=json.loads(os.environ["JSON_INPUT"]); a=[x["task_id"] for x in d["artifacts"] if x["path"]=="worker.txt"]; assert len(a)==1; print(a[0])')" || fail "no unique worker.txt artifact"
 [ -n "${WORKER_TASK_ID}" ] || fail "no task recorded a worker.txt artifact: ${STATUS}"
-printf '%s' "${STATUS}" | tr '}' '\n' | grep -q "\"id\":${WORKER_TASK_ID},\"assignee\":\"worker\",\"status\":\"succeeded\"" \
-  || fail "worker task ${WORKER_TASK_ID} is not a succeeded worker task: ${STATUS}"
-
+JSON_INPUT="${STATUS}" python3 - "${RUN_ID}" "${WORKER_TASK_ID}" <<'CHECK' || fail "root-child durable state mismatch"
+import json, sys
+d=json.loads(__import__("os").environ["JSON_INPUT"]); ts={t["id"]:t for t in d["tasks"]}
+assert ts[int(sys.argv[1])]["assignee"]=="lead" and ts[int(sys.argv[1])]["status"]=="succeeded"
+assert ts[int(sys.argv[2])]["assignee"]=="worker" and ts[int(sys.argv[2])]["status"]=="succeeded"
+CHECK
 ARTIFACT="$("${CLI}" artifact --json "${WORKER_TASK_ID}")"
 echo "${ARTIFACT}"
 PERSISTED_SHA="$(printf '%s' "${ARTIFACT}" | sed -n 's/.*"sha256":"\([0-9a-f]\{64\}\)".*/\1/p' | head -n1)"
 [ -n "${PERSISTED_SHA}" ] || fail "artifact payload carried no sha256: ${ARTIFACT}"
+JSON_INPUT="${ARTIFACT}" python3 - "${WORKER_TASK_ID}" "${PERSISTED_SHA}" <<'CHECK' || fail "artifact task/path/hash mismatch"
+import json, sys
+a=json.loads(__import__("os").environ["JSON_INPUT"])["artifacts"]
+assert a == [{"task_id":int(sys.argv[1]),"path":"worker.txt","sha256":sys.argv[2]}]
+CHECK
 
 [ -f "${REPO}/worker.txt" ] || fail "the worker never wrote worker.txt"
 EXACT="$(cat "${REPO}/worker.txt")"
@@ -126,12 +144,25 @@ EXACT="$(cat "${REPO}/worker.txt")"
 [ "$(wc -c < "${REPO}/worker.txt" | tr -d ' ')" = "$(( ${#EXACT} + 1 ))" ] || fail "worker.txt has trailing content beyond one newline"
 ON_DISK_SHA="$(sha256sum "${REPO}/worker.txt" | cut -d' ' -f1)"
 [ "${ON_DISK_SHA}" = "${PERSISTED_SHA}" ] || fail "persisted sha ${PERSISTED_SHA} != on-disk ${ON_DISK_SHA}"
+JSON_INPUT="${RUN}" python3 - "${WORKER_TASK_ID}" "${PERSISTED_SHA}" "${TOKEN}" <<'CHECK' || fail "run selected refs did not match worker evidence"
+import json, sys
+d=json.loads(__import__("os").environ["JSON_INPUT"])
+assert d["task_refs"] == [int(sys.argv[1])]
+assert d["artifact_refs"] == [{"task_id":int(sys.argv[1]),"path":"worker.txt","sha256":sys.argv[2]}]
+assert d["status"] == "succeeded" and sys.argv[3] in d["answer"]
+CHECK
 
-# Root/child relationship and terminal attempt state, from durable readback.
-printf '%s' "${STATUS}" | tr '}' '\n' | grep -q "\"id\":${RUN_ID},\"assignee\":\"lead\",\"status\":\"succeeded\"" \
-  || fail "root ${RUN_ID} is not a succeeded lead task: ${STATUS}"
+# Parent is intentionally checked through the existing legacy read-only view;
+# status --json has no parent field and the public contract stays unchanged.
+LEGACY_STATUS="$("${CLI}" status "${DB}")"
+printf '%s\n' "${LEGACY_STATUS}" | grep -Eq "task=${WORKER_TASK_ID} status=succeeded assignee=worker attempts=[0-9]+ parent=${RUN_ID}" || fail "worker is not a succeeded child of root: ${LEGACY_STATUS}"
+printf '%s\n' "${LEGACY_STATUS}" | grep -Eq "task=${RUN_ID} status=succeeded assignee=lead attempts=[0-9]+ parent=-" || fail "root is not a succeeded lead root: ${LEGACY_STATUS}"
 BINDING="$("${CLI}" binding "${DB}" "${WORKER_TASK_ID}")"
 echo "${BINDING}"
+printf '%s\n' "${BINDING}" | grep -q 'agent=worker' || fail "binding agent mismatch"
+printf '%s\n' "${BINDING}" | grep -q 'runtime_kind=acp' || fail "binding runtime mismatch"
+printf '%s\n' "${BINDING}" | grep -q 'lifecycle_state=completed' || fail "binding is not completed"
+printf '%s\n' "${BINDING}" | grep -q 'external_reference_present=true' || fail "binding has no external reference"
 
 echo
 echo "AM_SHA256=$(sha256sum "${CLI}" | cut -d' ' -f1)"
@@ -146,5 +177,7 @@ echo "ARTIFACT_PATH=worker.txt"
 echo "ARTIFACT_SHA256=${PERSISTED_SHA}"
 echo "SELECTED_TASK_MATCH=true"
 echo "SELECTED_ARTIFACT_MATCH=true"
+echo "ROOT_CHILD_MATCH=true"
+echo "ARTIFACT_HASH_MATCH=true"
 echo "FRESH_READBACK_MATCH=true"
 echo "RC_RELEASE_SMOKE=PASS"
