@@ -75,6 +75,4 @@ The normal path is first class; the compatibility commands (`register`, `run-tea
 
 ## Release qualification
 
-See [audits/V0_5_TEAM_RUNNER_RC.md](audits/V0_5_TEAM_RUNNER_RC.md) for the point-in-time
-evidence. `PUBLIC_RELEASE_READY` is always `false` until a tag / GitHub Release is
-explicitly authorized; it is not a technical-gate failure.
+See [audits/V0_5_TEAM_RUNNER_RC_C1.md](audits/V0_5_TEAM_RUNNER_RC_C1.md) for the current C1 candidate-readiness evidence. It supersedes the readiness verdict in the prior point-in-time [RC audit](audits/V0_5_TEAM_RUNNER_RC.md), which remains unchanged. `RC_CANDIDATE_READY=true`; `PUBLIC_RELEASE_READY=false` until a tag / GitHub Release is explicitly authorized.
