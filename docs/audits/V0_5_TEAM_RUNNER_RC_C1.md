@@ -194,7 +194,7 @@ C1-G10 Codex native thread reuse                              PASS
 C1-G11 v0.3 and v8 migrations                                  PASS
 C1-G12 remote rust-candidate exact SHA                        PASS
 C1-G13 final evidence-head rust + rust-quality                PASS
-C1-G14 committed tree contains no DB/transcript/credential    PASS
+C1-G14 no C1-generated DB/raw transcript/credential/temp evidence       PASS
 ```
 
 ```text
@@ -216,9 +216,10 @@ PUBLIC_RELEASE_READY=false
 INSTALLER_SMOKE=NOT_COVERED
 ```
 
-The final committed Git tree contains no database, runtime transcript,
-credential, or temporary test evidence. One ignored `researchd.db` already
-existed in the shared workspace before C1 and remains untracked; it is not in the
-candidate or evidence commit. No installer smoke, Windows/macOS prebuilt
+C1 added no database, raw runtime transcript, credential, or temporary test
+evidence to Git. The repository retains its pre-existing tracked v0.3 migration
+fixture database and curated demo transcript files; C1 did not alter them. One
+ignored `researchd.db` also existed in the shared workspace before C1 and remains
+untracked; it is not in the candidate or evidence commit. No installer smoke, Windows/macOS prebuilt
 qualification, branch-protection review, PR #20 closure, tag, or GitHub Release
 was attempted. No release action is authorized by this audit.
