@@ -4,8 +4,8 @@ name: rust-candidate
 #
 # Real authenticated Codex + Qwen Code E2E is NOT run here: CI has no model
 # credentials. That is a local reference-profile gate, performed through the
-# public CLI `am run-team` on a machine where `codex` and `qwen` are
-# already authenticated.
+# first-class `am init -> am agent add -> am doctor -> am run -> am status/final`
+# path on a machine where `codex` and `qwen` are already authenticated.
 #
 # Readiness claims are separate and must never be conflated:
 #   LOCAL_PRODUCT_RC_READY        local product path + real E2E; not produced by CI
@@ -44,25 +44,38 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Clean tree
         run: test -z "$(git status --porcelain)"
+      - name: Exact candidate identity
+        shell: bash
+        env:
+          REQUESTED_REF: ${{ inputs.ref }}
+        run: |
+          QUALIFIED_SHA="$(git rev-parse HEAD)"
+          echo "QUALIFIED_SHA=${QUALIFIED_SHA}"
+          if [[ "${REQUESTED_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            test "${QUALIFIED_SHA}" = "${REQUESTED_REF}"
+          fi
+      - name: Identity gate
+        run: scripts/ci/check_identity.sh
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - name: Test
-        run: cargo test --workspace --all-features
+        run: cargo test --locked --workspace --all-features
       - name: Release build
-        run: cargo build --release --workspace
+        run: cargo build --locked --release --workspace
       - name: Diff hygiene
         run: git diff --check
+      - name: Published v0.3 migration
+        run: cargo test --locked -p agentmosaic-storage --test published_v03_migration
       - name: Authentic historical v8 migration
-        run: cargo test -p agentmosaic-storage --test schema_v8_migration
-      - name: Copied-binary board smoke
-        run: |
-          set -euo pipefail
-          work="$(mktemp -d)"
-          cp target/release/am "${work}/am"
-          cd "${work}"
-          ./am --help > /dev/null
-          ./am --version > /dev/null
-          ./am submit ./board.db utility "deterministic smoke task" > /dev/null
-          ./am status ./board.db | grep -q "task=1 status=pending"
+        run: cargo test --locked -p agentmosaic-storage --test schema_v8_migration
+      # The release binary is copied OUT of the source tree and drives the
+      # first-class path end to end: init, agent add, doctor, run, and three
+      # fresh-process readbacks that must reproduce the durable state. The
+      # development-only mock runtimes stand in for the external Agents; every
+      # other layer (registry, board, scheduler, Lead loop, artifact hashing,
+      # final grounding) is the real product. This is the normal-path gate the
+      # team-runner RC is judged on.
+      - name: Copied-binary normal-path smoke
+        run: scripts/ci/normal-path-smoke.sh target/release

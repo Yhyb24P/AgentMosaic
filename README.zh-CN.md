@@ -36,7 +36,7 @@ am init
 
 am agent add lead \
   --role reasoner \
-  --adapter codex-app-server -- codex
+  --adapter codex-exec -- codex
 
 am agent add worker \
   --role worker \
@@ -66,13 +66,15 @@ utility Agent 的注册方式相同，用于有边界的工具型工作。它是
 am agent add utility --role utility --adapter acp -- <program> --acp
 ```
 
-本地 launcher 保留自己的 argv，但注册给 `codex-app-server` 的启动命令，必须在
-AgentMosaic 追加 `app-server --stdio` 之后依然有效。命名 Codex profile 目前并不是可移植的
+本地 launcher 保留自己的 argv，但注册给 `codex-exec` 的启动命令，必须在 AgentMosaic
+追加 `exec --json` 之后依然有效，因此单独一个 `codex` 就是有效的 launcher。同一个
+`codex` 二进制也可以支撑 `codex-app-server` 兼容运行时，此时启动命令还必须能在
+AgentMosaic 追加 `app-server --stdio` 之后保持有效。命名 Codex profile 目前并不是可移植的
 app-server 配置方式；请改用 app-server 能接受的 `-c` 覆盖，或用一个展开成这些覆盖的
-wrapper。单独一个 `codex` 就是有效的 launcher：
+wrapper：
 
 ```bash
-am agent add lead --role reasoner --adapter codex-app-server -- codex
+am agent add lead --role reasoner --adapter codex-app-server -- codex   # 兼容 Lead
 ```
 
 当真实运行触达默认上限时，`am agent add --max-events N` 可以调高单轮 Codex 事件预算。
@@ -143,10 +145,11 @@ launcher profile
 ACP 兼容的 coding runtime 通过一个有边界的 worker 边界与 AgentMosaic 通信。ACP driver
 接收一个调度任务，返回有边界的结构化结果和 artifact 哈希；权威状态始终在 SQLite board 上。
 
-Codex 是当前参考高推理 Lead，通过 `codex-exec`（默认，走 `codex exec --json`）或常驻的
-`codex-app-server` 兼容运行时接入。它的 thread 在规划、跟进和综合之间常驻，外部
-thread/turn binding 会被持久化。任何满足同一能力边界的 Agent 或 runtime 都可以承担这个
-角色。
+Codex 是当前参考高推理 Lead。`codex-exec` 是规范且默认的 Lead runtime：它走稳定的
+`codex exec --json` 机器接口，并持久化外部 thread，因此恢复运行会继续该 thread。
+`codex-app-server` 兼容运行时则保持一个常驻的 `codex app-server` 进程，它的 thread 在规划、
+跟进和综合之间常驻，并以同样方式持久化外部 thread/turn binding。无论哪种方式，任何满足
+同一能力边界的 Agent 或 runtime 都可以承担 Lead 角色。
 
 ## 持久化与恢复
 
