@@ -13,7 +13,7 @@ use std::time::Duration;
 use agentmosaic_storage::{
     AgentRegistryRecord, SqliteAgentRegistry, SqliteTaskBoard, MAX_RUNTIME_EVENT_QUERY,
 };
-use agentmosaic_team::{AgentMessage, RuntimeEvent, SelectedArtifactRef, TaskBoard, TaskStatus};
+use agentmosaic_team::{RuntimeEvent, SelectedArtifactRef, TaskBoard, TaskStatus};
 use crossterm::{
     cursor::Show,
     event::{self, Event, KeyCode},
@@ -34,8 +34,6 @@ use rusqlite::Connection;
 /// loop never spins on a zero timeout, and no thread is needed to poll.
 pub const POLL_TIMEOUT: Duration = Duration::from_millis(400);
 
-/// How many durable directed messages the activity summary keeps.
-pub const MESSAGE_SUMMARY_LIMIT: usize = 5;
 /// How many normalized runtime observations the dashboard retains.
 pub const RUNTIME_EVENT_SUMMARY_LIMIT: usize = 8;
 
@@ -137,8 +135,6 @@ pub struct BoardSnapshot {
     pub artifacts: Vec<ArtifactView>,
     /// The durable final selection for the run.
     pub final_refs: FinalRefs,
-    /// The newest durable directed messages, bounded by [`MESSAGE_SUMMARY_LIMIT`].
-    pub messages: Vec<AgentMessage>,
     /// Recent normalized runtime observations; never task authority or a raw transcript.
     pub runtime_events: Vec<RuntimeEventView>,
 }
@@ -177,7 +173,6 @@ fn snapshot_from(
             tasks: Vec::new(),
             artifacts: Vec::new(),
             final_refs: FinalRefs::default(),
-            messages: message_summary(board)?,
             runtime_events: Vec::new(),
         });
     };
@@ -255,7 +250,6 @@ fn snapshot_from(
             task_refs,
             artifact_refs,
         },
-        messages: message_summary(board)?,
         runtime_events: {
             runtime_events.truncate(RUNTIME_EVENT_SUMMARY_LIMIT);
             runtime_events
@@ -287,18 +281,6 @@ fn team_view(agents: &[AgentRegistryRecord], running: &BTreeMap<String, usize>) 
     }
     team.sort_by(|a, b| a.id.cmp(&b.id));
     team
-}
-
-/// The newest directed messages, bounded so a long run cannot push the rest of
-/// the board off the screen.
-fn message_summary(board: &SqliteTaskBoard) -> Result<Vec<AgentMessage>, String> {
-    let mut messages = board
-        .messages()
-        .map_err(|e| format!("read messages: {e}"))?;
-    if messages.len() > MESSAGE_SUMMARY_LIMIT {
-        messages.drain(..messages.len() - MESSAGE_SUMMARY_LIMIT);
-    }
-    Ok(messages)
 }
 
 fn runtime_summary(event: &RuntimeEvent) -> String {
@@ -424,22 +406,6 @@ pub fn render_snapshot(snapshot: &BoardSnapshot, width: u16, height: u16) -> Str
                     event.agent,
                     event.runtime.as_deref().unwrap_or("-"),
                     event.summary
-                ),
-                width,
-            ));
-        }
-    }
-
-    lines.push(String::new());
-    lines.push(truncate("Activity", width));
-    if snapshot.messages.is_empty() {
-        lines.push(truncate("  no directed messages", width));
-    } else {
-        for message in &snapshot.messages {
-            lines.push(truncate(
-                &format!(
-                    "  {} -> {}: {}",
-                    message.from_agent, message.to_agent, message.body
                 ),
                 width,
             ));
@@ -659,15 +625,15 @@ mod tests {
         AgentRegistryRecord, ExternalRuntimeBinding, SqliteAgentRegistry, SqliteTaskBoard,
     };
     use agentmosaic_team::{
-        AgentMessage, ArtifactMeta, RuntimeEvent, RuntimeEventRecord, SelectedArtifactRef,
-        TaskAttempt, TaskBoard, TaskKind, TaskStatus,
+        ArtifactMeta, RuntimeEvent, RuntimeEventRecord, SelectedArtifactRef, TaskAttempt,
+        TaskBoard, TaskKind, TaskStatus,
     };
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     use rusqlite::Connection;
 
     use super::{
         event_action, load_snapshot, render_snapshot, LoopAction, TerminalGuard, TerminalRestore,
-        MESSAGE_SUMMARY_LIMIT, POLL_TIMEOUT,
+        POLL_TIMEOUT,
     };
 
     /// A database path owned by one test, so parallel tests never collide.
@@ -1028,38 +994,6 @@ mod tests {
         assert!(text.lines().count() <= 8);
         assert!(text.lines().all(|line| line.chars().count() <= 24));
         assert!(!text.contains(long_objective.trim()));
-        let _ = std::fs::remove_file(&path);
-    }
-
-    /// The activity summary is a bounded tail of the durable messages.
-    #[test]
-    fn message_summary_keeps_only_the_newest_bounded_tail() {
-        let path = temp_database("messages");
-        let mut board = board_on(&path);
-        board
-            .create_task("run", None, TaskKind::Reasoning, None)
-            .unwrap();
-        for index in 0..(MESSAGE_SUMMARY_LIMIT + 2) {
-            board
-                .record_message(&AgentMessage {
-                    from_agent: "worker".into(),
-                    to_agent: "lead".into(),
-                    body: format!("update {index}"),
-                })
-                .unwrap();
-        }
-
-        let snapshot = load_snapshot(&path).unwrap();
-        assert_eq!(snapshot.messages.len(), MESSAGE_SUMMARY_LIMIT);
-        assert_eq!(snapshot.messages.first().unwrap().body, "update 2");
-        assert_eq!(
-            snapshot.messages.last().unwrap().body,
-            format!("update {}", MESSAGE_SUMMARY_LIMIT + 1)
-        );
-        assert_eq!(
-            compact_lines(&section(&board_text(&path), "Activity")).len(),
-            MESSAGE_SUMMARY_LIMIT
-        );
         let _ = std::fs::remove_file(&path);
     }
 

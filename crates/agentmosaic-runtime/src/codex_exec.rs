@@ -120,7 +120,7 @@ where
                     Err(error) => {
                         break Err(RuntimeError::Protocol(format!(
                             "decode Codex JSONL: {error}"
-                        )))
+                        )));
                     }
                 };
                 let events = match normalize_event(&value) {
@@ -145,7 +145,7 @@ where
                 }
             }
             Ok(Err(error)) => {
-                break Err(RuntimeError::Protocol(format!("read Codex JSONL: {error}")))
+                break Err(RuntimeError::Protocol(format!("read Codex JSONL: {error}")));
             }
             Err(mpsc::RecvTimeoutError::Timeout) => break Err(RuntimeError::TimedOut),
             Err(mpsc::RecvTimeoutError::Disconnected) => {

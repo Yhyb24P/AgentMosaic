@@ -306,7 +306,6 @@ impl PersistedCodexExecDriver {
                     task_id: task.id,
                     summary: Self::structured_summary(&result.final_message)?,
                     artifacts: self.collect_artifacts()?,
-                    message: None,
                 })
             }
             Err(error) => {

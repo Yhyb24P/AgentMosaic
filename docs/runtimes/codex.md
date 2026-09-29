@@ -1,57 +1,24 @@
 # Codex runtime
 
-Codex is the reference high-intelligence Lead, reached through two driver kinds:
-
-- `codex-exec` — the default, driving the stable `codex exec --json` machine interface
-  (worker and Lead).
-- `codex-app-server` — the resident `codex app-server --stdio` bridge, kept as the
-  compatibility runtime (worker and Lead) with the internal
-  `am __internal codex-mcp` MCP bridge.
-
-## Registration
-
-An Agent is registered with the project-aware command and its opaque external
-launch argv:
+`codex-exec` drives the external `codex exec --json` interface for the Lead and workers.
 
 ```bash
-am agent add lead --role reasoner --adapter codex-app-server -- codex
+am agent add lead --role reasoner --adapter codex-exec -- codex
 ```
 
-AgentMosaic does not select a Codex model, account, provider, credentials or
-launcher profile. Existing v11 records containing `mcp_command` remain readable,
-but new product paths do not require or write it.
+The launch argv remains valid when the adapter appends `exec --json`. AgentMosaic does
+not select a model, provider, credential or launcher profile. Prompts travel on stdin.
+Each turn starts an external process; subsequent turns use `codex exec resume --json`
+with the persisted foreign thread ID.
 
-## How it runs
+The Lead contract renderer and strict decision parser are independent of the transport.
+The decision wire is checked in at `contracts/lead_decision.schema.json`. Malformed
+responses get at most one bounded correction turn, then fail the root attempt.
 
-The driver spawns a resident `codex app-server` and keeps one thread across planning,
-follow-up and synthesis. It persists the external thread/turn references through the
-durable task board (`ExternalRuntimeBinding`), so a resumed run re-attaches instead of
-replaying.
+Process deadlines, output bounds, process group termination/reaping, artifact containment
+and hashes remain adapter responsibilities. Successful tasks are not replayed on run
+resume. See [Recovery](../recovery.md).
 
-The Lead's decisions are strict JSON validated by the product; a decision that does not
-match `contracts/lead_decision.schema.json` fails closed after at most one bounded
-correction turn. A Lead brain failure propagates and the root task cannot become
-`succeeded`.
-
-## Internal MCP bridge
-
-`am __internal codex-mcp` is a fixed narrow stdio MCP bridge. The normal CLI
-injects its own executable as the bridge host; users never configure a second
-binary. The driver wires it in as the MCP server `agentmosaic` with per-task
-environment:
-
-```text
-AGENTMOSAIC_DB          the board database path
-AGENTMOSAIC_TASK_ID     the bounded task id
-AGENTMOSAIC_ATTEMPT     the attempt number
-AGENTMOSAIC_BRIDGE_LOG  optional bridge audit log path
-```
-
-It exposes exactly two allowlisted tools:
-
-- `agentmosaic_request_context` — request bounded team/context results.
-- `agentmosaic_request_help` — request bounded team help.
-
-Tool arguments cannot select task or runtime identity; the bridge accepts identity only
-from the MCP request correlation id. The Codex app-server elicitation path accepts only
-this configured `agentmosaic` MCP server.
+Earlier app-server registrations remain inspectable after explicit import, but cannot
+run. Register a current adapter for a new run. Foreign app-server threads cannot be
+resumed through the exec transport.

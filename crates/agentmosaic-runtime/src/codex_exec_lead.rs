@@ -8,9 +8,7 @@ use agentmosaic_team::{LeadBrain, LeadBrainError, LeadContext, LeadDecision};
 use agentmosaic_team::{TaskBoard, TaskStatus};
 use async_trait::async_trait;
 
-use crate::{
-    run_codex_exec_invocation, CodexExecInvocation, CodexLeadBrain, CodexLeadConfig, LaunchSpec,
-};
+use crate::{run_codex_exec_invocation, CodexExecInvocation, LaunchSpec};
 
 #[derive(Debug, Clone)]
 pub struct CodexExecLeadConfig {
@@ -36,15 +34,16 @@ impl CodexExecLeadConfig {
         if self.binding_database.is_some() != self.binding_agent_id.is_some() {
             return Err("Codex exec lead binding database and agent id must be paired".into());
         }
+
         Ok(())
     }
 }
 
 /// A stateful Lead backend; rounds resume the foreign Codex thread while the
-/// parser stays shared with the app-server Lead implementation.
+/// parser enforces the transport independent Lead contract.
 pub struct CodexExecLeadBrain {
     config: CodexExecLeadConfig,
-    contract: CodexLeadBrain,
+    contract: crate::lead_contract::LeadContract,
     thread_id: Option<String>,
 }
 
@@ -54,18 +53,11 @@ impl CodexExecLeadBrain {
         candidates: Vec<String>,
     ) -> Result<Self, LeadBrainError> {
         config.validate().map_err(LeadBrainError::Unavailable)?;
-        let contract = CodexLeadBrain::new(
-            CodexLeadConfig {
-                launch: config.launch.clone(),
-                working_directory: config.working_directory.clone(),
-                model: None,
-                overrides: Vec::new(),
-                max_prompt_bytes: config.max_prompt_bytes,
-                max_answer_bytes: config.max_answer_bytes,
-                max_events: 1,
-            },
+        let contract = crate::lead_contract::LeadContract::new(
+            config.max_prompt_bytes,
+            config.max_answer_bytes,
             candidates,
-        )?;
+        );
         Ok(Self {
             config,
             contract,
@@ -112,6 +104,7 @@ impl CodexExecLeadBrain {
         if self.thread_id.is_some() {
             return Ok(());
         }
+
         let (Some(database), Some(agent_id)) =
             (&self.config.binding_database, &self.config.binding_agent_id)
         else {

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use agentmosaic_storage::{SqliteAgentRegistry, SqliteTaskBoard, SCHEMA_VERSION};
+use agentmosaic_storage::{import_database, SqliteAgentRegistry, SqliteTaskBoard, SCHEMA_VERSION};
 use agentmosaic_team::{TaskBoard, TaskStatus};
 use rusqlite::Connection;
 use sha2::Digest;
@@ -20,14 +20,14 @@ fn count(connection: &Connection, table: &str) -> i64 {
 }
 
 #[test]
-fn published_v030_database_migrates_additively_to_v12() {
+fn published_v030_database_imports_to_v14_without_mutating_source() {
     let bytes = std::fs::read(fixture()).expect("read frozen published-version fixture");
     assert_eq!(
         format!("{:x}", sha2::Sha256::digest(&bytes)),
         FIXTURE_SHA256
     );
     let path = std::env::temp_dir().join(format!(
-        "agentmosaic_published_v03_migration_{}.db",
+        "agentmosaic_published_v03_import_{}.db",
         std::process::id()
     ));
     let _ = std::fs::remove_file(&path);
@@ -45,19 +45,23 @@ fn published_v030_database_migrates_additively_to_v12() {
         ("team_tasks", 2),
         ("team_task_runs", 2),
         ("artifacts", 1),
-        ("messages", 0),
         ("team_final_task_refs", 1),
         ("team_final_artifact_refs", 1),
         ("external_runtime_bindings", 1),
     ];
     for (table, expected) in table_counts {
-        assert_eq!(count(&before, table), expected, "pre-migration {table}");
+        assert_eq!(count(&before, table), expected, "pre-import {table}");
     }
     drop(before);
 
-    let board = SqliteTaskBoard::open(Connection::open(&path).unwrap()).unwrap();
+    let source_before = std::fs::read(&path).unwrap();
+    let target = path.with_extension("v14.db");
+    let _ = std::fs::remove_file(&target);
+    import_database(&path, &target).expect("explicit import");
+    assert_eq!(std::fs::read(&path).unwrap(), source_before);
+    let board = SqliteTaskBoard::open(Connection::open(&target).unwrap()).unwrap();
     assert_eq!(board.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 12);
+    assert_eq!(SCHEMA_VERSION, 14);
     assert_eq!(
         board.task(1).unwrap().unwrap().status,
         TaskStatus::Succeeded
@@ -71,7 +75,6 @@ fn published_v030_database_migrates_additively_to_v12() {
         Some("mock-ok-0")
     );
     assert_eq!(board.artifacts(2).unwrap().len(), 1);
-    assert!(board.messages().unwrap().is_empty());
     let (tasks, artifacts) = board.final_refs(1).unwrap();
     assert_eq!(tasks, vec![2]);
     assert_eq!(artifacts.len(), 1);
@@ -82,13 +85,22 @@ fn published_v030_database_migrates_additively_to_v12() {
     assert!(board.runtime_events(2, 1, 0, 10).unwrap().is_empty());
     drop(board);
 
-    let registry = SqliteAgentRegistry::open(&path).unwrap();
+    let registry = SqliteAgentRegistry::open(&target).unwrap();
     assert_eq!(registry.list_agents().unwrap().len(), 2);
     drop(registry);
-    let after = Connection::open(&path).unwrap();
+    let after = Connection::open(&target).unwrap();
     for (table, expected) in table_counts {
-        assert_eq!(count(&after, table), expected, "post-migration {table}");
+        assert_eq!(count(&after, table), expected, "post-import {table}");
     }
     assert_eq!(count(&after, "runtime_events"), 0);
+    let product_tables: i64 = after
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(product_tables, 8);
+    let _ = std::fs::remove_file(target);
     let _ = std::fs::remove_file(path);
 }

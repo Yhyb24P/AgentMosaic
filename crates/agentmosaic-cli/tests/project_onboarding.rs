@@ -11,7 +11,7 @@ fn cli() -> Command {
 #[test]
 #[cfg(unix)]
 fn oversized_public_agent_id_fails_without_launching_either_lead_runtime() {
-    for adapter in ["codex-exec", "codex-app-server"] {
+    for adapter in ["codex-exec"] {
         let root = temporary_project("context_capacity");
         fs::create_dir_all(&root).unwrap();
         assert!(Command::new("git")
@@ -70,7 +70,7 @@ fn oversized_public_agent_id_fails_without_launching_either_lead_runtime() {
             !root.join("runtime-started").exists(),
             "no runtime may start with unusable context"
         );
-        let conn = rusqlite::Connection::open(root.join(".agentmosaic/state.db")).unwrap();
+        let conn = rusqlite::Connection::open(root.join(".agentmosaic/state-v14.db")).unwrap();
         let status: String = conn
             .query_row(
                 "SELECT status FROM team_tasks WHERE parent_task IS NULL",
@@ -124,7 +124,7 @@ fn project_onboarding_discovers_git_root_and_preserves_launch_argv() {
         "{}",
         String::from_utf8_lossy(&second.stderr)
     );
-    assert!(root.join(".agentmosaic/state.db").is_file());
+    assert!(root.join(".agentmosaic/state-v14.db").is_file());
     let ignore = fs::read_to_string(root.join(".gitignore")).unwrap();
     assert_eq!(
         ignore
@@ -168,7 +168,7 @@ fn project_onboarding_discovers_git_root_and_preserves_launch_argv() {
             "--role",
             "reasoner",
             "--adapter",
-            "codex-app-server",
+            "codex-exec",
             "--",
             "agentmosaic-lead-not-installed",
         ])
@@ -191,7 +191,7 @@ fn project_onboarding_discovers_git_root_and_preserves_launch_argv() {
     // `agent list` renders a bounded LAUNCH column now, so the intent of this
     // test — the opaque argv survives end-to-end through CLI registration — is
     // read back from the durable registry instead.
-    let registered = SqliteAgentRegistry::open(root.join(".agentmosaic/state.db"))
+    let registered = SqliteAgentRegistry::open(root.join(".agentmosaic/state-v14.db"))
         .unwrap()
         .get_agent("wrapper")
         .unwrap()
@@ -232,7 +232,7 @@ fn init_uses_non_git_directory_and_uninitialized_project_fails_clearly() {
         .output()
         .unwrap();
     assert!(initialized.status.success());
-    assert!(root.join(".agentmosaic/state.db").is_file());
+    assert!(root.join(".agentmosaic/state-v14.db").is_file());
     assert!(!root.join(".gitignore").exists());
     fs::remove_dir_all(root).unwrap();
 }

@@ -361,7 +361,6 @@ mod tests {
                 task_id: task.id,
                 summary: "ok".into(),
                 artifacts: Vec::new(),
-                message: None,
             })
         }
     }

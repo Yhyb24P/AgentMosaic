@@ -60,12 +60,7 @@ impl TaskKind {
 /// How an Agent runs behind its driver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DriverKind {
-    Native,
     Acp,
-    Cli,
-    /// A Codex CLI driven through its `app-server --stdio` protocol. It is an
-    /// explicit kind, never inferred from an executable name.
-    CodexAppServer,
     /// A Codex CLI driven through its stable `exec --json` machine interface.
     CodexExec,
     /// A Claude CLI driven through its stable `stream-json` machine interface.
@@ -76,23 +71,16 @@ impl DriverKind {
     /// The durable string form.
     pub fn as_str(self) -> &'static str {
         match self {
-            DriverKind::Native => "native",
             DriverKind::Acp => "acp",
-            DriverKind::Cli => "cli",
-            DriverKind::CodexAppServer => "codex-app-server",
             DriverKind::CodexExec => "codex-exec",
             DriverKind::ClaudeCli => "claude-cli",
         }
     }
 
-    /// Restore a kind from its string form. Every kind ever persisted stays
-    /// readable, so an older registration never becomes unreadable.
+    /// Decode a currently supported driver. Historical strings remain in storage.
     pub fn restore(s: &str) -> Option<Self> {
         Some(match s {
-            "native" => DriverKind::Native,
             "acp" => DriverKind::Acp,
-            "cli" => DriverKind::Cli,
-            "codex-app-server" => DriverKind::CodexAppServer,
             "codex-exec" => DriverKind::CodexExec,
             "claude-cli" => DriverKind::ClaudeCli,
             _ => return None,
@@ -129,8 +117,6 @@ pub struct AgentTaskResult {
     pub summary: String,
     /// Artifacts produced (path + content hash).
     pub artifacts: Vec<crate::board::ArtifactMeta>,
-    /// A directed message the agent wants to send to a specific agent (T09).
-    pub message: Option<crate::board::AgentMessage>,
 }
 
 /// Runs a task on some backend. The team layer moves work between Agents; it
@@ -399,25 +385,17 @@ mod tests {
     // Every driver kind round-trips through its durable string form, including
     // the values stored by earlier releases.
     #[test]
-    fn driver_kinds_round_trip_and_old_values_stay_readable() {
+    fn current_driver_kinds_round_trip_and_retired_values_are_rejected() {
         for kind in [
-            DriverKind::Native,
             DriverKind::Acp,
-            DriverKind::Cli,
-            DriverKind::CodexAppServer,
             DriverKind::CodexExec,
             DriverKind::ClaudeCli,
         ] {
             assert_eq!(DriverKind::restore(kind.as_str()), Some(kind));
         }
-        assert_eq!(DriverKind::CodexAppServer.as_str(), "codex-app-server");
-        assert_eq!(DriverKind::CodexExec.as_str(), "codex-exec");
-        assert_eq!(DriverKind::ClaudeCli.as_str(), "claude-cli");
-        assert_eq!(
-            DriverKind::restore("codex-app-server"),
-            Some(DriverKind::CodexAppServer)
-        );
-        assert_eq!(DriverKind::restore("gpt-5"), None);
+        for retired in ["native", "cli", "codex-app-server"] {
+            assert_eq!(DriverKind::restore(retired), None);
+        }
     }
 
     // Rule 4: with two agents of the same tier, the lowest id wins,

@@ -209,7 +209,6 @@ impl PersistedClaudeCliDriver {
                     task_id: task.id,
                     summary: result.final_message,
                     artifacts: self.artifacts()?,
-                    message: None,
                 })
             }
             Err(error) => {

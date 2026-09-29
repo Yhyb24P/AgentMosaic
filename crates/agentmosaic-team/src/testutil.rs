@@ -7,8 +7,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::board::{
-    AgentMessage, ArtifactMeta, BoardError, SelectedArtifactRef, TaskAttempt, TaskBoard,
-    TaskRecord, TaskStatus,
+    ArtifactMeta, BoardError, SelectedArtifactRef, TaskAttempt, TaskBoard, TaskRecord, TaskStatus,
 };
 use crate::registry::{
     AgentConfig, AgentDriver, AgentRegistry, AgentTask, AgentTaskResult, AgentTier, TaskKind,
@@ -54,7 +53,6 @@ impl AgentDriver for FixedDriver {
             task_id: task.id,
             summary: self.summary.clone().unwrap_or_else(|| "ok".into()),
             artifacts: Vec::new(),
-            message: None,
         })
     }
 }
@@ -81,7 +79,6 @@ pub fn err_driver(error: &str) -> Arc<dyn AgentDriver> {
 pub struct MemBoard {
     pub tasks: BTreeMap<u64, TaskRecord>,
     pub attempts: BTreeMap<u64, Vec<TaskAttempt>>,
-    pub messages: Vec<AgentMessage>,
     pub artifacts: BTreeMap<u64, Vec<ArtifactMeta>>,
     pub final_refs: BTreeMap<u64, (Vec<u64>, Vec<SelectedArtifactRef>)>,
     next_id: u64,
@@ -149,10 +146,6 @@ impl TaskBoard for MemBoard {
         a.error = attempt.error.clone();
         Ok(())
     }
-    fn record_message(&mut self, message: &AgentMessage) -> Result<(), BoardError> {
-        self.messages.push(message.clone());
-        Ok(())
-    }
     fn record_artifact(&mut self, task: u64, artifact: &ArtifactMeta) -> Result<(), BoardError> {
         self.artifacts
             .entry(task)
@@ -187,17 +180,6 @@ impl TaskBoard for MemBoard {
     }
     fn attempts(&self, task: u64) -> Result<Vec<TaskAttempt>, BoardError> {
         Ok(self.attempts.get(&task).cloned().unwrap_or_default())
-    }
-    fn messages_to(&self, agent: &str) -> Result<Vec<AgentMessage>, BoardError> {
-        Ok(self
-            .messages
-            .iter()
-            .filter(|m| m.to_agent == agent)
-            .cloned()
-            .collect())
-    }
-    fn messages(&self) -> Result<Vec<AgentMessage>, BoardError> {
-        Ok(self.messages.clone())
     }
     fn artifacts(&self, task: u64) -> Result<Vec<ArtifactMeta>, BoardError> {
         Ok(self.artifacts.get(&task).cloned().unwrap_or_default())

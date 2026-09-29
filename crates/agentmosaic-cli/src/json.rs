@@ -253,7 +253,7 @@ mod tests {
                     id: "lead".into(),
                     name: "lead".into(),
                     role: "reasoner".into(),
-                    adapter: Some("codex-app-server".into()),
+                    adapter: Some("codex-exec".into()),
                     launch: "codex".into(),
                     concurrency: Some(1),
                     tags: vec!["local".into()],

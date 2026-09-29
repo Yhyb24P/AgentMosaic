@@ -125,7 +125,7 @@ fn events(root: &Path, target: Option<&str>) -> Vec<(u64, u32, u64)> {
 #[test]
 fn the_latest_run_is_projected_once() {
     let root = unique_root("latest_run");
-    let (root_task, child) = seed(&root.join(".agentmosaic/state.db"));
+    let (root_task, child) = seed(&root.join(".agentmosaic/state-v14.db"));
 
     let projected = events(&root, None);
     let unique: BTreeSet<_> = projected.iter().copied().collect();
@@ -160,7 +160,7 @@ fn the_latest_run_is_projected_once() {
 #[test]
 fn an_explicit_root_and_an_explicit_child_are_projected_once() {
     let root = unique_root("explicit_target");
-    let (root_task, child) = seed(&root.join(".agentmosaic/state.db"));
+    let (root_task, child) = seed(&root.join(".agentmosaic/state-v14.db"));
 
     let root_projection = events(&root, Some(&root_task.to_string()));
     assert_eq!(

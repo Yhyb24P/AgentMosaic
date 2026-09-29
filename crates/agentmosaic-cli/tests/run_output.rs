@@ -7,9 +7,7 @@
 //! the ACP mock (the Worker and the Utility), with no credentials and no live
 //! runtime.
 //!
-//! The compatibility `run-team` spelling is deliberately *not* this surface: its
-//! scriptable `root=`/`answer:`/`task_refs=`/`artifact_refs=` payload is
-//! unchanged, and one test below pins exactly that.
+//! Resume shares the same rendering and preserves durable successful results.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -23,7 +21,7 @@ const ARTIFACT: &str = "result.txt";
 /// The mock Codex app-server reads its script from this variable when a
 /// registration carries no `overrides` of its own: `am agent add` writes only
 /// non-secret launch facts, and the scripted replies are the test's business.
-const REPLIES_ENV: &str = "CODEX_BRIDGE_MOCK_REPLIES";
+const REPLIES_ENV: &str = "AM_TEST_EXEC_REPLIES";
 
 fn cli() -> Command {
     Command::new(env!("CARGO_BIN_EXE_am"))
@@ -54,6 +52,9 @@ fn target_dir() -> PathBuf {
 /// leave them unbuilt, so build the runtime binaries once and retry instead of
 /// failing flakily.
 fn mock_binary(name: &str) -> PathBuf {
+    if name == "exec_runtime" {
+        return PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/exec_runtime.py");
+    }
     let candidate = target_dir().join(name);
     if candidate.is_file() {
         return candidate;
@@ -100,7 +101,7 @@ impl TeamProject {
     }
 
     fn with_replies(name: &str, replies: &str) -> Self {
-        Self::with_lead(name, &mock_binary("codex_bridge_mock"), replies)
+        Self::with_lead(name, &mock_binary("exec_runtime"), replies)
     }
 
     /// A ready team whose Lead is the named program. Every registration goes
@@ -129,7 +130,7 @@ impl TeamProject {
                 "--role",
                 "reasoner",
                 "--adapter",
-                "codex-app-server",
+                "codex-exec",
                 "--",
             ],
             lead,
@@ -155,7 +156,7 @@ impl TeamProject {
         );
 
         Self {
-            database: repo.join(".agentmosaic").join("state.db"),
+            database: repo.join(".agentmosaic").join("state-v14.db"),
             root,
             repo,
             replies: replies.to_string(),
@@ -502,7 +503,7 @@ fn neither_stream_carries_a_runtime_id_or_the_lead_context() {
         "\"action\"",
         "\"selected_task_ids\"",
         // The driver argv and the host bridge the adapter owns.
-        "codex_bridge_mock",
+        "exec_runtime",
         "acp_m2_mock",
         "app-server --stdio",
     ] {
@@ -515,42 +516,85 @@ fn neither_stream_carries_a_runtime_id_or_the_lead_context() {
     }
 }
 
-/// HARD CONSTRAINT: only `am run` changed. The compatibility `run-team` spelling
-/// still prints its scriptable payload, and still prints nothing else.
+/// A completed root is returned exactly as stored, without launching a runtime.
 #[test]
-fn the_compatibility_run_team_payload_is_unchanged() {
-    let project = TeamProject::ready("run_team_unchanged");
-    let run = cli()
-        .args(["run-team"])
-        .arg(&project.database)
-        .arg(&project.repo)
-        .args(["deliver the objective"])
+fn resume_a_completed_run_preserves_answer_and_does_not_replay() {
+    let project = TeamProject::ready("completed_resume");
+    assert!(project
+        .run(&["--json", "deliver the objective"])
+        .status
+        .success());
+    let resumed = cli()
+        .args(["run", "--resume", "1", "--json"])
         .current_dir(&project.repo)
-        .env(REPLIES_ENV, &project.replies)
+        .env("AM_TEST_FORBID_RUNTIME", "1")
         .output()
         .unwrap();
+    assert!(resumed.status.success(), "{}", stderr(&resumed));
+    let value: serde_json::Value = serde_json::from_slice(&resumed.stdout).unwrap();
+    assert_eq!(value["answer"], LEAD_ANSWER);
+    assert_eq!(value["task_refs"], json!([2]));
+    let board = agentmosaic_storage::SqliteTaskBoard::open(
+        rusqlite::Connection::open(&project.database).unwrap(),
+    )
+    .unwrap();
+    use agentmosaic_team::TaskBoard;
+    assert_eq!(board.attempts(1).unwrap().len(), 1);
+    assert_eq!(board.attempts(2).unwrap().len(), 1);
+}
 
-    assert!(
-        run.status.success(),
-        "run-team failed: {}{}",
-        stdout(&run),
-        stderr(&run)
+#[test]
+fn resume_a_failed_root_appends_attempt_and_reuses_completed_work() {
+    use agentmosaic_team::{TaskBoard, TaskStatus};
+    let replies = serde_json::to_string(&[
+        delegate_script(),
+        "invalid decision".into(),
+        "invalid correction".into(),
+    ])
+    .unwrap();
+    let project = TeamProject::with_replies("failed_resume", &replies);
+    let failed = project.run(&["--json", "deliver the objective"]);
+    assert!(!failed.status.success());
+    let before = agentmosaic_storage::SqliteTaskBoard::open(
+        rusqlite::Connection::open(&project.database).unwrap(),
+    )
+    .unwrap();
+    let original = before.attempts(1).unwrap()[0].clone();
+    assert_eq!(original.status, TaskStatus::Failed);
+    assert_eq!(
+        before.task(2).unwrap().unwrap().status,
+        TaskStatus::Succeeded
     );
-    let payload = stdout(&run);
-    assert!(payload.contains("root=1 lead=lead\n"), "{payload}");
-    assert!(
-        payload.contains(&format!("answer: {LEAD_ANSWER}\n")),
-        "{payload}"
-    );
-    assert!(payload.contains("task_refs: 2\n"), "{payload}");
-    assert!(payload.contains("artifact_refs: -\n"), "{payload}");
-    assert!(
-        payload.lines().all(
-            |line| ["root=", "answer: ", "task_refs: ", "artifact_refs: "]
-                .iter()
-                .any(|prefix| line.starts_with(prefix))
-        ),
-        "run-team printed a line that is not part of its payload:\n{payload}"
-    );
-    assert_eq!(stderr(&run), "", "run-team grew progress output");
+    let completed = before.attempts(2).unwrap();
+    drop(before);
+    let resumed = cli()
+        .args(["run", "--resume", "1", "--json"])
+        .current_dir(&project.repo)
+        .env(
+            REPLIES_ENV,
+            serde_json::to_string(&[complete_script(2)]).unwrap(),
+        )
+        .output()
+        .unwrap();
+    assert!(resumed.status.success(), "{}", stderr(&resumed));
+    let result: serde_json::Value = serde_json::from_slice(&resumed.stdout).unwrap();
+    assert_eq!(result["answer"], LEAD_ANSWER);
+    assert_eq!(result["task_refs"], json!([2]));
+    let after = agentmosaic_storage::SqliteTaskBoard::open(
+        rusqlite::Connection::open(&project.database).unwrap(),
+    )
+    .unwrap();
+    let attempts = after.attempts(1).unwrap();
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[0].status, original.status);
+    assert_eq!(attempts[0].error, original.error);
+    assert_eq!(attempts[0].result, original.result);
+    assert_eq!(attempts[1].status, TaskStatus::Succeeded);
+    assert_eq!(attempts[1].agent_id, "lead");
+    let worker_attempts = after.attempts(2).unwrap();
+    assert_eq!(worker_attempts.len(), completed.len());
+    assert_eq!(worker_attempts[0].attempt, completed[0].attempt);
+    assert_eq!(worker_attempts[0].status, completed[0].status);
+    assert_eq!(worker_attempts[0].result, completed[0].result);
+    assert_eq!(worker_attempts[0].error, completed[0].error);
 }

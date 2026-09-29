@@ -1,13 +1,12 @@
 # CLI reference
 
 `am` is the only first-class user command. The normal path is `init` → `agent add` →
-`doctor` → `run` → `status` / `final` / `artifact` / `tui`. Compatibility and low-level
-commands keep their established spellings; `am advanced` lists them.
+`doctor` → `run` → `status` / `final` / `artifact` / `tui`. Explicit import and recovery use the same project context.
 
 ```text
-usage: am <init|agent|doctor|run|status|events|final|artifact|tui|advanced> [fields]
+usage: am <init|agent|doctor|run|status|events|final|artifact|tui|import> [fields]
        am init [PATH]
-       am agent add <id> --role <reasoner|worker|utility> --adapter <acp|codex-app-server|codex-exec|claude-cli> [--name NAME] [--concurrency N] [--tag TAG] [--artifact RELPATH] [--max-events N] -- <program> [arg ...]
+       am agent add <id> --role <reasoner|worker|utility> --adapter <acp|codex-exec|claude-cli> [--name NAME] [--concurrency N] [--tag TAG] [--artifact RELPATH] -- <program> [arg ...]
        am agent list [--json]
        am agent remove <id>
        am doctor [--verbose] [--json]
@@ -17,7 +16,9 @@ usage: am <init|agent|doctor|run|status|events|final|artifact|tui|advanced> [fie
        am final [<run-id>] [--json]
        am artifact [<task-id>] [--json]
        am tui [<database>]
-       am advanced
+       am import <source-database>
+       am run --resume <run-id> [--quiet] [--json]
+       am run --recover <run-id> [--json]
 ```
 
 `am --version` prints the binary's own version (`am <version>`).
@@ -37,26 +38,15 @@ usage: am <init|agent|doctor|run|status|events|final|artifact|tui|advanced> [fie
 | `final [<run-id>]` | Print the durable final answer of the current run, or of one run by id. Needs no database path. |
 | `artifact [<task-id>]` | Print recorded artifact paths and whole hashes for the current run, or for one task by id. Needs no database path. |
 | `tui` | Live read-only terminal dashboard; `q` exits. Refreshes the durable board and reloads the registry while it runs. |
-| `advanced` | List the compatibility and low-level commands below. |
-| `register` | Insert/update one Agent registry row. |
-| `registry` | List persisted Agent registrations. |
-| `run-team` | Run one objective through the whole team. |
-| `resume-team` | Continue a durable root's own Lead on a new attempt, without replaying completed work. |
-| `run-acp` | Drive one bounded ACP worker task. |
-| `continue-acp` | Continue an existing ACP worker session. |
-| `submit` | Create one pending board task (no team run). |
-| `cancel` | Cancel a task. |
-| `override` | Reassign a non-root task to an explicit agent. |
-| `recover` | Close one interrupted attempt. |
-| `recover-all` | Close all interrupted attempts. |
-| `resume` | Reopen a task for scheduling. |
-| `binding` | Print the external runtime binding for a task attempt. |
+| `import <source-database>` | Copy schema 11 (published releases) or the schema 12 development baseline into a new schema 14 project database. The source remains unchanged; an existing destination is refused. |
+| `run --resume <run-id>` | Continue the durable root's own Lead on a new attempt, or return a completed result without replay. |
+| `run --recover <run-id>` | Explicitly settle an interrupted running root after its owning process has stopped. Does not launch an Agent. |
 
 ## Normal onboarding
 
 ```bash
 am init
-am agent add lead --role reasoner --adapter codex-app-server -- codex
+am agent add lead --role reasoner --adapter codex-exec -- codex
 am agent add worker --role worker --adapter acp -- qwen --acp
 am doctor
 am run "complete the objective"
@@ -75,29 +65,9 @@ work falls back to the Worker tier when none is registered.
 `am agent list` prints the registry as a role-first table, `am agent remove <id>` deletes
 one Agent, and local launcher flags remain opaque LaunchSpec argv.
 
-The launch command registered for `codex-app-server` must remain valid when AgentMosaic
-appends `app-server --stdio`. Named Codex profiles are not currently a portable
-app-server configuration mechanism; use app-server-compatible `-c` overrides, or a
-wrapper that expands to them. When a real run hits the default event bound, tune it with
-`--max-events N` (see [Tuning the Codex event budget](#tuning-the-codex-event-budget)).
-
-```bash
-am agent add lead --role reasoner --adapter codex-app-server -- codex
-am agent add utility --role utility --adapter acp -- <program> --acp
-```
-
-### Tuning the Codex event budget
-
-`--max-events N` is an advanced tuning option for high-event Codex backends. It sets how
-many lifecycle events one Codex turn may spend before the turn is abandoned — the same
-budget the Lead brain and the Codex team driver read from the persisted Agent
-configuration. It is meaningful only for `--adapter codex-app-server`; `am agent add`
-refuses it for `acp`, and refuses `0`. The default is unchanged, so register it only when
-a real run has hit the bound:
-
-```bash
-am agent add lead --role reasoner --adapter codex-app-server --max-events 4000 -- codex
-```
+`codex-exec` is the canonical/default reference Lead, and Quickstart uses it. The launch
+command registered for it must remain valid when AgentMosaic appends `exec --json`, so a
+bare `codex` is enough. Supported adapters are `acp`, `codex-exec`, and `claude-cli`.
 
 ## Output streams
 
@@ -152,64 +122,41 @@ and the exact task and artifact references the answer was grounded in:
 Values are whole on this surface: digests are never abbreviated and long text is never
 cut, unlike the human rendering.
 
-## Compatibility commands
+## Import existing state
 
-`am advanced` lists the compatibility and low-level commands. They keep their established
-top-level spellings and stay callable at those spellings, but they are not part of the
-normal onboarding path and they do not appear in `am --help`:
+New projects store schema 14 at `.agentmosaic/state-v14.db`. Opening an older database
+through a normal command is refused. From the project root, import the old state before
+initializing or running the project:
 
-```text
-am register <database> <id> <name> <tier> <driver_kind> <executable> [argv...] <concurrency> <tags> <driver_config>
-am registry <database> [limit]
-am run-acp <database> <task-id> <agent-id> <working-directory> <auth-method|-> <timeout-seconds> [artifact-paths]
-am continue-acp <database> <task-id> <agent-id> <source-task-id> <working-directory> <auth-method|-> <timeout-seconds>
-am run-team <database> <repo> "<objective>" [--lead <agent-id>] [--max-rounds N] [--max-tasks N] [--max-retries N]
-am resume-team <database> <repo> <root-task-id> [--lead <agent-id>] [--max-rounds N] [--max-tasks N] [--max-retries N]
-am submit <database> <kind> "<objective>"
-am cancel <database> <task>
-am override <database> <task> <agent>
-am recover <database> <task>
-am recover-all <database>
-am resume <database> <task>
-am binding <database> <task> [attempt]
+```bash
+am import .agentmosaic/state.db
+am doctor
 ```
 
-These take an explicit state database path as `<database>`. The project-aware `status`,
-`final`, `artifact` and `tui` accept the same path in their first positional argument and
-keep their legacy whole-board meaning, so existing scripts keep working.
+The import accepts published schema 11 and the schema 12 development baseline. It copies
+task, attempt, result references, task artifacts, registry, bindings, and runtime events
+into a separate database after checking the source. Earlier unpublished schemas, the
+experimental schema 13, and unknown or future generations are refused. Session-only
+artifacts and invalid references also require resolving a copy of the source first.
+An existing destination is never overwritten. Retired adapter registrations remain
+readable as historical strings; replace them with a supported adapter before running.
 
-## Advanced compatibility: register grammar
+## Recover a run
 
-8 to 10 trailing fields:
-
-```text
-am register <database> <agent-id> <name> <tier> <driver-kind> <executable> <driver-args> <max-concurrency> <tags> [<runtime-version-or->] [<driver-config-json-or->]
+```bash
+am status 1
+am run --recover 1      # only after the old owning process has stopped
+am run --resume 1
 ```
 
-- `tier` is `reasoner`, `worker`, or `utility`.
-- `driver-kind` is `native`, `acp`, `cli`, `codex-app-server`, or `-`.
-- `driver-args` and `tags` are comma-separated; use `-` for none.
-- `runtime-version` is the optional 9th field; use `-` for none.
-- the optional 10th field is one non-secret JSON object of driver options, or `-`.
-  A key that looks like a credential (`token`, `key`, `secret`, `password`,
-  `endpoint`) is refused, so provider credentials can never be stored here.
-  - legacy ACP `auth_method` remains readable for existing boards but is not
-    normal onboarding.
-  - legacy `mcp_command` remains readable for existing boards. New product
-    runs inject `am __internal codex-mcp` and do not require a helper binary.
+Recovery and resume are separate explicit operations. Resume refuses a running root.
+Recovery closes its interrupted attempt and binding without invoking a runtime; resume
+then reconciles interrupted descendants and continues from durable results. A completed
+root returns the persisted answer and references without replay. See [Recovery](recovery.md).
 
-Keep site-local launcher aliases out of this database.
+The Lead's decisions are strict JSON validated by the product. A decision that does not
+match the contract fails after at most one correction turn. The wire is checked in at
+`contracts/lead_decision.schema.json`.
 
-## run-team flags
-
-```text
---lead <agent-id>   select the Lead when more than one reasoner is registered
---max-rounds N      bound the Lead's reasoning rounds
---max-tasks N       bound the delegated task budget
---max-retries N     bound per-agent retries before the scheduler reassigns
-```
-
-`submit` alone only creates a pending board task; `run-team` is the team entrypoint.
-The Lead's decisions are strict JSON validated by the product, and a decision that does
-not match the contract fails closed after at most one bounded correction turn. The wire
-is checked in at `contracts/lead_decision.schema.json`.
+This generation removes the former compatibility commands and positional database
+forms for `status`, `final`, and `artifact`; scripts must use project commands and ids.

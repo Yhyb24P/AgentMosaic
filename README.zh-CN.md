@@ -36,7 +36,7 @@ am init
 
 am agent add lead \
   --role reasoner \
-  --adapter codex-app-server -- codex
+  --adapter codex-exec -- codex
 
 am agent add worker \
   --role worker \
@@ -66,16 +66,11 @@ utility Agent 的注册方式相同，用于有边界的工具型工作。它是
 am agent add utility --role utility --adapter acp -- <program> --acp
 ```
 
-本地 launcher 保留自己的 argv，但注册给 `codex-app-server` 的启动命令，必须在
-AgentMosaic 追加 `app-server --stdio` 之后依然有效。命名 Codex profile 目前并不是可移植的
-app-server 配置方式；请改用 app-server 能接受的 `-c` 覆盖，或用一个展开成这些覆盖的
-wrapper。单独一个 `codex` 就是有效的 launcher：
+本地 launcher 保留自己的 argv，但注册给 `codex-exec` 的启动命令，必须在 AgentMosaic
+追加 `exec --json` 之后依然有效，因此单独一个 `codex` 就是有效的 launcher。
 
-```bash
-am agent add lead --role reasoner --adapter codex-app-server -- codex
-```
-
-当真实运行触达默认上限时，`am agent add --max-events N` 可以调高单轮 Codex 事件预算。
+v0.5 使用 schema 14，并移除了旧兼容命令和 app-server adapter。升级旧项目时，先执行
+`am import /path/to/old/state.db`。导入保留原数据库，详见[数据库导入说明](docs/migration.md)。
 
 ## 为什么需要 AgentMosaic？
 
@@ -143,10 +138,9 @@ launcher profile
 ACP 兼容的 coding runtime 通过一个有边界的 worker 边界与 AgentMosaic 通信。ACP driver
 接收一个调度任务，返回有边界的结构化结果和 artifact 哈希；权威状态始终在 SQLite board 上。
 
-Codex 是当前参考高推理 Lead，通过 `codex-exec`（默认，走 `codex exec --json`）或常驻的
-`codex-app-server` 兼容运行时接入。它的 thread 在规划、跟进和综合之间常驻，外部
-thread/turn binding 会被持久化。任何满足同一能力边界的 Agent 或 runtime 都可以承担这个
-角色。
+Codex 是当前参考高推理 Lead。`codex-exec` 是规范且默认的 Lead runtime：它走稳定的
+`codex exec --json` 机器接口，并持久化外部 thread，因此恢复运行会继续该 thread。
+ACP 和 Claude CLI worker 通过同一持久任务板返回结构化结果。
 
 ## 持久化与恢复
 
@@ -168,8 +162,8 @@ am tui             # 实时只读团队面板；q 退出
 检查类命令不需要数据库路径：每条命令都会自己找到本项目的持久化状态。加 `--json`
 可让 stdout 只输出一个 JSON 对象。
 
-`am advanced` 列出兼容与底层命令，它们保留原有拼写；`am agent remove <id>` 删除一个
-Agent。另见[恢复](docs/recovery.md)与 [CLI 参考](docs/cli.md)。
+控制进程停止后，先用 `am run --recover <run-id>` 收束中断 attempt，再用
+`am run --resume <run-id>` 继续原 run。详见[恢复](docs/recovery.md)和[CLI](docs/cli.md)。
 
 ## 文档
 
@@ -180,7 +174,7 @@ Agent。另见[恢复](docs/recovery.md)与 [CLI 参考](docs/cli.md)。
 - [Codex runtime](docs/runtimes/codex.md)
 - [ACP runtime](docs/runtimes/acp.md)
 - [Qwen Code runtime](docs/runtimes/qwen-code.md)
-- [发行历史](docs/releases/v0.1.0.md) / [历史](docs/history.md)
+- [当前状态](docs/status.md) / [变更记录](CHANGELOG.md)
 
 ## 源码构建
 
@@ -188,8 +182,7 @@ Agent。另见[恢复](docs/recovery.md)与 [CLI 参考](docs/cli.md)。
 cargo build --release --workspace
 ```
 
-产物为 `target/release/am`，即唯一随产品发布的二进制。它的 Codex 协作 bridge 是固定的
-隐藏内部命令，不单独安装或配置。
+产物为 `target/release/am`，即唯一随产品发布的二进制。
 
 提交改动前必须通过的检查：
 

@@ -82,7 +82,7 @@ fn default_run_delivers_32_escaped_results_and_exact_artifact_owners() {
     assert_eq!(artifacts["artifacts"], result["artifact_refs"]);
     use agentmosaic_team::TaskBoard;
     let board = agentmosaic_storage::SqliteTaskBoard::open(
-        rusqlite::Connection::open(root.join(".agentmosaic/state.db")).unwrap(),
+        rusqlite::Connection::open(root.join(".agentmosaic/state-v14.db")).unwrap(),
     )
     .unwrap();
     let (tasks, selected) = board.final_refs(1).unwrap();

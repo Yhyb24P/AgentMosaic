@@ -27,7 +27,7 @@ Lead / Reasoning Agent
   v                  v                   v
 Reasoning Agent    Local Model Agent   Utility Worker
   |                  |                   |
-  +----- result / files / messages ------+
+  +----- result / files ------+
                        |
                        v
               Lead integrates result
@@ -45,8 +45,8 @@ Five crates under `crates/`:
 
 | Crate | Responsibility |
 |---|---|
-| `agentmosaic-storage` | SQLite task board, agent registry, runtime bindings/events, schema migration |
-| `agentmosaic-runtime` | external runtime adapters (ACP, Codex exec/app-server, Claude CLI), Lead brains, team runner |
+| `agentmosaic-storage` | SQLite task board, agent registry, runtime bindings/events, explicit database import |
+| `agentmosaic-runtime` | external runtime adapters (ACP, Codex exec, Claude CLI), Lead brains, team runner |
 | `agentmosaic-team` | Agent registry, lead, task board, scheduling, result flow |
 | `agentmosaic-tui` | ratatui/crossterm read-only board view |
 | `agentmosaic-cli` | the public `am` command |
@@ -60,8 +60,7 @@ runtime: absolute deadlines, process-group termination with reaping, output boun
 artifact hashing.
 
 Supported adapters: ACP v1 (any conforming peer), Codex `exec --json` (worker and Lead),
-Codex `app-server --stdio` (compatibility runtime, including the internal `am
-__internal codex-mcp` bridge), and Claude CLI `stream-json` (worker).
+and Claude CLI `stream-json` (worker).
 
 ## Team layer
 
@@ -71,8 +70,7 @@ exactly one Reasoner and at least one Worker; Utility Agents are optional. Routi
 deterministic: reasoning/review goes to a Reasoner, bulk/tool work goes to a Worker, and
 utility work prefers a Utility then falls back to a Worker. An explicit valid target wins;
 utility work never implicitly falls back to a Reasoner. A worker result
-automatically becomes context for its parent task, the Lead, and any explicitly
-addressed Agent.
+automatically becomes context for its parent task and the Lead.
 
 Driver boundaries:
 
@@ -81,19 +79,14 @@ Driver boundaries:
   runtime in a second tool loop.
 - `CodexExec` (worker and Lead) — `codex exec --json` with a persisted foreign thread.
 - `ClaudeCli` — Claude CLI `stream-json` worker with a persisted foreign session.
-- `CodexAppServer` — bounded Codex app-server bridge with persisted external
-  thread/turn references and allowlisted collaboration tools.
-
-The durable runtime registry (`agent_registry`) records each Agent's tier, driver kind
-(`acp`, `codex-exec`, `claude-cli`, or `codex-app-server`; the retired `native` and `cli`
-strings stay readable for existing rows), executable, driver args, concurrency, tags,
-runtime version, and an optional non-secret driver-config JSON object. The `am
-register`/`am registry` verbs record and list registrations without launching any driver;
-`am run` reconstructs the real drivers from these rows.
+The durable registry stores current adapters (`acp`, `codex-exec`, `claude-cli`),
+launch argv, role, concurrency, tags and bounded non-secret options. Historical driver
+strings are decoded at storage boundaries and rejected for execution with an actionable
+error. `am agent add/list/remove` owns registration; `am run` constructs the drivers.
 
 ## Durability
 
-The authoritative state is one SQLite database. Storage schema version is **12**.
+The authoritative state is one SQLite database. Storage schema version is **14**, in `.agentmosaic/state-v14.db`.
 Task/result/artifact/final-reference semantics and the runtime wire strings
 (`TaskKind`, `DriverKind`) are stable identifiers; they are not renamed by branding
 work. The Lead's strict decision wire is checked in at
@@ -101,7 +94,7 @@ work. The Lead's strict decision wire is checked in at
 
 ## Lead context limits
 
-Both Codex Lead adapters use the same JSON context renderer. It measures the
+The Codex Lead uses a transport independent JSON context renderer. It measures the
 actual serialized bytes, including escaping, and reduces textual excerpts to
 fit. Omitted text ends in ` [truncated]`. Agent IDs, task IDs, artifact paths
 and SHA-256 digests are never abbreviated; each artifact includes its owning
@@ -110,11 +103,22 @@ task ID. Task and artifact selection is still verified against the board.
 The default `max_prompt_bytes` is 32,768: it bounds the context turn including
 its prefix and reply instruction. Codex Exec additionally sends the fixed Lead
 developer contract on each normal turn; this setting does not bound provider
-history, runtime instructions or token usage. The app-server sends that contract
-when starting the thread.
+history, runtime instructions or token usage.
 
 If complete references and minimum text excerpts (a 64-byte source-text cap per
 field, including the truncation marker) cannot fit, rendering fails before the
 Lead turn starts. The root records a capacity error. Reduce the team/task/artifact
 size, shorten agent identifiers, or configure a larger `max_prompt_bytes` through
-the advanced registry options. The renderer never sends a partial JSON document.
+the durable registry options. The renderer never sends a partial JSON document.
+
+## Storage boundary
+
+Fresh state has eight business tables: `team_tasks`, `team_task_runs`, `artifacts`,
+`agent_registry`, `team_final_task_refs`, `team_final_artifact_refs`,
+`external_runtime_bindings`, and `runtime_events`. Results and errors live in attempts.
+Final references and root success settle atomically. Runtime events support user progress
+inspection and never define task truth.
+
+Existing released schema 11 state enters through explicit non-destructive import. No
+retired sessions, ACC, collaboration receipts or directed-message tables are created.
+Experimental lease/DB-owner code is outside the product compilation graph and repository.

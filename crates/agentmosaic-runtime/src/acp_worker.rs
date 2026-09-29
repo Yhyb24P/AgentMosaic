@@ -674,7 +674,6 @@ impl AcpWorkerDriver {
                 task_id: task.id,
                 summary,
                 artifacts,
-                message: None,
             },
         })
     }
@@ -697,7 +696,6 @@ impl AcpWorkerDriver {
                 task_id: task.id,
                 summary,
                 artifacts,
-                message: None,
             },
         })
     }
@@ -820,7 +818,6 @@ impl RuntimeExecution for AcpResumedExecution {
                 task_id: self.task.id,
                 summary,
                 artifacts: Vec::new(),
-                message: None,
             },
         })
     }

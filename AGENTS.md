@@ -1,98 +1,66 @@
-# Project instructions
+# AgentMosaic project boundaries
 
-## Positioning
+AgentMosaic connects heterogeneous external Agents around one project. The Lead plans,
+delegates and synthesizes; workers return results and artifacts automatically. External
+runtimes own models, credentials and tool loops. AM owns the durable team layer.
 
-`AgentMosaic` (short name `AM`) is a heterogeneous Agent coding/work team.
+## Product surface
 
-The one job: connect Agents with different strengths to one project. High-intelligence
-Agents do planning, hard reasoning, architecture, synthesis and review. Local or cheap
-Agents and deterministic workers do repetitive, long-running, file-heavy, data-heavy and
-tool-heavy work. Results and artifacts flow back automatically to the Agent that
-continues the reasoning, with no manual copy/paste between Agents.
+- Five crates: storage, runtime, team, tui and cli, all prefixed `agentmosaic-`.
+- One product binary: `am`.
+- Normal path: init → agent add → doctor → run → status/events/final/artifact/tui.
+- Run recovery: `am run --recover <id>` after the controller has stopped, then
+  `am run --resume <id>`. Never automatically reclaim an active root.
+- Runtimes: ACP v1 and Codex exec/Claude CLI workers; Codex exec is the Lead adapter.
+- Schema generation 14 uses `.agentmosaic/state-v14.db`, with eight business tables.
+  `am import` reads released schema 11 or the explicit schema 12 development baseline
+  into a separate file. No historical startup upgrades or reuse of experimental v13.
+- Product SemVer and storage generation are independent.
 
-Communication, scheduling, recovery and safety boundaries are supporting mechanics that
-let several Agents finish work. They are not the product.
+## Invariants
 
-AgentMosaic does not implement a model client or a tool loop of its own. Every Agent
-executes inside an external runtime (a Codex CLI, a Claude CLI or any ACP peer) reached
-through a registered runtime adapter; AgentMosaic owns the durable team layer around it.
+SQLite Board is authoritative. Attempts are append-only; root claim and final/recovery
+settlement are atomic. Keep the durable Lead and never replay successful descendants.
+Final results reference real tasks and artifacts with owner, path and SHA-256.
+Runtime events are bounded observations and never task authority.
 
-## Identity
+Adapters retain deadlines, process-group termination/reaping, bounded output, artifact
+containment and hashes. Preserve Lead decision JSON fields and task/final semantics.
+Retired driver strings belong at the storage decoding boundary and cannot become runnable
+current drivers.
 
-```text
-Brand              AgentMosaic / AM
-Public CLI         am
-Cargo prefix       agentmosaic-
-Rust import prefix agentmosaic_
-Internal bridge    am __internal codex-mcp (not a separate binary)
-Config namespace   agentmosaic
-Env prefix         AGENTMOSAIC_
-Development       0.5.0-dev
-SQLite schema      12
-```
+Do not recreate internal Agent/model/tool loops, policy/approval platforms, mandatory
+independent verifiers, qualification systems, app-server/MCP compatibility, or compiled
+WorkspaceLease/DB-owner experiments. Development Agent task-orchestration rules are not
+AM capabilities. Actor Scheduler, WorkspaceLease, Experience/DecisionEngine, Beacon/Jev
+and adaptive routing remain frozen during v0.5 convergence.
 
-The only first-class user command is `am`. Do not reintroduce retired names or aliases
-(former brand, repository, branch, former crate and import prefixes, former executables,
-or the former Codex helper name). Historical identity belongs only in `docs/history.md`,
-`CHANGELOG.md` and `docs/releases/v0.1.0.md`.
+## Repository
 
-## Do not recreate as core
+- `crates/`: the five Rust workspace crates.
+- `contracts/`: current Lead decision wire contract.
+- `docs/`: current usage, architecture, runtime, recovery, import and status only.
+- `scripts/ci/`: deterministic validation fixtures and checks.
+- `.github/`: normal CI, candidate checks and release/site workflows.
+- `CHANGELOG.md` and GitHub Releases: release history; older documents live in Git.
 
-Do not build these back into the product:
+`docs/status.md` is the current product facts entry. Research proposals do not become
+implementation or release requirements. Keep `main` and at most one active topic branch;
+merge completed work through squash. Preserve unique experiment work outside the product
+tree rather than introducing permanent archive branches.
 
-- `PolicyEngine` / `ApprovalService`
-- a mandatory independent Verifier
-- IQ/DQ/RQ qualification
-- backup/DR as a product subsystem
-- the `WorkOrder + Attempt + Delegation + Invocation` quartet
-- trust-zone / capability / audit systems as product identity
-
-Narrow runtime mechanics that genuinely help an Agent finish work may survive, but they
-are not the product.
-
-## Engineering guards that remain
-
-The runtime adapters keep the guards that make an external Agent safe to supervise:
-absolute deadlines, process-group termination with reaping, bounded output, artifact
-path containment and file hashes. The board keeps crash recovery and no-replay
-settlement. They are runtime mechanics, not a control-plane product.
-
-## Rust workspace
-
-A Cargo workspace of small crates:
-
-```text
-Cargo.toml
-crates/
-  agentmosaic-storage/    # SQLite task board, agent registry, runtime events, schema migration
-  agentmosaic-runtime/    # external runtime adapters (ACP, Codex, Claude), Lead brains, TeamRunner
-  agentmosaic-team/       # Agent registry, lead, task board, scheduling, result flow
-  agentmosaic-tui/        # ratatui/crossterm read-only board view
-  agentmosaic-cli/        # the public `am` command
-```
-
-The workspace holds the durable team layer and the adapters for those external runtimes;
-it holds no Agent implementation of its own.
-
-Do not rename persisted data or protocol identifiers: SQLite schema stays v12, and
-task/result/artifact/final-reference semantics, `TaskKind` and `DriverKind` wire strings,
-and Lead decision JSON fields are stable.
-
-Required Rust CI:
+## Verification
 
 ```bash
+scripts/ci/check_identity.sh
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
-cargo build --release --workspace
-git diff --check
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-features
+cargo build --locked --release --workspace
+scripts/ci/check_hygiene.sh
 ```
 
-Also required: `scripts/ci/check_identity.sh` (retired-identity gate).
-
-## Structure
-
-- `crates/`: the Rust workspace.
-- `contracts/`: checked-in protocol contracts (Lead decision schema).
-- `docs/`: current product documentation.
-- `scripts/`: release tooling and qualification helpers.
+Candidate acceptance additionally checks published schema 11 and development schema 12
+import, fresh generation 14, copied-binary normal collaboration, recovery/no-replay, and
+inspection without runtime startup. Real authenticated runtimes remain separate from
+credential-free CI.

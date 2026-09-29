@@ -1,14 +1,101 @@
 //! The SQLite implementation of the team's durable task board.
 
 use agentmosaic_team::{
-    root_claim_is_resumable, AgentMessage, ArtifactMeta, BoardError, RuntimeEventPolicy,
-    RuntimeEventRecord, SelectedArtifactRef, TaskAttempt, TaskBoard, TaskKind, TaskRecord,
-    TaskStatus, MAX_DURABLE_RUNTIME_PAYLOAD_BYTES,
+    root_claim_is_resumable, ArtifactMeta, BoardError, RuntimeEventPolicy, RuntimeEventRecord,
+    SelectedArtifactRef, TaskAttempt, TaskBoard, TaskKind, TaskRecord, TaskStatus,
+    MAX_DURABLE_RUNTIME_PAYLOAD_BYTES,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use std::time::Duration;
 
-use crate::schema::{migrate, SCHEMA};
+use crate::schema::initialize_schema;
+
+pub(crate) fn commit_successful_result_in(
+    tx: &rusqlite::Transaction<'_>,
+    attempt: &TaskAttempt,
+    result: &agentmosaic_team::AgentTaskResult,
+) -> Result<(), BoardError> {
+    if attempt.task_id != result.task_id || attempt.status != TaskStatus::Succeeded {
+        return Err(BoardError::Storage(
+            "successful result does not match succeeded attempt".into(),
+        ));
+    }
+    for artifact in &result.artifacts {
+        tx.execute(
+            "INSERT INTO artifacts (task_id, path, sha256) VALUES (?1, ?2, ?3)",
+            params![attempt.task_id as i64, artifact.path, artifact.sha256],
+        )
+        .map_err(|e| BoardError::Storage(e.to_string()))?;
+    }
+    let changed = tx
+        .execute(
+            "UPDATE team_task_runs SET status = ?3, result = ?4, error = ?5
+         WHERE task_id = ?1 AND attempt = ?2",
+            params![
+                attempt.task_id as i64,
+                attempt.attempt as i64,
+                attempt.status.as_str(),
+                attempt.result,
+                attempt.error
+            ],
+        )
+        .map_err(|e| BoardError::Storage(e.to_string()))?;
+    if changed == 0 {
+        return Err(BoardError::UnknownTask(attempt.task_id));
+    }
+    let changed = tx
+        .execute(
+            "UPDATE team_tasks SET status = 'succeeded' WHERE id = ?1",
+            [attempt.task_id as i64],
+        )
+        .map_err(|e| BoardError::Storage(e.to_string()))?;
+    if changed == 0 {
+        return Err(BoardError::UnknownTask(attempt.task_id));
+    }
+    Ok(())
+}
+
+pub(crate) fn commit_root_final_in(
+    tx: &rusqlite::Transaction<'_>,
+    attempt: &TaskAttempt,
+    task_refs: &[u64],
+    artifact_refs: &[SelectedArtifactRef],
+) -> Result<(), BoardError> {
+    if attempt.status != TaskStatus::Succeeded {
+        return Err(BoardError::Storage(
+            "a root final commit needs a succeeded attempt".into(),
+        ));
+    }
+    write_final_refs(tx, attempt.task_id, task_refs, artifact_refs)?;
+    let changed = tx
+        .execute(
+            "UPDATE team_task_runs SET status = 'succeeded', result = ?3, error = NULL
+         WHERE task_id = ?1 AND attempt = ?2",
+            params![
+                attempt.task_id as i64,
+                attempt.attempt as i64,
+                attempt.result
+            ],
+        )
+        .map_err(|e| BoardError::Storage(e.to_string()))?;
+    if changed == 0 {
+        return Err(BoardError::UnknownTask(attempt.task_id));
+    }
+    tx.execute(
+        "UPDATE external_runtime_bindings SET lifecycle_state = 'completed' WHERE team_task_id = ?1 AND attempt = ?2",
+        params![attempt.task_id as i64, attempt.attempt as i64],
+    ).map_err(|e| BoardError::Storage(e.to_string()))?;
+    let changed = tx
+        .execute(
+            "UPDATE team_tasks SET status = 'succeeded' WHERE id = ?1",
+            [attempt.task_id as i64],
+        )
+        .map_err(|e| BoardError::Storage(e.to_string()))?;
+    if changed == 0 {
+        return Err(BoardError::UnknownTask(attempt.task_id));
+    }
+    Ok(())
+}
 
 /// Seconds since the Unix epoch, the durable timestamp form this board writes.
 fn now() -> String {
@@ -102,27 +189,15 @@ impl From<serde_json::Error> for RuntimeEventStoreError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeCollaborationRecord {
-    pub team_task_id: u64,
-    pub attempt: u32,
-    pub runtime_kind: String,
-    pub native_call_id: String,
-    pub kind: String,
-    pub payload_summary: String,
-    pub response_summary: Option<String>,
-}
-
 impl SqliteTaskBoard {
-    /// Open a board on a connection, applying the schema and migrating.
+    /// Open a board on a connection, initializing empty state or validating the current generation.
     pub fn open(mut conn: Connection) -> Result<Self, rusqlite::Error> {
         // Scheduler drivers bind external runtimes from independently opened
         // connections while another task may settle on the canonical board.
         // Wait briefly for SQLite's short writer lock rather than converting a
         // benign contention race into a spurious runtime failure.
         conn.busy_timeout(Duration::from_secs(5))?;
-        conn.execute_batch(SCHEMA)?;
-        migrate(&mut conn)?;
+        initialize_schema(&mut conn)?;
         Ok(Self { conn })
     }
 
@@ -378,34 +453,6 @@ impl SqliteTaskBoard {
         Ok(events)
     }
 
-    /// Idempotently persists a bounded external tool request and its response.
-    pub fn record_runtime_collaboration(
-        &self,
-        record: &RuntimeCollaborationRecord,
-    ) -> Result<bool, rusqlite::Error> {
-        Ok(self.conn.execute("INSERT INTO runtime_collaboration_records (team_task_id,attempt,runtime_kind,native_call_id,kind,payload_summary,response_summary) VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(runtime_kind,native_call_id) DO NOTHING", params![record.team_task_id as i64,record.attempt as i64,record.runtime_kind,record.native_call_id,record.kind,record.payload_summary,record.response_summary])? == 1)
-    }
-
-    pub fn runtime_collaboration(
-        &self,
-        task: u64,
-        attempt: u32,
-    ) -> Result<Vec<RuntimeCollaborationRecord>, rusqlite::Error> {
-        let mut s=self.conn.prepare("SELECT team_task_id,attempt,runtime_kind,native_call_id,kind,payload_summary,response_summary FROM runtime_collaboration_records WHERE team_task_id=?1 AND attempt=?2 ORDER BY id")?;
-        let rows = s.query_map(params![task as i64, attempt as i64], |r| {
-            Ok(RuntimeCollaborationRecord {
-                team_task_id: r.get::<_, i64>(0)? as u64,
-                attempt: r.get::<_, i64>(1)? as u32,
-                runtime_kind: r.get(2)?,
-                native_call_id: r.get(3)?,
-                kind: r.get(4)?,
-                payload_summary: r.get(5)?,
-                response_summary: r.get(6)?,
-            })
-        })?;
-        rows.collect()
-    }
-
     /// Every user-visible run: a root `reasoning` task, ordered by id.
     ///
     /// These are inherent methods, not `TaskBoard` members: they read the
@@ -458,18 +505,12 @@ impl SqliteTaskBoard {
         }
         Ok(found)
     }
-
-    /// The underlying connection, for direct queries in tests.
-    #[cfg(test)]
-    pub(crate) fn conn(&self) -> &Connection {
-        &self.conn
-    }
 }
 
 /// The bounded number of `parent_task` hops the descendant walk follows.
 pub const MAX_DESCENDANT_HOPS: usize = 1024;
 
-fn decode_stored_runtime_event(
+pub(crate) fn decode_stored_runtime_event(
     task: u64,
     attempt: u32,
     sequence: i64,
@@ -679,65 +720,12 @@ impl TaskBoard for SqliteTaskBoard {
         attempt: &TaskAttempt,
         result: &agentmosaic_team::AgentTaskResult,
     ) -> Result<(), BoardError> {
-        if attempt.task_id != result.task_id || attempt.status != TaskStatus::Succeeded {
-            return Err(BoardError::Storage(
-                "successful result does not match succeeded attempt".into(),
-            ));
-        }
         let tx = self
             .conn
             .transaction()
             .map_err(|e| BoardError::Storage(e.to_string()))?;
-        if let Some(message) = &result.message {
-            tx.execute(
-                "INSERT INTO messages (from_agent, to_agent, body) VALUES (?1, ?2, ?3)",
-                params![message.from_agent, message.to_agent, message.body],
-            )
-            .map_err(|e| BoardError::Storage(e.to_string()))?;
-        }
-        for artifact in &result.artifacts {
-            tx.execute(
-                "INSERT INTO artifacts (task_id, path, sha256) VALUES (?1, ?2, ?3)",
-                params![attempt.task_id as i64, artifact.path, artifact.sha256],
-            )
-            .map_err(|e| BoardError::Storage(e.to_string()))?;
-        }
-        let changed = tx
-            .execute(
-                "UPDATE team_task_runs SET status = ?3, result = ?4, error = ?5
-                 WHERE task_id = ?1 AND attempt = ?2",
-                params![
-                    attempt.task_id as i64,
-                    attempt.attempt as i64,
-                    attempt.status.as_str(),
-                    attempt.result,
-                    attempt.error,
-                ],
-            )
-            .map_err(|e| BoardError::Storage(e.to_string()))?;
-        if changed == 0 {
-            return Err(BoardError::UnknownTask(attempt.task_id));
-        }
-        let changed = tx
-            .execute(
-                "UPDATE team_tasks SET status = 'succeeded' WHERE id = ?1",
-                params![attempt.task_id as i64],
-            )
-            .map_err(|e| BoardError::Storage(e.to_string()))?;
-        if changed == 0 {
-            return Err(BoardError::UnknownTask(attempt.task_id));
-        }
+        commit_successful_result_in(&tx, attempt, result)?;
         tx.commit().map_err(|e| BoardError::Storage(e.to_string()))
-    }
-
-    fn record_message(&mut self, message: &AgentMessage) -> Result<(), BoardError> {
-        self.conn
-            .execute(
-                "INSERT INTO messages (from_agent, to_agent, body) VALUES (?1, ?2, ?3)",
-                params![message.from_agent, message.to_agent, message.body],
-            )
-            .map_err(|e| BoardError::Storage(e.to_string()))?;
-        Ok(())
     }
 
     fn record_artifact(&mut self, task: u64, artifact: &ArtifactMeta) -> Result<(), BoardError> {
@@ -852,45 +840,11 @@ impl TaskBoard for SqliteTaskBoard {
         task_refs: &[u64],
         artifact_refs: &[SelectedArtifactRef],
     ) -> Result<(), BoardError> {
-        if attempt.status != TaskStatus::Succeeded {
-            return Err(BoardError::Storage(
-                "a root final commit needs a succeeded attempt".into(),
-            ));
-        }
         let tx = self
             .conn
             .transaction()
             .map_err(|e| BoardError::Storage(e.to_string()))?;
-        write_final_refs(&tx, attempt.task_id, task_refs, artifact_refs)?;
-        let changed = tx
-            .execute(
-                "UPDATE team_task_runs SET status = 'succeeded', result = ?3, error = NULL
-                 WHERE task_id = ?1 AND attempt = ?2",
-                params![
-                    attempt.task_id as i64,
-                    attempt.attempt as i64,
-                    attempt.result
-                ],
-            )
-            .map_err(|e| BoardError::Storage(e.to_string()))?;
-        if changed == 0 {
-            return Err(BoardError::UnknownTask(attempt.task_id));
-        }
-        tx.execute(
-            "UPDATE external_runtime_bindings SET lifecycle_state = 'completed'
-             WHERE team_task_id = ?1 AND attempt = ?2",
-            params![attempt.task_id as i64, attempt.attempt as i64],
-        )
-        .map_err(|e| BoardError::Storage(e.to_string()))?;
-        let changed = tx
-            .execute(
-                "UPDATE team_tasks SET status = 'succeeded' WHERE id = ?1",
-                params![attempt.task_id as i64],
-            )
-            .map_err(|e| BoardError::Storage(e.to_string()))?;
-        if changed == 0 {
-            return Err(BoardError::UnknownTask(attempt.task_id));
-        }
+        commit_root_final_in(&tx, attempt, task_refs, artifact_refs)?;
         tx.commit().map_err(|e| BoardError::Storage(e.to_string()))
     }
 
@@ -1040,44 +994,6 @@ impl TaskBoard for SqliteTaskBoard {
             .collect()
     }
 
-    fn messages_to(&self, agent: &str) -> Result<Vec<AgentMessage>, BoardError> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT from_agent, to_agent, body FROM messages WHERE to_agent = ?1 ORDER BY id",
-            )
-            .map_err(|e| BoardError::Storage(e.to_string()))?;
-        let rows = stmt
-            .query_map(params![agent], |r| {
-                Ok(AgentMessage {
-                    from_agent: r.get(0)?,
-                    to_agent: r.get(1)?,
-                    body: r.get(2)?,
-                })
-            })
-            .map_err(|e| BoardError::Storage(e.to_string()))?;
-        rows.map(|r| r.map_err(|e| BoardError::Storage(e.to_string())))
-            .collect()
-    }
-
-    fn messages(&self) -> Result<Vec<AgentMessage>, BoardError> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT from_agent, to_agent, body FROM messages ORDER BY id")
-            .map_err(|e| BoardError::Storage(e.to_string()))?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(AgentMessage {
-                    from_agent: r.get(0)?,
-                    to_agent: r.get(1)?,
-                    body: r.get(2)?,
-                })
-            })
-            .map_err(|e| BoardError::Storage(e.to_string()))?;
-        rows.map(|r| r.map_err(|e| BoardError::Storage(e.to_string())))
-            .collect()
-    }
-
     fn artifacts(&self, task: u64) -> Result<Vec<ArtifactMeta>, BoardError> {
         let mut stmt = self
             .conn
@@ -1188,11 +1104,6 @@ mod tests {
                         path: "reject-me".into(),
                         sha256: "bad".into(),
                     }],
-                    message: Some(AgentMessage {
-                        from_agent: "worker".into(),
-                        to_agent: "lead".into(),
-                        body: "must not persist".into(),
-                    }),
                 },
             )
             .expect_err("artifact rejection must abort result flow");
@@ -1205,7 +1116,6 @@ mod tests {
             board.attempts(task).expect("attempts")[0].status,
             TaskStatus::Running
         );
-        assert!(board.messages_to("lead").expect("messages").is_empty());
         assert!(board.artifacts(task).expect("artifacts").is_empty());
     }
 

@@ -10,7 +10,7 @@ use agentmosaic_storage::SqliteAgentRegistry;
 use crate::project::{self, PROJECT_DIR};
 
 /// The Lead onboarding command: the product's default reasoning runtime.
-const LEAD_ADD: &str = "am agent add lead --role reasoner --adapter codex-app-server -- codex";
+const LEAD_ADD: &str = "am agent add lead --role reasoner --adapter codex-exec -- codex";
 /// The Worker onboarding command: the product's default ACP runtime.
 const WORKER_ADD: &str = "am agent add worker --role worker --adapter acp -- qwen --acp";
 
@@ -37,6 +37,13 @@ pub fn run(path: Option<&str>) -> Result<String, String> {
     let directory = root.join(PROJECT_DIR);
     let database = project::state_path(&root);
     let already_initialized = database.is_file();
+    let legacy = directory.join("state.db");
+    if !already_initialized && legacy.is_file() {
+        return Err(format!(
+            "existing legacy state found; run `am import {}` before initializing",
+            legacy.display()
+        ));
+    }
     std::fs::create_dir_all(&directory)
         .map_err(|e| format!("create project state directory: {e}"))?;
     project::open(database.to_str().ok_or("project state path is not UTF-8")?)?;
@@ -61,7 +68,7 @@ pub fn run(path: Option<&str>) -> Result<String, String> {
 
 /// Keep the durable state out of Git exactly once, and never create a
 /// `.gitignore` outside a Git repository.
-fn update_gitignore(root: &Path) -> Result<bool, String> {
+pub(super) fn update_gitignore(root: &Path) -> Result<bool, String> {
     if !root.join(".git").exists() {
         return Ok(false);
     }

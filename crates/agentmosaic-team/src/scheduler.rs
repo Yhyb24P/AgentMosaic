@@ -383,20 +383,9 @@ async fn run_one<B: TaskBoard + Send + 'static>(
                 attempt: attempt_seq,
                 agent_id: agent.clone(),
             });
-            // Inject the directed messages addressed to this agent so they
-            // actually reach its context (T09).
-            let mut ctx_task = task.clone();
-            {
-                let b = board.lock().unwrap();
-                for m in b.messages_to(agent)? {
-                    ctx_task
-                        .context
-                        .push(format!("[{}] {}", m.from_agent, m.body));
-                }
-            }
             // Run the driver under the shared concurrency quota. The durable
             // Running attempt now exactly brackets possible side effects.
-            let outcome = driver.run_task(ctx_task).await;
+            let outcome = driver.run_task(task.clone()).await;
             drop(permit);
             // Persist the terminal attempt and settle the task status.
             let terminal = match &outcome {
@@ -525,7 +514,6 @@ mod tests {
                 task_id: task.id,
                 summary: self.summary.clone(),
                 artifacts: Vec::new(),
-                message: None,
             })
         }
     }
@@ -552,7 +540,6 @@ mod tests {
                 task_id: task.id,
                 summary: "released".into(),
                 artifacts: Vec::new(),
-                message: None,
             })
         }
     }
@@ -570,7 +557,6 @@ mod tests {
                 task_id: task.id,
                 summary: self.summary.clone(),
                 artifacts: Vec::new(),
-                message: None,
             })
         }
     }

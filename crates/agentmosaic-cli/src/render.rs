@@ -9,9 +9,6 @@
 //! outcome. The durable board stays the only truth: the rendering observes, it
 //! never decides. A write failure is swallowed, because a presentation failure
 //! must not disturb a run.
-//!
-//! The compatibility `run-team` spelling does not come through here at all: it
-//! keeps its scriptable one-line-per-field payload.
 
 use std::io::{self, Write};
 use std::sync::{Mutex, MutexGuard, PoisonError};

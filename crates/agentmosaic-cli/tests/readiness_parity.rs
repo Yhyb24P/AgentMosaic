@@ -79,7 +79,7 @@ fn project(name: &str) -> PathBuf {
 }
 
 fn database_of(project: &Path) -> PathBuf {
-    project.join(".agentmosaic").join("state.db")
+    project.join(".agentmosaic").join("state-v14.db")
 }
 
 /// The cargo target directory, as seen by this test binary.
@@ -94,6 +94,9 @@ fn target_dir() -> PathBuf {
 /// leave them unbuilt, so build the runtime binaries once and retry instead of
 /// failing flakily.
 fn mock_binary(name: &str) -> PathBuf {
+    if name == "exec_runtime" {
+        return PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/exec_runtime.py");
+    }
     let candidate = target_dir().join(name);
     if candidate.is_file() {
         return candidate;
@@ -115,10 +118,7 @@ fn mock_binary(name: &str) -> PathBuf {
     candidate
 }
 
-/// Register one Agent straight into the project's registry, so an arbitrary
-/// `driver_config_json` can be persisted. The compatibility `register`
-/// spelling is the only surface that writes the body verbatim; `-` in the
-/// optional fields means "absent".
+/// Seed a persisted row through the registry API to exercise malformed configuration.
 fn register(
     project: &Path,
     id: &str,
@@ -127,26 +127,25 @@ fn register(
     program: &Path,
     config: Option<&str>,
 ) {
-    let database = database_of(project);
-    let output = cli()
-        .arg("register")
-        .arg(&database)
-        .args([id, id, role, adapter])
-        .arg(program)
-        .args(["-", "1", "-", "-", config.unwrap_or("-")])
-        .current_dir(project)
-        .output()
-        .expect("the CLI runs");
-    assert!(
-        output.status.success(),
-        "register {id} failed: {}{}",
-        stdout(&output),
-        stderr(&output)
-    );
+    let registry = agentmosaic_storage::SqliteAgentRegistry::open(database_of(project)).unwrap();
+    registry
+        .upsert_agent(&agentmosaic_storage::AgentRegistryRecord {
+            id: id.into(),
+            name: id.into(),
+            tier: role.into(),
+            driver_kind: Some(adapter.into()),
+            executable: Some(program.display().to_string()),
+            driver_args_json: Some("[]".into()),
+            max_concurrency: Some(1),
+            tags_json: Some("[]".into()),
+            runtime_version: None,
+            driver_config_json: config.map(str::to_string),
+        })
+        .unwrap();
 }
 
 /// Rewrite one persisted registry column directly, bypassing every validation
-/// surface. Neither `am agent add` nor `register` can persist these rows, so a
+/// surface. `am agent add` cannot persist these rows, so a
 /// hand edit is the only way to reach the breach a run would then refuse.
 fn edit_registry(project: &Path, id: &str, column: &str, value: impl rusqlite::ToSql) {
     let connection = Connection::open(database_of(project)).unwrap();
@@ -204,8 +203,8 @@ fn refused_lead(name: &str, config: &str) -> PathBuf {
         &root,
         "lead",
         "reasoner",
-        "codex-app-server",
-        &mock_binary("codex_bridge_mock"),
+        "codex-exec",
+        &mock_binary("exec_runtime"),
         Some(config),
     );
     register(
@@ -217,97 +216,6 @@ fn refused_lead(name: &str, config: &str) -> PathBuf {
         None,
     );
     root
-}
-
-/// The reproduced defect. `{"max_events":"not-a-number"}` is a stored body the
-/// run's parser refuses; doctor has to refuse it too, and the run has to say
-/// why instead of pointing at the check that just said the team was ready.
-#[test]
-fn a_stored_body_the_run_refuses_is_a_doctor_verdict_too() {
-    let root = refused_lead("bad_max_events", r#"{"max_events":"not-a-number"}"#);
-
-    let doctor = run_cli_in(&root, &["doctor"]);
-    assert!(
-        !doctor.status.success(),
-        "doctor accepted a body the run refuses:\n{}",
-        stdout(&doctor)
-    );
-    assert!(
-        stdout(&doctor).is_empty(),
-        "the report belongs on stderr:\n{}",
-        stdout(&doctor)
-    );
-    let report = stderr(&doctor);
-    assert!(report.contains("lead      not ready"), "{report}");
-    assert!(
-        report.contains("team      not ready  1 lead · 1 worker"),
-        "{report}"
-    );
-    assert!(
-        report.contains("`max_events` must be a number"),
-        "the report does not name the configuration problem:\n{report}"
-    );
-
-    let run = run_cli_in(&root, &["run", "probe objective"]);
-    assert!(!run.status.success(), "the run cannot start");
-    assert_eq!(stdout(&run), "", "a failed run wrote to stdout");
-    let failure = stderr(&run);
-    assert!(
-        failure.contains("Run could not start.\n\nReason\n  "),
-        "{failure}"
-    );
-    assert!(
-        failure.contains("`max_events` must be a number"),
-        "the pre-root failure does not carry the real reason:\n{failure}"
-    );
-    assert!(
-        !failure.contains("Run could not start.\n  am doctor"),
-        "the suggestion still replaces the reason:\n{failure}"
-    );
-    assert!(
-        failure.contains("\nCheck\n  am doctor --verbose\n"),
-        "the check is still named, after the reason:\n{failure}"
-    );
-
-    // The two surfaces explain one configuration the same way.
-    assert_eq!(
-        reason_line(&failure).as_deref(),
-        reason_line(&report).as_deref(),
-        "doctor and run disagree about the configuration"
-    );
-    assert_parity(&doctor, &run);
-    let _ = fs::remove_dir_all(root);
-}
-
-/// A zero event budget is refused by the Codex driver itself. Doctor has to
-/// reach the same verdict through the same construction.
-#[test]
-fn a_zero_event_budget_is_not_ready_for_doctor_either() {
-    let root = refused_lead("zero_max_events", r#"{"max_events":0}"#);
-
-    let doctor = run_cli_in(&root, &["doctor"]);
-    assert!(
-        !doctor.status.success(),
-        "doctor accepted a zero event budget:\n{}",
-        stdout(&doctor)
-    );
-    let report = stderr(&doctor);
-    assert!(report.contains("lead      not ready"), "{report}");
-    assert!(
-        report.contains("max_events must be greater than zero"),
-        "the report does not name the configuration problem:\n{report}"
-    );
-
-    let run = run_cli_in(&root, &["run", "probe objective"]);
-    assert!(!run.status.success());
-    assert_eq!(stdout(&run), "", "a failed run wrote to stdout");
-    assert_eq!(
-        reason_line(&stderr(&run)).as_deref(),
-        reason_line(&report).as_deref(),
-        "doctor and run disagree about the configuration"
-    );
-    assert_parity(&doctor, &run);
-    let _ = fs::remove_dir_all(root);
 }
 
 /// A zero concurrency can only be persisted by hand, but it is still the same
@@ -413,7 +321,7 @@ fn a_malformed_tags_row_is_a_doctor_verdict_too() {
 #[test]
 fn a_ready_verdict_carries_the_same_configuration_through_a_run() {
     let root = project("ready_control");
-    let codex = mock_binary("codex_bridge_mock");
+    let codex = mock_binary("exec_runtime");
     let acp = mock_binary("acp_m2_mock");
     // The worker records exactly the artifact it is registered with.
     fs::write(root.join("result.txt"), "parity control\n").unwrap();
@@ -426,9 +334,7 @@ fn a_ready_verdict_carries_the_same_configuration_through_a_run() {
             "--role",
             "reasoner",
             "--adapter",
-            "codex-app-server",
-            "--max-events",
-            "4000",
+            "codex-exec",
             "--",
             &codex.display().to_string(),
         ],
@@ -469,7 +375,7 @@ fn a_ready_verdict_carries_the_same_configuration_through_a_run() {
     let run = cli()
         .args(["run", "deliver the objective"])
         .current_dir(&root)
-        .env("CODEX_BRIDGE_MOCK_REPLIES", scripted_replies())
+        .env("AM_TEST_EXEC_REPLIES", scripted_replies())
         .output()
         .expect("the CLI runs");
     assert!(

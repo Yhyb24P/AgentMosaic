@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use agentmosaic_runtime::{
     validate_driver_config, validate_lead_config, validate_registry_row, AcpWorkerConfig,
-    AcpWorkerDriver, CodexAppServer, LaunchSpec,
+    AcpWorkerDriver, LaunchSpec,
 };
 use agentmosaic_storage::{AgentRegistryRecord, SqliteAgentRegistry};
 
@@ -186,7 +186,7 @@ fn probe_agent(agent: &AgentRegistryRecord, root: &Path) -> AgentProbe {
                 return AgentProbe::new(
                     ReadinessStage::LaunchSpecInvalid,
                     "PROGRAM_FOUND LAUNCHSPEC_INVALID",
-                )
+                );
             }
         },
         None => Vec::new(),
@@ -197,12 +197,11 @@ fn probe_agent(agent: &AgentRegistryRecord, root: &Path) -> AgentProbe {
             return AgentProbe::new(
                 ReadinessStage::LaunchSpecInvalid,
                 "PROGRAM_FOUND LAUNCHSPEC_INVALID",
-            )
+            );
         }
     };
     let probe = match agent.driver_kind.as_deref() {
         Some("acp") => probe_acp(launch, args, root),
-        Some("codex-app-server") => probe_codex(launch, root),
         Some("codex-exec") => probe_codex_exec(launch),
         Some("claude-cli") => probe_claude_cli(launch),
         _ => AgentProbe::new(ReadinessStage::ProtocolUnavailable, "PROTOCOL_UNAVAILABLE"),
@@ -251,34 +250,6 @@ fn probe_acp(launch: LaunchSpec, args: Vec<String>, root: &Path) -> AgentProbe {
             AgentProbe::new(ReadinessStage::SpawnFailed, "SPAWN_FAILED")
         }
         Err(_) => AgentProbe::new(ReadinessStage::ProtocolUnavailable, "PROTOCOL_UNAVAILABLE"),
-    }
-}
-
-fn probe_codex(launch: LaunchSpec, root: &Path) -> AgentProbe {
-    match CodexAppServer::spawn_launch(launch, &[]) {
-        Err(_) => AgentProbe::new(ReadinessStage::SpawnFailed, "SPAWN_FAILED"),
-        Ok(mut server) => match server
-            .initialize("agentmosaic-doctor", "0.2")
-            .and_then(|_| {
-                server.start_thread_with_options(
-                    &root.display().to_string(),
-                    None,
-                    "read-only",
-                    "never",
-                )
-            }) {
-            Ok(_) => AgentProbe::new(
-                ReadinessStage::Ready,
-                "SPAWN_OK PROTOCOL_OK SESSION_OK READY",
-            ),
-            Err(error) if error.to_string().to_ascii_lowercase().contains("auth") => {
-                AgentProbe::new(
-                    ReadinessStage::RuntimePreparationRequired,
-                    "RUNTIME_PREPARATION_REQUIRED",
-                )
-            }
-            Err(_) => AgentProbe::new(ReadinessStage::ProtocolUnavailable, "PROTOCOL_UNAVAILABLE"),
-        },
     }
 }
 

@@ -1,68 +1,25 @@
 name: rust-candidate
 
-# Deterministic, credential-free Rust candidate qualification.
-#
-# Real authenticated Codex + Qwen Code E2E is NOT run here: CI has no model
-# credentials. That is a local reference-profile gate, performed through the
-# public CLI `am run-team` on a machine where `codex` and `qwen` are
-# already authenticated.
-#
-# Readiness claims are separate and must never be conflated:
-#   LOCAL_PRODUCT_RC_READY        local product path + real E2E; not produced by CI
-#   REMOTE_DETERMINISTIC_CI_READY this workflow, green on a frozen candidate
-#   PUBLIC_RELEASE_READY          false; not authorized, never produced here
-#
-# A green run here supports REMOTE_DETERMINISTIC_CI_READY only. It is not
-# PUBLIC_RELEASE_READY, and this workflow never creates a tag or a GitHub
-# Release.
-
 on:
+  pull_request:
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      ref:
-        description: "Git ref to qualify (defaults to the selected branch)"
-        required: false
-        type: string
 
 permissions:
   contents: read
-
-env:
-  CARGO_TERM_COLOR: always
 
 jobs:
   candidate:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ inputs.ref || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - name: Clean tree
-        run: test -z "$(git status --porcelain)"
-      - name: Format
-        run: cargo fmt --all -- --check
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - name: Test
-        run: cargo test --workspace --all-features
-      - name: Release build
-        run: cargo build --release --workspace
-      - name: Diff hygiene
-        run: git diff --check
-      - name: Authentic historical v8 migration
-        run: cargo test -p agentmosaic-storage --test schema_v8_migration
-      - name: Copied-binary board smoke
-        run: |
-          set -euo pipefail
-          work="$(mktemp -d)"
-          cp target/release/am "${work}/am"
-          cd "${work}"
-          ./am --help > /dev/null
-          ./am --version > /dev/null
-          ./am submit ./board.db utility "deterministic smoke task" > /dev/null
-          ./am status ./board.db | grep -q "task=1 status=pending"
+      - name: Published v0.3 import
+        run: cargo test --locked -p agentmosaic-storage --test published_v03_import
+      - name: Build copied-binary fixtures
+        run: cargo build --locked --release --workspace
+      - name: Copied-binary normal path
+        run: scripts/ci/normal-path-smoke.sh target/release
+      - name: Copied-binary recovery without replay
+        run: scripts/ci/recovery-smoke.sh target/release

@@ -16,8 +16,7 @@
 use async_trait::async_trait;
 
 use crate::board::{
-    running_attempt, AgentMessage, BoardError, SelectedArtifactRef, TaskAttempt, TaskBoard,
-    TaskStatus,
+    running_attempt, BoardError, SelectedArtifactRef, TaskAttempt, TaskBoard, TaskStatus,
 };
 use crate::registry::{AgentTaskResult, TaskKind};
 use crate::run_event::{bounded_event_text, LeadPhase, RunEvent};
@@ -47,9 +46,7 @@ pub struct TeamResult {
 /// The context handed to the Lead brain each round.
 ///
 /// It carries bounded, board-derived facts a real model brain needs — the
-/// scheduler's routable agents, succeeded results, artifacts, failed attempts,
-/// and messages addressed to the Lead — and nothing more (no hidden reasoning,
-/// no raw transcripts).
+/// scheduler's routable agents, succeeded results, artifacts and failed attempts.
 #[derive(Debug, Clone)]
 pub struct LeadContext {
     pub root_task_id: u64,
@@ -63,8 +60,6 @@ pub struct LeadContext {
     pub artifacts: Vec<SelectedArtifactRef>,
     /// Failed task attempts: (task_id, bounded error text). No retry loops here.
     pub failures: Vec<(u64, String)>,
-    /// Durable messages addressed to the Lead.
-    pub messages: Vec<AgentMessage>,
 }
 
 /// An error from the Lead brain.
@@ -178,8 +173,7 @@ pub struct Lead<B: TaskBoard + Send + 'static> {
     scheduler: Scheduler<B>,
     max_rounds: u32,
     max_tasks: usize,
-    /// The agent id that addresses this Lead: the id directed messages are
-    /// read from and the id persisted on the root's settling attempt.
+    /// The selected Lead id persisted on the root's settling attempt.
     lead_agent: String,
     task_ids: Vec<u64>,
     root_id: Option<u64>,
@@ -320,9 +314,8 @@ impl<B: TaskBoard + Send + 'static> Lead<B> {
     }
 
     /// Build the Lead's context from the durable board: the scheduler's
-    /// routable agents, completed task results, artifacts, failed attempts, and
-    /// messages addressed to the Lead. This is how a worker's result, artifact,
-    /// and message reach the Lead's next round (T07/T08/T09) without a human
+    /// routable agents, completed task results, artifacts and failed attempts.
+    /// Worker results and artifacts reach the Lead's next round without a human
     /// copying anything. Board read errors are propagated, never swallowed.
     fn build_context(&self, objective: &str, round: u32) -> Result<LeadContext, LeadError> {
         let root_task_id = self.root_id.ok_or_else(|| {
@@ -350,7 +343,6 @@ impl<B: TaskBoard + Send + 'static> Lead<B> {
                                         task_id: id,
                                         summary: summary.clone(),
                                         artifacts: Vec::new(),
-                                        message: None,
                                     },
                                 ));
                             }
@@ -379,9 +371,6 @@ impl<B: TaskBoard + Send + 'static> Lead<B> {
                 }));
             }
         }
-        let messages = board
-            .messages_to(&self.lead_agent)
-            .map_err(LeadError::Board)?;
         let candidates = self
             .scheduler
             .registry()
@@ -397,7 +386,6 @@ impl<B: TaskBoard + Send + 'static> Lead<B> {
             results,
             artifacts,
             failures,
-            messages,
         })
     }
 
@@ -590,7 +578,7 @@ mod tests {
 
     use async_trait::async_trait;
 
-    use crate::board::{AgentMessage, TaskAttempt, TaskBoard, TaskStatus};
+    use crate::board::{TaskAttempt, TaskBoard, TaskStatus};
     use crate::lead::{
         reconstruct_team_result, Lead, LeadBrain, LeadBrainError, LeadContext, LeadDecision,
         LeadError, TeamResult,
@@ -1382,73 +1370,6 @@ mod tests {
         assert_eq!(captured.len(), 1);
         assert_eq!(captured[0].0, lead.task_ids()[1]);
         assert_eq!(captured[0].1, "worker-a is down");
-    }
-
-    /// A brain that captures the directed messages it was handed, then
-    /// delegates one task and completes from its result.
-    struct MessageCapturingBrain {
-        seen: Arc<Mutex<Vec<AgentMessage>>>,
-    }
-
-    #[async_trait]
-    impl LeadBrain for MessageCapturingBrain {
-        async fn decide(&mut self, ctx: &LeadContext) -> Result<LeadDecision, LeadBrainError> {
-            *self.seen.lock().unwrap() = ctx.messages.clone();
-            Ok(match ctx.round {
-                0 => LeadDecision::Delegate(vec![TaskSpec {
-                    objective: "b".into(),
-                    kind: TaskKind::Bulk,
-                    target: Some("worker-a".into()),
-                    parent: None,
-                    context: Vec::new(),
-                }]),
-                _ => LeadDecision::Complete(TeamResult {
-                    answer: "done".into(),
-                    task_refs: ctx.results.iter().map(|(id, _)| *id).collect(),
-                    artifact_refs: Vec::new(),
-                }),
-            })
-        }
-    }
-
-    // Directed messages follow the configured Lead id, not the literal "lead".
-    #[tokio::test]
-    async fn directed_messages_follow_the_configured_lead_id() {
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let mut board = MemBoard::default();
-        board
-            .record_message(&AgentMessage {
-                from_agent: "worker-a".into(),
-                to_agent: "reasoner-a".into(),
-                body: "addressed to the reasoner".into(),
-            })
-            .unwrap();
-        board
-            .record_message(&AgentMessage {
-                from_agent: "worker-a".into(),
-                to_agent: "lead".into(),
-                body: "decoy for the literal id".into(),
-            })
-            .unwrap();
-        let sched = Scheduler::new(trio_registry(), full_drivers(), board, 1);
-        let mut lead = Lead::new(
-            Box::new(MessageCapturingBrain { seen: seen.clone() }),
-            sched,
-            5,
-            10,
-            "reasoner-a",
-        );
-        lead.run("x").await.expect("completes");
-        let captured = seen.lock().unwrap().clone();
-        let bodies: Vec<&str> = captured.iter().map(|m| m.body.as_str()).collect();
-        assert!(
-            bodies.contains(&"addressed to the reasoner"),
-            "{captured:?}"
-        );
-        assert!(
-            !bodies.contains(&"decoy for the literal id"),
-            "{captured:?}"
-        );
     }
 
     // `run` persists the resolved Lead id on the root's settling attempt row.

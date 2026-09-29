@@ -46,7 +46,6 @@ async fn exec_lead_turn_uses_the_shared_strict_decision_contract() {
             results: Vec::new(),
             artifacts: Vec::new(),
             failures: Vec::new(),
-            messages: Vec::new(),
         })
         .await
         .unwrap();
@@ -87,7 +86,6 @@ async fn rejected_reply_is_repaired_once_through_exec_resume() {
             results: Vec::new(),
             artifacts: Vec::new(),
             failures: Vec::new(),
-            messages: Vec::new(),
         })
         .await
         .unwrap();
@@ -135,7 +133,6 @@ async fn exec_lead_persists_its_foreign_thread_on_the_running_root_attempt() {
         results: Vec::new(),
         artifacts: Vec::new(),
         failures: Vec::new(),
-        messages: Vec::new(),
     })
     .await
     .unwrap();
@@ -215,7 +212,6 @@ async fn new_exec_lead_instance_resumes_the_root_binding() {
             results: Vec::new(),
             artifacts: Vec::new(),
             failures: Vec::new(),
-            messages: Vec::new(),
         })
         .await
         .unwrap();

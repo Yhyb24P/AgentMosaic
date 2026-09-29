@@ -1,8 +1,7 @@
 //! Deterministic product tests for `TeamRunner` and `DriverFactory`.
 //!
 //! No credentials and no live runtimes: the Lead is a real
-//! `PersistedCodexTeamDriver`/`CodexLeadBrain` pointed at the scripted
-//! `codex_bridge_mock` app-server, and the Worker/Utility agents are real
+//! CodexExecLeadBrain pointed at a scripted exec process, and the Worker/Utility agents are real
 //! `PersistedAcpWorkerDriver`s pointed at `acp_m2_mock`. Everything else is the
 //! product path: the durable registry, the SQLite board, the scheduler, and the
 //! Lead loop.
@@ -21,7 +20,6 @@ use rusqlite::Connection;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-const CODEX_MOCK: &str = env!("CARGO_BIN_EXE_codex_bridge_mock");
 const ACP_MOCK: &str = env!("CARGO_BIN_EXE_acp_m2_mock");
 
 const LEAD_ANSWER: &str = "lead synthesized final answer";
@@ -114,31 +112,39 @@ fn acp_agent(id: &str, tier: &str, artifact_paths: &[&str]) -> AgentRegistryReco
 }
 
 fn codex_agent(id: &str, fixture: &Fixture, replies: &[String]) -> AgentRegistryRecord {
-    let overrides = vec![
+    let script = fixture.root.join("lead.py");
+    let replies_file = fixture.root.join("replies.json");
+    std::fs::write(&replies_file, serde_json::to_string(replies).unwrap()).unwrap();
+    let _ = std::fs::remove_file(&fixture.state);
+    std::fs::write(
+        &script,
         format!(
-            "codex_bridge_mock.replies={}",
-            serde_json::to_string(replies).unwrap()
+            r#"import json, sys
+from pathlib import Path
+state = Path({state:?})
+index = json.loads(state.read_text())["turn_starts"] if state.exists() else 0
+state.write_text(json.dumps({{"turn_starts":index + 1,"last_prompt":sys.stdin.read()}}))
+replies = json.loads(Path({replies:?}).read_text())
+reply = replies[min(index, len(replies) - 1)] if replies else "invalid decision"
+print(json.dumps({{"type":"thread.started", "thread_id":"events-lead-thread"}}))
+print(json.dumps({{"type":"item.completed", "item":{{"type":"agent_message", "text":reply}}}}))
+"#,
+            state = fixture.state.to_string_lossy(),
+            replies = replies_file.to_string_lossy()
         ),
-        format!("codex_bridge_mock.state={}", fixture.state.display()),
-    ];
+    )
+    .unwrap();
     AgentRegistryRecord {
         id: id.into(),
         name: id.into(),
         tier: "reasoner".into(),
-        driver_kind: Some("codex-app-server".into()),
-        executable: Some(CODEX_MOCK.into()),
+        driver_kind: Some("codex-exec".into()),
+        executable: Some("/usr/bin/python3".into()),
         runtime_version: None,
-        driver_args_json: Some("[]".into()),
+        driver_args_json: Some(serde_json::to_string(&vec![script.to_string_lossy()]).unwrap()),
         max_concurrency: Some(1),
         tags_json: Some("[]".into()),
-        driver_config_json: Some(
-            json!({
-                "mcp_command": CODEX_MOCK,
-                "overrides": overrides,
-                "max_events": 64,
-            })
-            .to_string(),
-        ),
+        driver_config_json: None,
     }
 }
 
@@ -563,7 +569,7 @@ async fn resume_refuses_a_running_root_until_recovery_closes_it() {
         ),
         "unexpected error: {error}"
     );
-    assert!(error.to_string().contains("am recover"), "{error}");
+    assert!(error.to_string().contains("am run --recover"), "{error}");
     let board = fixture.open_board();
     assert_eq!(
         board.attempts(1).unwrap().len(),
@@ -573,7 +579,7 @@ async fn resume_refuses_a_running_root_until_recovery_closes_it() {
     drop(board);
     assert!(!fixture.state.exists(), "no lead runtime was entered");
 
-    // What `am recover <database> <root>` does, then resume.
+    // What `am run --recover <root>` does, then resume.
     let mut board = fixture.open_board();
     board.recover_interrupted_attempt(1).unwrap();
     drop(board);
@@ -866,7 +872,7 @@ async fn an_unsupported_driver_kind_fails_the_run() {
     assert!(error.to_string().contains("has no driver kind"), "{error}");
 }
 
-// Selecting a reasoner no longer implies Codex app-server construction. The
+// Selecting a reasoner requires a supported Lead runtime. The
 // Lead factory dispatches on the durable runtime kind and rejects runtimes that
 // have not passed the Lead contract before the root task can be created.
 #[tokio::test]
@@ -941,7 +947,6 @@ async fn a_configuration_error_never_leaves_a_root_behind() {
     // the decision contract.
     lead.driver_config_json = Some(
         json!({
-            "mcp_command": CODEX_MOCK,
             "max_prompt_bytes": 16,
         })
         .to_string(),
@@ -1376,14 +1381,36 @@ async fn partial_final_is_reconciled_without_lead_replay() {
             error: None,
         })
         .unwrap();
+    // Final settlement is durable evidence even after its runtime retires.
+    board
+        .upsert_external_binding(&agentmosaic_storage::ExternalRuntimeBinding {
+            team_task_id: root,
+            attempt: 1,
+            agent_id: "lead".into(),
+            runtime_kind: "codex-app-server".into(),
+            native_thread_id: Some("retired-thread".into()),
+            native_turn_id: None,
+            lifecycle_state: "completed".into(),
+        })
+        .unwrap();
     board.set_status(root, TaskStatus::Running).unwrap();
     drop(board);
+    fixture.register(&AgentRegistryRecord {
+        driver_kind: Some("codex-app-server".into()),
+        executable: None,
+        ..codex_agent("lead", &fixture, &[])
+    });
 
     let outcome = runner(&fixture)
         .resume(root)
         .await
         .expect("the partial final reconciles");
 
+    let again = runner(&fixture)
+        .resume(root)
+        .await
+        .expect("settled retired root is idempotent");
+    assert_eq!(again.result.answer, outcome.result.answer);
     assert_eq!(outcome.lead_agent, "lead");
     assert_eq!(outcome.result.answer, LEAD_ANSWER);
     assert_eq!(outcome.result.task_refs, vec![child]);
@@ -1522,4 +1549,67 @@ async fn concurrent_resume_has_single_claimant() {
         TaskStatus::Succeeded
     );
     assert_eq!(script.launches(), 1, "the lead runtime was launched once");
+}
+
+// Re-registering the same Lead id cannot make a retired foreign thread resumable.
+#[tokio::test]
+async fn retired_root_bindings_are_rejected_before_mutation_or_execution() {
+    use agentmosaic_storage::ExternalRuntimeBinding;
+    for runtime_kind in ["codex-app-server", "native", "cli"] {
+        let fixture = Fixture::new("retired-root");
+        fixture.register(&acp_agent("worker", "worker", &[]));
+        fixture.register(&codex_agent("lead", &fixture, &[delegate_reply()]));
+        let mut board = fixture.open_board();
+        let root = board
+            .create_task(
+                "unfinished legacy work",
+                None,
+                TaskKind::Reasoning,
+                Some("lead".into()),
+            )
+            .unwrap();
+        board
+            .record_attempt(&TaskAttempt {
+                task_id: root,
+                attempt: 1,
+                agent_id: "lead".into(),
+                status: TaskStatus::Failed,
+                result: None,
+                error: Some("interrupted legacy runtime".into()),
+            })
+            .unwrap();
+        board.set_status(root, TaskStatus::Failed).unwrap();
+        board
+            .upsert_external_binding(&ExternalRuntimeBinding {
+                team_task_id: root,
+                attempt: 1,
+                agent_id: "lead".into(),
+                runtime_kind: runtime_kind.into(),
+                native_thread_id: Some("legacy-thread".into()),
+                native_turn_id: None,
+                lifecycle_state: "failed".into(),
+            })
+            .unwrap();
+        drop(board);
+        let before = board_state(&fixture);
+        let error = runner(&fixture).resume(root).await.unwrap_err();
+        assert!(
+            matches!(error, TeamRunnerError::IncompatibleRootRuntime { .. }),
+            "{error}"
+        );
+        assert!(error.to_string().contains("start a new run"));
+        assert_eq!(board_state(&fixture), before);
+        assert!(!fixture.state.exists(), "no Lead process started");
+        let board = fixture.open_board();
+        assert_eq!(board.attempts(root).unwrap().len(), 1);
+        assert_eq!(
+            board
+                .external_binding(root, 1)
+                .unwrap()
+                .unwrap()
+                .native_thread_id
+                .as_deref(),
+            Some("legacy-thread")
+        );
+    }
 }
