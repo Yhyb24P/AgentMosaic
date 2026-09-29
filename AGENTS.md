@@ -33,7 +33,7 @@ Do not recreate internal Agent/model/tool loops, policy/approval platforms, mand
 independent verifiers, qualification systems, app-server/MCP compatibility, or compiled
 WorkspaceLease/DB-owner experiments. Development Agent task-orchestration rules are not
 AM capabilities. Actor Scheduler, WorkspaceLease, Experience/DecisionEngine, Beacon/Jev
-and adaptive routing remain frozen during v0.5 convergence.
+and adaptive routing remain frozen pending a separate product decision.
 
 ## Repository
 
