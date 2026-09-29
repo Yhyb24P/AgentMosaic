@@ -4,14 +4,15 @@ Current source facts. Public release status is separate from the local developme
 
 | Item | Value |
 |---|---|
-| Latest published release | v0.3.0; schema 11 |
-| Current source version | 0.5.0 release candidate |
+| Latest published release | [v0.5.0](https://github.com/Yhyb24P/AgentMosaic/releases/tag/v0.5.0); schema 14 |
+| Current source version | 0.6.0-dev |
 | Source SQLite schema | 14; `.agentmosaic/state-v14.db` |
 | Product binary | am |
 | Lead adapter | codex-exec |
 | Worker adapters | acp (ACP v1), codex-exec, claude-cli |
 
-The current source is a breaking subtraction candidate, not a newly published release.
+v0.5.0 is published from the converged product baseline. The development version is
+0.6.0-dev; no new feature work is included.
 Existing state is upgraded with explicit [import](migration.md); the original is preserved.
 
 ## Normal path
@@ -46,5 +47,4 @@ AgentMosaic Execution Contract, NeedsReplan or audit-loop feature.
 
 Prebuilt releases target Linux x86_64. Live Codex/Qwen checks require externally authenticated
 runtimes and are not automatic CI. Explicit recovery assumes the controller is stopped;
-it does not prove ownership or terminate a live controller. No tag, release or deployment
-is part of this subtraction.
+it does not prove ownership or terminate a live controller.
