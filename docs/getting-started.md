@@ -33,23 +33,15 @@ An external runtime retains its own login, credentials, provider, model and laun
 profile; AgentMosaic only stores the argv it should execute.
 
 ```bash
-am agent add lead --role reasoner --adapter codex-app-server -- codex
+am agent add lead --role reasoner --adapter codex-exec -- codex
 am agent add worker --role worker --adapter acp -- qwen --acp
 ```
 
 Everything after `--` is persisted opaque argv. Do not put credentials in it. A local
-launcher keeps its exact argv, but the launch command registered for `codex-app-server`
-must remain valid when AgentMosaic appends `app-server --stdio`. Named Codex profiles are
-not currently a portable app-server configuration mechanism; use app-server-compatible
-`-c` overrides, or a wrapper that expands to them.
-
-`--adapter` accepts `acp`, `codex-app-server`, `codex-exec` or `claude-cli`. A `utility`
-Agent is registered the same way with `--role utility`. `am agent list` prints the
-registry as a role-first table (`--json` for one object), and `am agent remove <id>`
-removes one Agent.
-
-`--max-events N` is an advanced tuning option for high-event Codex backends: it is
-accepted by `--adapter codex-app-server` only, and the default is unchanged.
+launcher keeps its exact argv, but the launch command registered for `codex-exec` must
+remain valid when AgentMosaic appends `exec --json`. `codex-exec` is the canonical/default
+reference Lead. `--adapter` accepts `acp`, `codex-exec` or `claude-cli`.
+A Utility Agent is optional; utility work falls back to Worker when none is registered.
 
 ## Doctor
 
@@ -77,12 +69,13 @@ failure, `PROGRAM_NOT_FOUND` or `PROTOCOL_UNAVAILABLE`.
 am run "produce worker.txt and summarize it"
 ```
 
-`am run` discovers the project state and runs the whole team: it opens/migrates the
+`am run` discovers the project state and runs the whole team: it opens the current-generation
 board, loads the persisted agent registry, builds the validated registry, resolves the
 Lead, constructs the real drivers, creates one durable root `reasoning` task plus its Lead
-attempt, and runs a resident Codex `CodexLeadBrain` through `Lead` + `Scheduler`.
-Delegated tasks execute on real Qwen workers over ACP, and the final visible Codex answer
-plus the exact selected task/artifact refs are persisted on the root.
+attempt, and drives the Lead through `Lead` + `Scheduler`. The Lead runs through
+`codex-exec`, starting an external process per turn and persisting
+its foreign thread binding. Delegated tasks run on the configured external workers.
+The final answer and selected task/artifact references settle atomically on the root.
 
 Progress and lifecycle go to stderr, so stdout carries the final answer alone:
 
@@ -115,10 +108,8 @@ am final --json
 am artifact --json
 ```
 
-The compatibility spellings of these commands take an explicit database path and keep
-their legacy whole-board meaning; `am advanced` lists them and the
-[CLI reference](cli.md) carries the grammar. These read-only surfaces never start a driver
-or mutate runtime state. To resume an interrupted run, see [Recovery](recovery.md).
+Inspection never starts a driver. To resume an interrupted run, see [Recovery](recovery.md).
+To upgrade an older project database, see [Database import](migration.md).
 
 ## Build from source
 
@@ -126,8 +117,7 @@ or mutate runtime state. To resume an interrupted run, see [Recovery](recovery.m
 cargo build --release --workspace
 ```
 
-This produces `target/release/am`, the only shipped product binary. Its Codex MCP bridge
-is a fixed internal command, never a separately installed binary.
+This produces `target/release/am`, the only shipped product binary.
 
 ## Next
 

@@ -6,24 +6,27 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   rust:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - name: Identity gate
+      - name: Identity
         run: scripts/ci/check_identity.sh
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - name: Test
-        run: cargo test --workspace --all-features
+        run: cargo test --locked --workspace --all-features
       - name: Release build
-        run: cargo build --release --workspace
-      - name: Diff hygiene
-        run: git diff --check
+        run: cargo build --locked --release --workspace
+      - name: Hygiene
+        run: scripts/ci/check_hygiene.sh

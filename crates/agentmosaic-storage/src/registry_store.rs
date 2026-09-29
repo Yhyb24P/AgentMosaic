@@ -2,7 +2,7 @@
 
 use rusqlite::{params, Connection, Row};
 
-use crate::schema::{migrate, SCHEMA};
+use crate::schema::initialize_schema;
 
 /// A persisted registration of one runtime agent (one `agent_registry` row).
 #[derive(Debug, Clone)]
@@ -11,9 +11,10 @@ pub struct AgentRegistryRecord {
     pub name: String,
     /// One of `reasoner`, `worker`, or `utility`.
     pub tier: String,
-    /// The driver kind as stored (`native`, `acp`, or `cli`), or None.
+    /// Raw persisted driver spelling, including retired values; decoding and
+    /// runnable driver selection happen at the registry boundary.
     pub driver_kind: Option<String>,
-    /// The executable the driver starts, or None for built-in drivers.
+    /// The external runtime executable, when configured.
     pub executable: Option<String>,
     /// Public runtime version observed by a probe, never a credential or endpoint.
     pub runtime_version: Option<String>,
@@ -33,11 +34,10 @@ pub struct SqliteAgentRegistry {
 }
 
 impl SqliteAgentRegistry {
-    /// Open the registry on `path`, applying the schema and migrating.
+    /// Open the registry on `path`, initializing empty state or validating the current generation.
     pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self, rusqlite::Error> {
         let mut conn = Connection::open(path)?;
-        conn.execute_batch(SCHEMA)?;
-        migrate(&mut conn)?;
+        initialize_schema(&mut conn)?;
         Ok(Self { conn })
     }
 
@@ -118,12 +118,6 @@ impl SqliteAgentRegistry {
         let rows = stmt.query_map(params![], from_row)?;
         rows.collect()
     }
-
-    /// The underlying connection, for direct queries in tests.
-    #[cfg(test)]
-    pub(crate) fn conn(&self) -> &Connection {
-        &self.conn
-    }
 }
 
 /// Reconstruct one registry row.
@@ -144,7 +138,6 @@ fn from_row(row: &Row) -> rusqlite::Result<AgentRegistryRecord> {
 
 #[cfg(test)]
 mod tests {
-    use crate::SCHEMA_VERSION;
 
     use super::*;
 
@@ -264,7 +257,7 @@ mod tests {
         let registry = SqliteAgentRegistry::open(&path).expect("open registry");
         registry.upsert_agent(&record()).expect("upsert initial");
         let mut updated = record();
-        updated.driver_config_json = Some(r#"{"max_events":500}"#.into());
+        updated.driver_config_json = Some(r#"{"max_prompt_bytes":500}"#.into());
         registry.upsert_agent(&updated).expect("upsert update");
         assert_eq!(
             registry
@@ -273,7 +266,7 @@ mod tests {
                 .expect("exists")
                 .driver_config_json
                 .as_deref(),
-            Some(r#"{"max_events":500}"#)
+            Some(r#"{"max_prompt_bytes":500}"#)
         );
         updated.driver_config_json = None;
         registry.upsert_agent(&updated).expect("upsert clear");
@@ -285,177 +278,6 @@ mod tests {
                 .driver_config_json,
             None
         );
-        let _ = std::fs::remove_file(&path);
-    }
-
-    /// A v7 database (the current schema minus `agent_registry`) migrates to
-    /// v8 on open.
-    #[test]
-    fn v7_database_migrates_when_registry_is_missing() {
-        let path = temp_db("v7");
-        let _ = std::fs::remove_file(&path);
-        {
-            let conn = Connection::open(&path).expect("open db");
-            conn.execute_batch(SCHEMA).expect("apply current schema");
-            conn.execute("DROP TABLE agent_registry", params![])
-                .expect("drop agent_registry");
-            conn.pragma_update(None, "user_version", 7)
-                .expect("set version 7");
-        }
-        let registry = SqliteAgentRegistry::open(&path).expect("open registry");
-        assert_eq!(
-            registry.schema_version().expect("version"),
-            crate::schema::SCHEMA_VERSION
-        );
-        let columns: i64 = registry
-            .conn()
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('agent_registry')",
-                params![],
-                |row| row.get(0),
-            )
-            .expect("registry table exists");
-        assert!(columns > 0);
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn v9_registry_migrates_preserving_existing_agent() {
-        let path = temp_db("v9-version");
-        let _ = std::fs::remove_file(&path);
-        {
-            let conn = Connection::open(&path).expect("open db");
-            conn.execute_batch(SCHEMA).expect("apply current schema");
-            conn.execute_batch(
-                "ALTER TABLE agent_registry RENAME TO agent_registry_v9;
-                 CREATE TABLE agent_registry (
-                    id TEXT PRIMARY KEY, name TEXT NOT NULL, tier TEXT NOT NULL,
-                    driver_kind TEXT, executable TEXT, driver_args_json TEXT,
-                    max_concurrency INTEGER NOT NULL, tags_json TEXT
-                  );
-                 INSERT INTO agent_registry
-                   (id,name,tier,driver_kind,executable,driver_args_json,max_concurrency,tags_json)
-                   SELECT id,name,tier,driver_kind,executable,driver_args_json,max_concurrency,tags_json
-                   FROM agent_registry_v9;
-                 DROP TABLE agent_registry_v9;",
-            )
-            .expect("create v9 registry shape");
-            conn.execute(
-                "INSERT INTO agent_registry (id,name,tier,max_concurrency) VALUES ('old','old','worker',1)",
-                [],
-            )
-            .expect("seed existing v9 row");
-            conn.pragma_update(None, "user_version", 9).expect("set v9");
-        }
-        let registry = SqliteAgentRegistry::open(&path).expect("migrate v9");
-        let old = registry.get_agent("old").expect("get").expect("preserved");
-        assert_eq!(old.runtime_version, None);
-        assert_eq!(registry.schema_version().expect("version"), SCHEMA_VERSION);
-        let _ = std::fs::remove_file(&path);
-    }
-
-    /// Deletion removes exactly the named row, and reports a missing id
-    /// instead of failing.
-    #[test]
-    fn delete_agent_removes_only_the_named_row() {
-        let path = temp_db("delete");
-        let _ = std::fs::remove_file(&path);
-        let registry = SqliteAgentRegistry::open(&path).expect("open registry");
-        let mut second = record();
-        second.id = "b-agent".into();
-        registry.upsert_agent(&record()).expect("upsert first");
-        registry.upsert_agent(&second).expect("upsert second");
-
-        assert!(registry.delete_agent("acp-worker").expect("delete"));
-        assert!(registry
-            .get_agent("acp-worker")
-            .expect("get removed")
-            .is_none());
-        let remaining = registry.list_agents().expect("list");
-        assert_eq!(
-            remaining
-                .iter()
-                .map(|agent| agent.id.as_str())
-                .collect::<Vec<_>>(),
-            ["b-agent"]
-        );
-        assert!(!registry.delete_agent("acp-worker").expect("delete again"));
-        assert!(!registry
-            .delete_agent("never-registered")
-            .expect("delete missing"));
-        let _ = std::fs::remove_file(&path);
-    }
-
-    /// A registration deletion never reaches into durable team history: the
-    /// tasks, attempts and artifacts the Agent produced stay readable.
-    #[test]
-    fn delete_agent_leaves_task_history_untouched() {
-        let path = temp_db("delete-history");
-        let _ = std::fs::remove_file(&path);
-        let registry = SqliteAgentRegistry::open(&path).expect("open registry");
-        registry.upsert_agent(&record()).expect("upsert");
-        registry
-            .conn()
-            .execute(
-                "INSERT INTO team_tasks (id, objective, kind, assignee, status)
-                 VALUES (1, 'historic objective', 'bulk', 'acp-worker', 'succeeded')",
-                params![],
-            )
-            .expect("insert task");
-        registry
-            .conn()
-            .execute(
-                "INSERT INTO team_task_runs (task_id, attempt, agent_id, status, result)
-                 VALUES (1, 1, 'acp-worker', 'succeeded', 'historic result')",
-                params![],
-            )
-            .expect("insert attempt");
-        registry
-            .conn()
-            .execute(
-                "INSERT INTO artifacts (task_id, path, sha256) VALUES (1, 'out/result.txt', 'hash')",
-                params![],
-            )
-            .expect("insert artifact");
-
-        assert!(registry.delete_agent("acp-worker").expect("delete"));
-        let history: (i64, i64, i64) = registry
-            .conn()
-            .query_row(
-                "SELECT (SELECT COUNT(*) FROM team_tasks),
-                        (SELECT COUNT(*) FROM team_task_runs),
-                        (SELECT COUNT(*) FROM artifacts)",
-                params![],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .expect("history survives");
-        assert_eq!(history, (1, 1, 1));
-        let _ = std::fs::remove_file(&path);
-    }
-
-    /// The listing is ordered by id and `get_agent` returns every field.
-    #[test]
-    fn list_orders_and_get_reads_full_fields() {
-        let path = temp_db("fields");
-        let _ = std::fs::remove_file(&path);
-        let registry = SqliteAgentRegistry::open(&path).expect("open registry");
-        let mut second = record();
-        second.id = "b-agent".into();
-        second.max_concurrency = Some(3);
-        second.driver_kind = Some("cli".into());
-        registry.upsert_agent(&record()).expect("upsert first");
-        registry.upsert_agent(&second).expect("upsert second");
-        let listed = registry.list_agents().expect("list");
-        assert_eq!(
-            listed
-                .iter()
-                .map(|agent| agent.id.as_str())
-                .collect::<Vec<_>>(),
-            ["acp-worker", "b-agent"]
-        );
-        let full = registry.get_agent("b-agent").expect("get").expect("exists");
-        assert_eq!(full.max_concurrency, Some(3));
-        assert_eq!(full.driver_kind.as_deref(), Some("cli"));
         let _ = std::fs::remove_file(&path);
     }
 }

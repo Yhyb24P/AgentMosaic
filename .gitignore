@@ -4,8 +4,8 @@
 __pycache__/
 # Rust build output.
 /target/
-# Documentation trees are tracked: docs/ (current product docs), including
-# docs/runtimes/ and docs/releases/ (public release notes).
+# Documentation trees are tracked: docs/ contains current product docs,
+# runtime guides, recovery and database import instructions.
 *.py[cod]
 release-manifest.json
 *-evidence.json

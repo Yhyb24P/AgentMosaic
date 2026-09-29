@@ -1,6 +1,6 @@
-//! The durable task board: tasks, attempts, messages, and artifacts.
+//! The durable task board: tasks, attempts, results and artifacts.
 //!
-//! The board is the team's memory. Results, artifacts, and directed messages
+//! The board is the team's memory. Results and artifacts
 //! are persisted here so they flow between Agents without a human copying
 //! anything (T16). The trait is pure (no storage dependency); the SQLite
 //! implementation lives in the storage crate, which avoids a dependency cycle.
@@ -69,15 +69,6 @@ pub struct TaskAttempt {
     pub status: TaskStatus,
     pub result: Option<String>,
     pub error: Option<String>,
-}
-
-/// A directed message between two Agents. It reaches only the target's
-/// context (T09).
-#[derive(Debug, Clone)]
-pub struct AgentMessage {
-    pub from_agent: String,
-    pub to_agent: String,
-    pub body: String,
 }
 
 /// Artifact metadata: a path and its content hash.
@@ -159,7 +150,7 @@ pub fn root_claim_is_resumable(status: TaskStatus, latest_attempt: Option<TaskSt
 
 /// The durable task board.
 ///
-/// Implementations persist tasks, attempts, messages, and artifacts so that a
+/// Implementations persist tasks, attempts, results and artifacts so that a
 /// worker's result, artifact, and directed message reach the right Agent's
 /// next context (T07/T08/T09) and survive a restart.
 pub trait TaskBoard {
@@ -217,17 +208,12 @@ pub trait TaskBoard {
                 "successful result does not match succeeded attempt".into(),
             ));
         }
-        if let Some(message) = &result.message {
-            self.record_message(message)?;
-        }
         for artifact in &result.artifacts {
             self.record_artifact(attempt.task_id, artifact)?;
         }
         self.complete_attempt(attempt)?;
         self.set_status(attempt.task_id, TaskStatus::Succeeded)
     }
-    /// Persist a directed message.
-    fn record_message(&mut self, message: &AgentMessage) -> Result<(), BoardError>;
     /// Persist artifact metadata for a task.
     fn record_artifact(&mut self, task: u64, artifact: &ArtifactMeta) -> Result<(), BoardError>;
     /// Persist the Lead's explicitly selected completed task and artifact
@@ -335,12 +321,6 @@ pub trait TaskBoard {
     fn task(&self, id: u64) -> Result<Option<TaskRecord>, BoardError>;
     /// Read all attempts for a task, in attempt order.
     fn attempts(&self, task: u64) -> Result<Vec<TaskAttempt>, BoardError>;
-    /// Read the messages addressed to `agent` (T09).
-    fn messages_to(&self, agent: &str) -> Result<Vec<AgentMessage>, BoardError>;
-    /// Read normalized directed messages in durable insertion order.  This is
-    /// intentionally a summary surface for the product UI, not a runtime
-    /// transcript or hidden-reasoning channel.
-    fn messages(&self) -> Result<Vec<AgentMessage>, BoardError>;
     /// Read the artifact metadata for a task (T08).
     fn artifacts(&self, task: u64) -> Result<Vec<ArtifactMeta>, BoardError>;
     /// List every task id, in creation order. Used to reconstruct the task

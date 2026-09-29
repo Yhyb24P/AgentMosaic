@@ -1,9 +1,8 @@
 //! The project-aware inspection surface.
 //!
 //! `status`, `final`, `artifact` and `tui` discover `<project>/.agentmosaic/
-//! state.db` the way `am run` and `am doctor` do, and speak in runs (root
-//! reasoning tasks) and tasks. The legacy positional forms keep their exact
-//! historical output.
+//! state-v14.db` the way `am run` and `am doctor` do, and speak in runs (root
+//! reasoning tasks) and tasks.
 //!
 //! TUI project resolution is covered in two places: the `target` module's unit
 //! tests exercise the resolution rule itself as a pure function, and the
@@ -71,7 +70,7 @@ fn project(name: &str) -> PathBuf {
 }
 
 fn database_of(project: &Path) -> PathBuf {
-    project.join(".agentmosaic").join("state.db")
+    project.join(".agentmosaic").join("state-v14.db")
 }
 
 fn open_board(project: &Path) -> SqliteTaskBoard {
@@ -458,88 +457,6 @@ fn a_task_that_is_not_a_run_is_rejected_by_name() {
 }
 
 #[test]
-fn the_legacy_forms_keep_their_exact_output() {
-    let root = unique_dir("legacy_forms");
-    let database = root.join("board.db");
-    {
-        let mut board = SqliteTaskBoard::open(Connection::open(&database).unwrap()).unwrap();
-        let task = board
-            .create_task("legacy objective", None, TaskKind::Bulk, None)
-            .unwrap();
-        board.assign(task, "worker").unwrap();
-        succeed(&mut board, task, "worker", "legacy answer");
-        add_artifact(&mut board, task, "legacy.txt");
-    }
-    let db = database.to_string_lossy().into_owned();
-
-    // `status <database>` is still the whole board, one `task=` line per row.
-    let status = run_cli(&["status", &db]);
-    assert!(status.status.success(), "{}", stderr(&status));
-    let text = stdout(&status);
-    assert_eq!(
-        text,
-        "task=1 status=succeeded assignee=worker attempts=1 parent=- objective=legacy objective\n"
-    );
-    assert!(text.lines().all(|line| line.starts_with("task=")), "{text}");
-    assert!(!text.contains("run #"));
-
-    let final_result = run_cli(&["final", &db, "1"]);
-    assert!(final_result.status.success(), "{}", stderr(&final_result));
-    assert_eq!(stdout(&final_result), "legacy answer\n");
-
-    let artifact = run_cli(&["artifact", &db, "1"]);
-    assert!(artifact.status.success(), "{}", stderr(&artifact));
-    assert_eq!(
-        stdout(&artifact),
-        format!("task=1 path=legacy.txt sha256={}\n", "a".repeat(64))
-    );
-
-    let missing = root.join("missing").join("board.db");
-    let tui = run_cli(&["tui", &missing.to_string_lossy()]);
-    assert!(!tui.status.success());
-    cleanup(&root);
-}
-
-#[test]
-fn a_bare_number_that_is_also_a_file_is_refused_in_and_out_of_a_project() {
-    let outside = unique_dir("ambiguous_outside");
-    fs::write(outside.join("7"), "not a database").unwrap();
-    for args in [
-        ["status", "7"],
-        ["final", "7"],
-        ["artifact", "7"],
-        ["tui", "7"],
-    ] {
-        let output = run_cli_in(&outside, &args);
-        assert!(!output.status.success(), "{args:?} was accepted");
-        assert!(
-            stderr(&output).contains("ambiguous target `7`"),
-            "{args:?}: {}",
-            stderr(&output)
-        );
-    }
-    cleanup(&outside);
-
-    let root = project("ambiguous_inside");
-    fs::write(root.join("9"), "not a database").unwrap();
-    for args in [
-        ["status", "9"],
-        ["final", "9"],
-        ["artifact", "9"],
-        ["tui", "9"],
-    ] {
-        let output = run_cli_in(&root, &args);
-        assert!(!output.status.success(), "{args:?} was accepted");
-        assert!(
-            stderr(&output).contains("ambiguous target `9`"),
-            "{args:?}: {}",
-            stderr(&output)
-        );
-    }
-    cleanup(&root);
-}
-
-#[test]
 fn artifacts_are_scoped_to_the_latest_run_and_to_one_task() {
     let root = project("artifact_scope");
     let (first_child, second, second_child, second_grandchild) = {
@@ -622,7 +539,62 @@ fn the_run_rendering_never_prints_the_database_path() {
 
     for payload in payloads {
         assert!(!payload.contains(".agentmosaic"), "{payload}");
-        assert!(!payload.contains("state.db"), "{payload}");
+        assert!(!payload.contains("state-v14.db"), "{payload}");
     }
+    cleanup(&root);
+}
+
+/// Inspection must not probe or start even a valid configured external runtime.
+#[cfg(unix)]
+#[test]
+fn inspection_never_starts_a_registered_runtime() {
+    use agentmosaic_storage::{AgentRegistryRecord, SqliteAgentRegistry};
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = project("no_runtime_start");
+    let marker = root.join("runtime-started");
+    let runtime = root.join("runtime.sh");
+    fs::write(&runtime, "#!/bin/sh\ntouch runtime-started\nexit 91\n").unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o755)).unwrap();
+    let registry = SqliteAgentRegistry::open(database_of(&root)).unwrap();
+    for (id, tier) in [("lead", "reasoner"), ("worker", "worker")] {
+        registry
+            .upsert_agent(&AgentRegistryRecord {
+                id: id.into(),
+                name: id.into(),
+                tier: tier.into(),
+                driver_kind: Some("codex-exec".into()),
+                executable: Some(runtime.to_string_lossy().into_owned()),
+                runtime_version: None,
+                driver_args_json: Some("[]".into()),
+                max_concurrency: Some(1),
+                tags_json: Some("[]".into()),
+                driver_config_json: None,
+            })
+            .unwrap();
+    }
+    drop(registry);
+    let mut board = open_board(&root);
+    let run = create_run(&mut board, "completed objective", "lead");
+    let child = add_child(&mut board, run, "completed worker task", "worker");
+    succeed(&mut board, child, "worker", "worker result");
+    board.record_final_refs(run, &[child], &[]).unwrap();
+    succeed(&mut board, run, "lead", "final result");
+    drop(board);
+    for args in [
+        vec!["status", "--json"],
+        vec!["status", "--all", "--json"],
+        vec!["final", "--json"],
+        vec!["artifact", "--json"],
+        vec!["events", "--json"],
+        vec!["agent", "list", "--json"],
+    ] {
+        let output = run_cli_in(&root, &args);
+        assert!(output.status.success(), "{args:?}: {}", stderr(&output));
+        assert!(!marker.exists(), "{args:?} started a runtime");
+    }
+    let snapshot = agentmosaic_tui::load_snapshot(&database_of(&root)).unwrap();
+    assert_eq!(snapshot.run.unwrap().id, run);
+    assert!(!marker.exists(), "TUI snapshot started a runtime");
     cleanup(&root);
 }

@@ -78,7 +78,7 @@ fn project(name: &str) -> PathBuf {
 }
 
 fn database_of(project: &Path) -> PathBuf {
-    project.join(".agentmosaic").join("state.db")
+    project.join(".agentmosaic").join("state-v14.db")
 }
 
 fn add_lead(project: &Path, program: &str) -> String {
@@ -91,7 +91,7 @@ fn add_lead(project: &Path, program: &str) -> String {
             "--role",
             "reasoner",
             "--adapter",
-            "codex-app-server",
+            "codex-exec",
             "--",
             program,
         ],
@@ -129,6 +129,9 @@ fn target_dir() -> PathBuf {
 /// leave one out, so build the runtime binaries once and retry instead of
 /// failing flakily.
 fn mock_binary(name: &str) -> PathBuf {
+    if name == "exec_runtime" {
+        return PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/exec_runtime.py");
+    }
     let candidate = target_dir().join(name);
     if candidate.is_file() {
         return candidate;
@@ -162,7 +165,7 @@ fn init_teaches_lead_and_worker_without_naming_the_state_path() {
     assert!(text.contains("Lead"), "{text}");
     assert!(text.contains("Worker"), "{text}");
     assert!(
-        text.contains("am agent add lead --role reasoner --adapter codex-app-server -- codex"),
+        text.contains("am agent add lead --role reasoner --adapter codex-exec -- codex"),
         "{text}"
     );
     assert!(
@@ -172,7 +175,7 @@ fn init_teaches_lead_and_worker_without_naming_the_state_path() {
     assert!(text.contains("am doctor"), "{text}");
     // The durable state exists, but the surface never names it.
     assert!(database_of(&root).is_file());
-    assert!(!text.contains("state.db"), "{text}");
+    assert!(!text.contains("state-v14.db"), "{text}");
     assert!(!text.contains(".agentmosaic"), "{text}");
     fs::remove_dir_all(root).unwrap();
 }
@@ -190,7 +193,7 @@ fn init_again_says_already_initialized_and_keeps_the_registry() {
         Some("already initialized AgentMosaic"),
         "{text}"
     );
-    assert!(!text.contains("state.db"), "{text}");
+    assert!(!text.contains("state-v14.db"), "{text}");
     assert!(!text.contains(".agentmosaic"), "{text}");
     // The next step follows the registry the project actually has, and the
     // registration itself survived: no state was recreated.
@@ -469,13 +472,13 @@ fn doctor_without_a_lead_explains_the_missing_role() {
 }
 
 /// The success path is a real team of the workspace's own deterministic mock
-/// runtimes: the `codex-app-server` Lead is `codex_bridge_mock` and the ACP
+/// runtimes: the `codex-exec` Lead is `exec_runtime` and the ACP
 /// Worker is `acp_m2_mock`, the same fixtures the product's team tests drive.
 /// Nothing here fakes readiness by pointing at an unrelated program.
 #[test]
 fn doctor_reports_a_ready_team_on_stdout() {
     let root = project("doctor_ready");
-    let codex = mock_binary("codex_bridge_mock");
+    let codex = mock_binary("exec_runtime");
     let acp = mock_binary("acp_m2_mock");
     add_lead(&root, &codex.display().to_string());
     // The ACP mock takes no launch arguments; `--acp` belongs to the real

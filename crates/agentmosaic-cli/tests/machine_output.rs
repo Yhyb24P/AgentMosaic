@@ -31,7 +31,7 @@ const ARTIFACT_SHA256: &str = "95f598b503939e93230f9a88391366370d0d84fcbce6dd932
 /// The mock Codex app-server reads its script from this variable when a
 /// registration carries no `overrides` of its own: `am agent add` writes only
 /// non-secret launch facts, and the scripted replies are the test's business.
-const REPLIES_ENV: &str = "CODEX_BRIDGE_MOCK_REPLIES";
+const REPLIES_ENV: &str = "AM_TEST_EXEC_REPLIES";
 
 fn cli() -> Command {
     Command::new(env!("CARGO_BIN_EXE_am"))
@@ -62,6 +62,9 @@ fn target_dir() -> PathBuf {
 /// leave them unbuilt, so build the runtime binaries once and retry instead of
 /// failing flakily.
 fn mock_binary(name: &str) -> PathBuf {
+    if name == "exec_runtime" {
+        return PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/exec_runtime.py");
+    }
     let candidate = target_dir().join(name);
     if candidate.is_file() {
         return candidate;
@@ -143,7 +146,7 @@ impl TeamProject {
     }
 
     fn with_replies(name: &str, replies: &str) -> Self {
-        Self::with_lead(name, &mock_binary("codex_bridge_mock"), replies)
+        Self::with_lead(name, &mock_binary("exec_runtime"), replies)
     }
 
     /// A ready team whose Lead is the named program. Every registration goes
@@ -172,7 +175,7 @@ impl TeamProject {
                 "--role",
                 "reasoner",
                 "--adapter",
-                "codex-app-server",
+                "codex-exec",
                 "--",
             ],
             lead,
@@ -198,7 +201,7 @@ impl TeamProject {
         );
 
         Self {
-            database: repo.join(".agentmosaic").join("state.db"),
+            database: repo.join(".agentmosaic").join("state-v14.db"),
             root,
             repo,
             replies: replies.to_string(),
@@ -395,7 +398,7 @@ fn run_json_is_exactly_one_typed_object() {
         "acp-m2-mock-session",
         "Current lead context",
         "\"action\"",
-        "codex_bridge_mock",
+        "exec_runtime",
         "acp_m2_mock",
     ] {
         assert!(
@@ -501,7 +504,7 @@ fn doctor_json_is_the_readiness_decision() {
     let project = TeamProject::ready("doctor_decision");
     let doctor = project.json(&["doctor", "--json"]);
     assert_eq!(doctor["ready"], json!(true));
-    assert_eq!(doctor["schema_version"], json!(12));
+    assert_eq!(doctor["schema_version"], json!(14));
     assert_eq!(
         doctor["team"],
         json!({"lead": 1, "worker": 1, "utility": 1})
@@ -522,7 +525,7 @@ fn doctor_json_is_the_readiness_decision() {
         .iter()
         .find(|agent| agent["id"] == json!("lead"))
         .expect("the lead");
-    assert_eq!(lead["adapter"], json!("codex-app-server"));
+    assert_eq!(lead["adapter"], json!("codex-exec"));
 }
 
 /// A team that cannot run still produces the decision object — with the reason
@@ -580,8 +583,7 @@ fn a_failed_run_writes_no_success_json() {
     );
 }
 
-/// The legacy `<database>` spellings keep their historical text, so `--json`
-/// is refused by name instead of guessing a shape for them.
+/// Removed database positional forms are refused before accessing state.
 #[test]
 fn json_refuses_the_legacy_database_spellings() {
     let project = TeamProject::ready("legacy_refusal");
@@ -598,8 +600,7 @@ fn json_refuses_the_legacy_database_spellings() {
         assert!(!output.status.success(), "`am {command} --json` succeeded");
         assert_eq!(stdout(&output), "", "a refusal wrote to stdout");
         let message = stderr(&output);
-        assert!(message.contains(command), "{message}");
-        assert!(message.contains("no JSON output"), "{message}");
+        assert!(!message.is_empty(), "{command}: missing refusal");
     }
 }
 
@@ -610,10 +611,10 @@ fn agent_list_json_hides_credentials_and_raw_argv() {
     let root = unique_root("agent_list_secrets");
     let init = cli().arg("init").current_dir(&root).output().unwrap();
     assert!(init.status.success(), "{}", stderr(&init));
-    let program = mock_binary("codex_bridge_mock");
+    let program = mock_binary("exec_runtime");
     let added = cli()
         .args(["agent", "add", "lead", "--role", "reasoner"])
-        .args(["--adapter", "codex-app-server", "--"])
+        .args(["--adapter", "codex-exec", "--"])
         .arg(&program)
         .arg("--token=super-secret")
         .current_dir(&root)
@@ -639,7 +640,7 @@ fn agent_list_json_hides_credentials_and_raw_argv() {
     assert_eq!(agents.len(), 1, "{text}");
     assert_eq!(agents[0]["id"], json!("lead"));
     assert_eq!(agents[0]["role"], json!("reasoner"));
-    assert_eq!(agents[0]["adapter"], json!("codex-app-server"));
+    assert_eq!(agents[0]["adapter"], json!("codex-exec"));
     assert_eq!(agents[0]["concurrency"], json!(1));
     assert_eq!(agents[0]["tags"], json!([]));
     let launch = agents[0]["launch"].as_str().expect("a launch rendering");

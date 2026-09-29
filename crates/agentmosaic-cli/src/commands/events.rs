@@ -225,7 +225,10 @@ mod tests {
         let json = json::encode(&event).unwrap();
         assert!(json.contains("\"sequence\":3"));
         assert!(!json.contains("native_session_id"));
-        assert_eq!(render(event), "2026-09-15T00:00:00Z task=7 attempt=2 agent=worker runtime=claude session=session- event=session_started session started");
+        assert_eq!(
+            render(event),
+            "2026-09-15T00:00:00Z task=7 attempt=2 agent=worker runtime=claude session=session- event=session_started session started"
+        );
         assert_eq!(short_id("opaque-session-id"), "opaque-s");
     }
 }

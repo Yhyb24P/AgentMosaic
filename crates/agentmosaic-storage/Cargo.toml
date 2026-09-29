@@ -1,6 +1,6 @@
 [package]
 name = "agentmosaic-storage"
-description = "SQLite task board, agent registry, runtime events and schema migration"
+description = "SQLite task board, agent registry, runtime events and explicit database import"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

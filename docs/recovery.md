@@ -1,55 +1,43 @@
 # Recovery
 
-The authoritative state is the SQLite board. Recovery commands operate on durable state
-and never replay completed work.
+SQLite is the authoritative task board. Recovery settles durable state and preserves
+completed results; it never replays completed work.
 
 ## After an interruption
 
-If a run is interrupted while attempts are in flight, their attempts are left in a
-`running` state in the database. Close them explicitly, then resume the root:
+First ensure the process that owned the run and its external runtime have stopped.
+Inspect the root from inside the project, explicitly close its interrupted attempt,
+then continue:
 
 ```bash
-am recover-all <database>
-am resume-team <database> /path/to/repo 1
+am status 1
+am run --recover 1
+am run --resume 1
 ```
 
-- `am recover <database> <task-id>` closes one interrupted attempt.
-- `am recover-all <database>` closes every interrupted attempt.
-- `am resume-team <database> <repo> <root-task-id>` rebuilds the drivers/brain from
-  durable state, closes interrupted descendants without replaying them, and is
-  idempotent on an already-succeeded root.
+`--recover` requires a root reasoning task. It closes only that root's current running
+attempt, marks its external binding interrupted, and records a failed state. It starts
+no Agent. Repeating recovery when no running attempt exists is a no-op. `--json` reports
+`run_id`, `recovered_attempt` (null for a no-op), and `status`.
 
-For an unfinished root, `resume-team` continues the root's durable Lead and appends a
-new attempt: a failed attempt keeps its own status, result and error, and never
-becomes running again. `--lead <agent-id>` only asserts that same agent; a resume
-refuses to replace a root's Lead. A `running` root is refused rather than reclaimed,
-so two live resumes can never both enter the Lead — close an interrupted one with
-`am recover` first. If completed descendants already provide enough evidence, the
-Lead can finish immediately on the first resumed round without creating another
-task. A failed descendant is also valid evidence for a follow-up; a successful task
-is still required to ground the final answer.
+`--resume` reconstructs the team from the project registry and continues the root's
+persisted Lead. It claims the root atomically and appends a new attempt. It reconciles
+interrupted descendants from durable state before continuing the Lead. Prior failed
+attempts retain their status, result, and error. Completed descendants remain available
+as evidence and are never replayed.
 
-External runtime bindings are marked `interrupted` for the closed attempts; inspect them
-with `am binding <database> <task-id>`.
-
-## Reopening a task
-
-```bash
-am resume <database> <task-id>      # schedule a task again
-am cancel <database> <task-id>      # cancel a task
-am override <database> <task-id> <agent-id>   # reassign to an explicit agent
-```
-
-These are the compatibility spellings and take an explicit state database path as
-`<database>`; `am advanced` lists them and the [CLI reference](cli.md) carries the full
-grammar.
+A running root is refused by resume; it is never automatically reclaimed. Explicit
+recovery assumes the previous owning process has stopped. A succeeded root returns its
+stored final answer and exact task/artifact references without starting a runtime.
 
 ## Guarantees
 
-- A root task cannot become `succeeded` after a Lead brain failure; the failure
-  propagates instead of being swallowed.
-- `resume-team` on an already-succeeded root is a no-op rather than a replay.
-- A crash between the Lead's final refs and the root status is repaired from that
-  durable evidence, without replaying the Lead.
-- Read-only commands (`status`, `registry`, `artifact`, `binding`, `final`, `tui`) never
-  start a driver or mutate runtime state.
+- Only one concurrent resume can claim the root and enter the Lead.
+- Lead failure cannot publish a succeeded root.
+- Task and artifact references are committed atomically with the successful root result.
+- Durable final evidence repairs an interrupted final settlement without replaying the Lead.
+- Inspection (`status`, `events`, `artifact`, `final`, `tui`, `agent list`) starts no task runtime.
+
+Older schema 11 or 12 state requires an explicit import into schema 14 before recovery:
+`am import .agentmosaic/state.db`. The source remains available and unchanged. See the
+[CLI reference](cli.md) for the accepted generations and import refusals.

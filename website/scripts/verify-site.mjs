@@ -143,7 +143,7 @@ const CONTENT_CONTRACT = [
   ["https://am.yhshyp.xyz/install.sh", "install command"],
   ["am init", "am init"],
   ["--role reasoner", "reasoner registration"],
-  ["--adapter codex-app-server", "codex-app-server adapter"],
+  ["--adapter codex-exec", "codex-exec adapter"],
   ["--role worker", "worker registration"],
   ["--adapter acp", "acp adapter"],
   ["am doctor", "am doctor"],

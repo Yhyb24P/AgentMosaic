@@ -10,15 +10,10 @@ publish.workspace = true
 [package.metadata.dist]
 dist = false
 
-# These deterministic fixtures are development-only. The product bridge is a
-# library entrypoint invoked by the sole public `am` binary.
+# Deterministic ACP fixture used only by tests and CI.
 [[bin]]
 name = "acp_m2_mock"
 path = "src/bin/acp_m2_mock.rs"
-
-[[bin]]
-name = "codex_bridge_mock"
-path = "src/bin/codex_bridge_mock.rs"
 
 [dependencies]
 agentmosaic-storage = { path = "../agentmosaic-storage" }

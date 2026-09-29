@@ -99,7 +99,7 @@ where
                     Err(error) => {
                         break Err(RuntimeError::Protocol(format!(
                             "decode Claude JSONL: {error}"
-                        )))
+                        )));
                     }
                 };
                 let events = match normalize_stream_event(&value) {
@@ -126,7 +126,7 @@ where
             Ok(Err(error)) => {
                 break Err(RuntimeError::Protocol(format!(
                     "read Claude JSONL: {error}"
-                )))
+                )));
             }
             Err(mpsc::RecvTimeoutError::Timeout) => break Err(RuntimeError::TimedOut),
             Err(mpsc::RecvTimeoutError::Disconnected) => {

@@ -38,9 +38,9 @@ use agentmosaic_team::{
 use rusqlite::Connection;
 
 use crate::driver_factory::{
-    codex_option_values, launch_spec, parse_agent_options, DriverFactory, DriverFactoryError,
+    acp_option_values, launch_spec, parse_agent_options, DriverFactory, DriverFactoryError,
 };
-use crate::{CodexExecLeadBrain, CodexExecLeadConfig, CodexLeadBrain, CodexLeadConfig, LaunchSpec};
+use crate::{CodexExecLeadBrain, CodexExecLeadConfig};
 
 /// Default bound for one automatic team run.
 pub const DEFAULT_MAX_ROUNDS: u32 = 8;
@@ -52,8 +52,6 @@ pub const DEFAULT_MAX_RETRIES: u32 = 2;
 pub const DEFAULT_LEAD_MAX_PROMPT_BYTES: usize = 32768;
 /// Default byte bound for the final answer.
 pub const DEFAULT_LEAD_MAX_ANSWER_BYTES: usize = 16384;
-/// Default event bound for one Lead turn.
-pub const DEFAULT_LEAD_MAX_EVENTS: usize = 200;
 
 /// The options one team run is bounded by.
 #[derive(Debug, Clone)]
@@ -106,6 +104,8 @@ pub enum TeamRunnerError {
     MissingLeadExecutable(String),
     /// The selected reasoner's runtime has no conforming Lead adapter.
     UnsupportedLeadRuntime { agent: String, kind: String },
+    /// An unfinished root belongs to an external runtime that cannot be resumed.
+    IncompatibleRootRuntime { root: u64, kind: String },
     /// A driver could not be constructed.
     Driver(DriverFactoryError),
     /// The Lead brain could not be built or failed.
@@ -162,7 +162,11 @@ impl std::fmt::Display for TeamRunnerError {
             }
             Self::UnsupportedLeadRuntime { agent, kind } => write!(
                 f,
-                "lead agent `{agent}` has runtime `{kind}`, which is not supported for the Lead role"
+                "lead agent `{agent}` has runtime `{kind}`, which is not supported for the Lead role; register the Lead with codex-exec"
+            ),
+            Self::IncompatibleRootRuntime { root, kind } => write!(
+                f,
+                "unfinished root {root} has durable runtime `{kind}` and cannot resume through codex-exec; preserve its results and start a new run with `am run`"
             ),
             Self::Driver(error) => write!(f, "{error}"),
             Self::LeadBrain(error) => write!(f, "{error}"),
@@ -176,7 +180,7 @@ impl std::fmt::Display for TeamRunnerError {
             ),
             Self::RootNotResumable { root, status } => write!(
                 f,
-                "root {root} is {} and was not reclaimed; close an interrupted running root with `am recover <database> {root}` first, then resume",
+                "root {root} is {} and was not reclaimed; close an interrupted running root with `am run --recover {root}` first, then resume",
                 status.as_str()
             ),
             Self::CrossLeadTakeover {
@@ -238,25 +242,10 @@ impl LeadBrainFactory for DefaultLeadBrainFactory {
     ) -> Result<Box<dyn LeadBrain>, TeamRunnerError> {
         ensure_supported_lead_runtime(record)?;
         let config = lead_config(record, &self.repo)?;
-        match record.driver_kind.as_deref().and_then(DriverKind::restore) {
-            Some(DriverKind::CodexAppServer) => {
-                Ok(Box::new(CodexLeadBrain::new(config, candidates)?))
-            }
-            Some(DriverKind::CodexExec) => Ok(Box::new(CodexExecLeadBrain::new(
-                CodexExecLeadConfig {
-                    launch: config.launch,
-                    working_directory: config.working_directory,
-                    max_prompt_bytes: config.max_prompt_bytes,
-                    max_answer_bytes: config.max_answer_bytes,
-                    timeout: std::time::Duration::from_secs(300),
-                    isolate: false,
-                    binding_database: self.database.clone(),
-                    binding_agent_id: self.database.as_ref().map(|_| record.id.clone()),
-                },
-                candidates,
-            )?)),
-            _ => unreachable!("lead runtime was validated"),
-        }
+        let mut config = config;
+        config.binding_database = self.database.clone();
+        config.binding_agent_id = self.database.as_ref().map(|_| record.id.clone());
+        Ok(Box::new(CodexExecLeadBrain::new(config, candidates)?))
     }
 }
 
@@ -293,7 +282,6 @@ pub struct TeamRunner {
     database: PathBuf,
     repo: PathBuf,
     options: TeamRunOptions,
-    bridge_host: Option<LaunchSpec>,
     lead_factory: Arc<dyn LeadBrainFactory>,
     sink: Arc<dyn RunEventSink>,
 }
@@ -313,14 +301,8 @@ impl TeamRunner {
             ),
             repo,
             options,
-            bridge_host: None,
             sink: Arc::new(NoopRunEventSink),
         }
-    }
-
-    pub fn with_bridge_host(mut self, host: LaunchSpec) -> Self {
-        self.bridge_host = Some(host);
-        self
     }
 
     /// Override runtime construction while preserving the product's existing
@@ -425,6 +407,21 @@ impl TeamRunner {
         // replaces one, and it fails before any mutation when an explicit
         // `--lead` names a different agent.
         let lead = canonical_resume_lead(&root, &records, self.options.lead_agent.as_deref())?;
+        // Registry edits cannot convert a foreign runtime thread into an Exec
+        // thread. Check historical bindings before claiming another attempt.
+        for attempt in board.attempts(root_task_id)? {
+            if let Some(binding) = board
+                .external_binding(root_task_id, attempt.attempt)
+                .map_err(|error| TeamRunnerError::Board(BoardError::Storage(error.to_string())))?
+            {
+                if binding.runtime_kind != "codex-exec" {
+                    return Err(TeamRunnerError::IncompatibleRootRuntime {
+                        root: root_task_id,
+                        kind: binding.runtime_kind,
+                    });
+                }
+            }
+        }
         let registry = agent_registry(&records)?;
         // Every fallible configuration step happens before the board is
         // mutated, so a configuration error leaves the recoverable state for a
@@ -654,10 +651,6 @@ impl TeamRunner {
         records: &[AgentRegistryRecord],
     ) -> Result<BTreeMap<String, Arc<dyn AgentDriver>>, TeamRunnerError> {
         let factory = DriverFactory::new(&self.database, &self.repo);
-        let factory = match &self.bridge_host {
-            Some(host) => factory.with_bridge_host(host.clone()),
-            None => factory,
-        };
         factory.build(records).map_err(TeamRunnerError::Driver)
     }
 }
@@ -670,7 +663,7 @@ fn ensure_supported_lead_runtime(record: &AgentRegistryRecord) -> Result<(), Tea
         .filter(|kind| !kind.is_empty())
         .unwrap_or("<missing>");
     match DriverKind::restore(kind) {
-        Some(DriverKind::CodexAppServer | DriverKind::CodexExec) => Ok(()),
+        Some(DriverKind::CodexExec) => Ok(()),
         _ => Err(TeamRunnerError::UnsupportedLeadRuntime {
             agent: record.id.clone(),
             kind: kind.to_string(),
@@ -692,31 +685,32 @@ fn ensure_supported_lead_runtime(record: &AgentRegistryRecord) -> Result<(), Tea
 fn lead_config(
     record: &AgentRegistryRecord,
     repo: &Path,
-) -> Result<CodexLeadConfig, TeamRunnerError> {
+) -> Result<CodexExecLeadConfig, TeamRunnerError> {
     ensure_supported_lead_runtime(record)?;
     let options = parse_agent_options(&record.id, record.driver_config_json.as_deref())?;
     // Shared options are judged by the adapter's one validator before the
     // Lead-specific bounds, exactly as the matching team driver will judge
     // them later in construction.
-    codex_option_values(&record.id, &options)?;
+    let values = acp_option_values(&record.id, &options)?;
     let launch = launch_spec(record).map_err(|error| match error {
         DriverFactoryError::MissingExecutable(_) => {
             TeamRunnerError::MissingLeadExecutable(record.id.clone())
         }
         other => TeamRunnerError::Driver(other),
     })?;
-    let config = CodexLeadConfig {
+    let config = CodexExecLeadConfig {
         launch,
         working_directory: repo.to_path_buf(),
-        model: options.model.clone(),
-        overrides: options.overrides.clone(),
         max_prompt_bytes: options
             .max_prompt_bytes
             .unwrap_or(DEFAULT_LEAD_MAX_PROMPT_BYTES),
         max_answer_bytes: options
             .max_answer_bytes
             .unwrap_or(DEFAULT_LEAD_MAX_ANSWER_BYTES),
-        max_events: options.max_events.unwrap_or(DEFAULT_LEAD_MAX_EVENTS),
+        timeout: std::time::Duration::from_secs(values.timeout_seconds),
+        isolate: false,
+        binding_database: None,
+        binding_agent_id: None,
     };
     config
         .validate()
@@ -730,7 +724,7 @@ fn lead_config(
 pub fn validate_lead_config(
     record: &AgentRegistryRecord,
     repo: &Path,
-) -> Result<CodexLeadConfig, String> {
+) -> Result<CodexExecLeadConfig, String> {
     lead_config(record, repo).map_err(|error| error.to_string())
 }
 
@@ -982,7 +976,7 @@ mod tests {
     fn registry_rows_map_to_routable_agents() {
         let mut reasoner = record("lead", "reasoner");
         reasoner.max_concurrency = None;
-        reasoner.driver_kind = Some("codex-app-server".into());
+        reasoner.driver_kind = Some("codex-exec".into());
         reasoner.tags_json = Some(r#"["codex"]"#.into());
         let registry =
             agent_registry(&[reasoner, record("worker", "worker"), record("u", "utility")])
@@ -991,7 +985,7 @@ mod tests {
         assert_eq!(registry.get("lead").unwrap().max_concurrency, 1);
         assert_eq!(
             registry.get("lead").unwrap().driver_kind,
-            Some(DriverKind::CodexAppServer)
+            Some(DriverKind::CodexExec)
         );
         assert_eq!(registry.get("lead").unwrap().tags, vec!["codex"]);
         let error = agent_registry(&[record("ghost", "wizard")]).unwrap_err();
@@ -1007,51 +1001,36 @@ mod tests {
     fn a_lead_configuration_is_built_and_judged_the_way_a_run_does() {
         let repo = std::env::temp_dir();
         let lead_record = || AgentRegistryRecord {
-            driver_kind: Some("codex-app-server".into()),
+            driver_kind: Some("codex-exec".into()),
             ..record("lead", "reasoner")
         };
         let good = AgentRegistryRecord {
-            driver_config_json: Some(
-                r#"{"model":"gpt","overrides":["x=1"],"max_prompt_bytes":4096,"max_answer_bytes":2048,"max_events":4000}"#
-                    .into(),
-            ),
+            driver_config_json: Some(r#"{"max_prompt_bytes":4096,"max_answer_bytes":2048}"#.into()),
             ..lead_record()
         };
         let config = validate_lead_config(&good, &repo).unwrap();
-        assert_eq!(config.model.as_deref(), Some("gpt"));
-        assert_eq!(config.overrides, vec!["x=1"]);
         assert_eq!(config.max_prompt_bytes, 4096);
         assert_eq!(config.max_answer_bytes, 2048);
-        assert_eq!(config.max_events, 4000);
         assert_eq!(config.working_directory, repo);
         assert_eq!(config.launch.program, std::path::Path::new("agent"));
 
         // An absent body is the documented defaults, exactly as a run reads it.
         let defaults = validate_lead_config(&lead_record(), &repo).unwrap();
-        assert_eq!(defaults.model, None);
-        assert!(defaults.overrides.is_empty());
         assert_eq!(defaults.max_prompt_bytes, DEFAULT_LEAD_MAX_PROMPT_BYTES);
         assert_eq!(defaults.max_answer_bytes, DEFAULT_LEAD_MAX_ANSWER_BYTES);
-        assert_eq!(defaults.max_events, DEFAULT_LEAD_MAX_EVENTS);
 
         for (config, expected) in [
             ("not json", "is not valid JSON"),
             ("[1,2]", "must be a JSON object"),
             (r#"{"api_key":"x"}"#, "looks like a credential"),
             (
-                r#"{"max_events":"not-a-number"}"#,
-                "`max_events` must be a number",
+                r#"{"max_prompt_bytes":16}"#,
+                "prompt and answer bounds are invalid",
             ),
-            (
-                r#"{"max_events":0}"#,
-                "max_events must be greater than zero",
-            ),
-            (r#"{"max_prompt_bytes":16}"#, "at least 1024"),
             (
                 r#"{"max_answer_bytes":0}"#,
-                "max_answer_bytes must be positive",
+                "prompt and answer bounds are invalid",
             ),
-            (r#"{"model":""}"#, "model must be non-empty"),
         ] {
             let row = AgentRegistryRecord {
                 driver_config_json: Some(config.into()),
@@ -1073,7 +1052,7 @@ mod tests {
         let missing = repo.join("agentmosaic-lead-config-must-not-exist");
         assert!(validate_lead_config(&lead_record(), &missing)
             .unwrap_err()
-            .contains("working directory must exist"));
+            .contains("working directory and timeout are required"));
     }
 
     #[test]

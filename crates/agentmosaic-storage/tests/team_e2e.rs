@@ -3,10 +3,10 @@
 //! Deterministic mock Reasoner/Worker/Utility drivers (no real Qwen/Codex;
 //! real drivers are R6). Proves: objective -> Lead delegates >=2 tasks ->
 //! worker and utility run concurrently -> one task retries after a failure ->
-//! another reassigns -> results/artifacts/directed messages flow back -> the
+//! another reassigns -> results/artifacts flow back -> the
 //! Lead follows up on a result and synthesizes a grounded answer. Then the
 //! database is closed and reopened, and the whole task tree, attempt history,
-//! assignments, messages, and artifacts are asserted to be reconstructable.
+//! assignments and artifacts are asserted to be reconstructable.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -15,9 +15,9 @@ use std::sync::Mutex;
 
 use agentmosaic_storage::{ExternalRuntimeBinding, SqliteTaskBoard};
 use agentmosaic_team::{
-    reconstruct_team_result, AgentConfig, AgentDriver, AgentMessage, AgentRegistry, AgentTask,
-    AgentTaskResult, AgentTier, ArtifactMeta, Lead, LeadBrain, LeadBrainError, LeadContext,
-    LeadDecision, Scheduler, TaskAttempt, TaskBoard, TaskKind, TaskSpec, TaskStatus, TeamResult,
+    reconstruct_team_result, AgentConfig, AgentDriver, AgentRegistry, AgentTask, AgentTaskResult,
+    AgentTier, ArtifactMeta, Lead, LeadBrain, LeadBrainError, LeadContext, LeadDecision, Scheduler,
+    TaskAttempt, TaskBoard, TaskKind, TaskSpec, TaskStatus, TeamResult,
 };
 use async_trait::async_trait;
 use rusqlite::Connection;
@@ -49,11 +49,6 @@ impl E2eDriver {
                         path: "summary.md".into(),
                         sha256: "abc123".into(),
                     }],
-                    message: Some(AgentMessage {
-                        from_agent: "worker-a".into(),
-                        to_agent: "reasoner-a".into(),
-                        body: "data ready for refinement".into(),
-                    }),
                 })
             }
             // Always fails: forces reassignment to worker-b.
@@ -62,7 +57,6 @@ impl E2eDriver {
                 task_id: task.id,
                 summary: "bulk done".into(),
                 artifacts: Vec::new(),
-                message: None,
             }),
             ("utility-a", _) => Ok(AgentTaskResult {
                 task_id: task.id,
@@ -71,7 +65,6 @@ impl E2eDriver {
                     path: "util.txt".into(),
                     sha256: "def456".into(),
                 }],
-                message: None,
             }),
             ("reasoner-a", _) => {
                 // Echo the context so the test can prove the parent's result
@@ -81,14 +74,12 @@ impl E2eDriver {
                     task_id: task.id,
                     summary: format!("refined insight ({ctx})"),
                     artifacts: Vec::new(),
-                    message: None,
                 })
             }
             _ => Ok(AgentTaskResult {
                 task_id: task.id,
                 summary: "ok".into(),
                 artifacts: Vec::new(),
-                message: None,
             }),
         }
     }
@@ -319,17 +310,9 @@ async fn heterogeneous_team_end_to_end() {
         .and_then(|a| a.result.clone())
         .expect("follow-up result");
     assert!(follow_up_result.contains("data summary"));
-    // T09: the worker's directed message actually reached reasoner-a's context
-    // (not just the messages table), so the follow-up result consumes it.
-    assert!(follow_up_result.contains("data ready for refinement"));
-
     // Assignment: the reassigned task's actual assignee is worker-b.
     let reassigned_record = board.task(task_ids[1]).expect("task").expect("exists");
     assert_eq!(reassigned_record.assignee.as_deref(), Some("worker-b"));
-
-    // Directed message: the worker's message reached the intended agent.
-    let msgs = board.messages_to("reasoner-a").expect("messages");
-    assert!(msgs.iter().any(|m| m.body == "data ready for refinement"));
 
     // Artifacts: the worker and utility artifacts are reconstructable.
     let worker_artifacts = board.artifacts(task_ids[0]).expect("artifacts");
@@ -370,7 +353,6 @@ impl AgentDriver for PauseDriver {
             task_id: task.id,
             summary: "done".into(),
             artifacts: Vec::new(),
-            message: None,
         })
     }
 }

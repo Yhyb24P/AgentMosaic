@@ -79,80 +79,25 @@ mod tests {
     }
 
     #[test]
-    fn registry_rejects_zero_concurrency_before_persisting_it() {
-        let result = run(&[
-            "register", ":memory:", "worker", "worker", "worker", "acp", "qwen", "--acp", "0", "-",
-        ]);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("greater than zero"));
-    }
-
-    #[test]
-    fn run_acp_persists_invalid_configuration_as_failed() {
-        let database = std::env::temp_dir().join(format!(
-            "agentmosaic_cli_invalid_acp_{}_{}.db",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let db = database.to_string_lossy().into_owned();
-        run(&[
-            "register", &db, "worker", "worker", "worker", "acp", "qwen", "--acp", "1", "-",
-        ])
-        .unwrap();
-        let submitted = run(&["submit", &db, "bulk", "bounded"]).unwrap();
-        let task = submitted.strip_prefix("submitted task=").unwrap();
-        let result = run(&[
+    fn retired_commands_are_rejected_before_opening_state() {
+        for command in [
+            "advanced",
+            "register",
+            "registry",
             "run-acp",
-            &db,
-            task,
-            "worker",
-            &std::env::temp_dir().to_string_lossy(),
-            "-",
-            "30",
-            "../outside",
-        ]);
-        assert!(result.is_err());
-        let status = run(&["status", &db]).unwrap();
-        assert!(status.contains("status=failed"));
-        let _ = std::fs::remove_file(database);
-    }
-
-    #[test]
-    fn continue_acp_rejects_source_without_a_completed_binding() {
-        let database = std::env::temp_dir().join(format!(
-            "agentmosaic_cli_continue_reject_{}_{}.db",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let db = database.to_string_lossy().into_owned();
-        run(&[
-            "register", &db, "worker", "worker", "worker", "acp", "qwen", "--acp", "1", "-",
-        ])
-        .unwrap();
-        let source = run(&["submit", &db, "bulk", "source"]).unwrap();
-        let next = run(&["submit", &db, "bulk", "next"]).unwrap();
-        let source_id = source.strip_prefix("submitted task=").unwrap();
-        let next_id = next.strip_prefix("submitted task=").unwrap();
-        let result = run(&[
             "continue-acp",
-            &db,
-            next_id,
-            "worker",
-            source_id,
-            &std::env::temp_dir().to_string_lossy(),
-            "-",
-            "30",
-        ]);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("no external binding"));
-        let status = run(&["status", &db]).unwrap();
-        assert!(status.contains(&format!("task={next_id} status=pending")));
-        let _ = std::fs::remove_file(database);
+            "run-team",
+            "resume-team",
+            "submit",
+            "cancel",
+            "override",
+            "recover",
+            "recover-all",
+            "resume",
+            "binding",
+            "__internal",
+        ] {
+            assert!(run(&[command, ":memory:"]).is_err(), "{command}");
+        }
     }
 }

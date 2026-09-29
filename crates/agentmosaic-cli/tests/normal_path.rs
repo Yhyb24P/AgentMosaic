@@ -1,211 +1,171 @@
-use std::process::Command;
-
 use agentmosaic_storage::{ExternalRuntimeBinding, SqliteTaskBoard};
-use agentmosaic_team::{
-    AgentTaskResult, ArtifactMeta, TaskAttempt, TaskBoard, TaskKind, TaskStatus,
-};
+use agentmosaic_team::{TaskAttempt, TaskBoard, TaskKind, TaskStatus};
 use rusqlite::Connection;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 
 fn cli() -> Command {
     Command::new(env!("CARGO_BIN_EXE_am"))
 }
-
-#[test]
-fn public_interface_is_am() {
-    let version = cli().arg("--version").output().unwrap();
-    assert!(version.status.success());
-    assert_eq!(String::from_utf8_lossy(&version.stdout), "am 0.5.0-dev\n");
-
-    // The default help centers the normal path.
-    let help = cli().arg("--help").output().unwrap();
-    assert!(help.status.success());
-    let help_text = String::from_utf8_lossy(&help.stdout);
-    for command in [
-        "init", "agent", "doctor", "run", "status", "final", "artifact", "tui", "advanced",
-    ] {
-        assert!(
-            help_text.contains(command),
-            "help must document `{command}`"
-        );
-    }
-    // The 13 compatibility commands stay callable but are not advertised.
-    let compatibility = [
-        "register",
-        "registry",
-        "run-acp",
-        "continue-acp",
-        "run-team",
-        "resume-team",
-        "submit",
-        "cancel",
-        "override",
-        "recover",
-        "recover-all",
-        "resume",
-        "binding",
-    ];
-    for command in compatibility {
-        assert!(
-            !help_text.contains(command),
-            "`{command}` must not be advertised by the default help"
-        );
-    }
-
-    // `am advanced` is where they are named.
-    let advanced = cli().arg("advanced").output().unwrap();
-    assert!(advanced.status.success());
-    let advanced_text = String::from_utf8_lossy(&advanced.stdout);
-    for command in compatibility {
-        assert!(
-            advanced_text.contains(command),
-            "`am advanced` must list `{command}`"
-        );
-    }
-
-    let invalid = cli().arg("definitely-not-a-command").output().unwrap();
-    assert!(!invalid.status.success());
-}
-
-#[test]
-fn tui_rejects_an_unopenable_database() {
-    let missing = std::env::temp_dir().join("agentmosaic-missing-dir/board.db");
-    let output = cli()
-        .args(["tui", &missing.to_string_lossy()])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-}
-
-#[test]
-fn normal_path_reads_and_controls_the_authoritative_board() {
-    let database = std::env::temp_dir().join(format!(
-        "agentmosaic_cli_normal_{}_{}.db",
+fn project() -> PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "am_recovery_{}_{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos()
     ));
-    {
-        let mut board = SqliteTaskBoard::open(Connection::open(&database).unwrap()).unwrap();
-        let task = board
-            .create_task("deliver exact result", None, TaskKind::Bulk, None)
-            .unwrap();
-        board.assign(task, "worker").unwrap();
-        let attempt = TaskAttempt {
-            task_id: task,
-            attempt: 1,
-            agent_id: "worker".into(),
-            status: TaskStatus::Running,
-            result: None,
-            error: None,
-        };
-        board.record_attempt(&attempt).unwrap();
-        board
-            .commit_successful_result(
-                &TaskAttempt {
-                    status: TaskStatus::Succeeded,
-                    result: Some("done".into()),
-                    ..attempt
-                },
-                &AgentTaskResult {
-                    task_id: task,
-                    summary: "done".into(),
-                    artifacts: vec![ArtifactMeta {
-                        path: "result.txt".into(),
-                        sha256: "hash".into(),
-                    }],
-                    message: None,
-                },
-            )
-            .unwrap();
-        let interrupted = board
-            .create_task("recover explicitly", None, TaskKind::Bulk, None)
-            .unwrap();
-        board.assign(interrupted, "worker").unwrap();
-        board
-            .record_attempt(&TaskAttempt {
-                task_id: interrupted,
-                attempt: 1,
-                agent_id: "worker".into(),
-                status: TaskStatus::Running,
-                result: None,
-                error: None,
-            })
-            .unwrap();
-        board.set_status(interrupted, TaskStatus::Running).unwrap();
+    std::fs::create_dir_all(&path).unwrap();
+    assert!(cli()
+        .current_dir(&path)
+        .arg("init")
+        .output()
+        .unwrap()
+        .status
+        .success());
+    path
+}
+fn board(root: &Path) -> SqliteTaskBoard {
+    SqliteTaskBoard::open(Connection::open(root.join(".agentmosaic/state-v14.db")).unwrap())
+        .unwrap()
+}
+fn run(root: &Path, args: &[&str]) -> Output {
+    cli().current_dir(root).args(args).output().unwrap()
+}
+fn text(output: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+#[test]
+fn public_interface_is_am() {
+    let output = cli().arg("--help").output().unwrap();
+    assert!(output.status.success());
+    let text = text(&output);
+    for command in [
+        "init", "import", "agent", "doctor", "run", "status", "events", "final", "artifact", "tui",
+    ] {
+        assert!(text.contains(command), "{command}");
     }
-    let db = database.to_string_lossy().into_owned();
-    let status = cli().args(["status", &db]).output().unwrap();
-    assert!(status.status.success());
-    assert!(String::from_utf8_lossy(&status.stdout).contains("status=succeeded"));
-    assert!(String::from_utf8_lossy(&status.stdout).contains("attempts=1"));
-    let artifact = cli().args(["artifact", &db, "1"]).output().unwrap();
-    assert!(artifact.status.success());
-    assert!(String::from_utf8_lossy(&artifact.stdout).contains("sha256=hash"));
-    let final_result = cli().args(["final", &db, "1"]).output().unwrap();
-    assert!(final_result.status.success());
-    assert_eq!(String::from_utf8_lossy(&final_result.stdout), "done\n");
-    let recover = cli().args(["recover", &db, "2"]).output().unwrap();
-    assert!(recover.status.success());
-    assert!(String::from_utf8_lossy(&recover.stdout).contains("interrupted_attempt=1"));
-    let recovered_status = cli().args(["status", &db]).output().unwrap();
-    assert!(String::from_utf8_lossy(&recovered_status.stdout).contains("task=2 status=failed"));
-    let second_interrupted = {
-        let mut board = SqliteTaskBoard::open(Connection::open(&database).unwrap()).unwrap();
-        let task = board
-            .create_task("recover all explicitly", None, TaskKind::Utility, None)
-            .unwrap();
-        board.assign(task, "utility").unwrap();
-        board
-            .record_attempt(&TaskAttempt {
-                task_id: task,
-                attempt: 1,
-                agent_id: "utility".into(),
-                status: TaskStatus::Running,
-                result: None,
-                error: None,
-            })
-            .unwrap();
-        board.set_status(task, TaskStatus::Running).unwrap();
-        board
-            .upsert_external_binding(&ExternalRuntimeBinding {
-                team_task_id: task,
-                attempt: 1,
-                agent_id: "utility".into(),
-                runtime_kind: "native".into(),
-                native_thread_id: None,
-                native_turn_id: None,
-                lifecycle_state: "running".into(),
-            })
-            .unwrap();
-        task
-    };
-    let recover_all = cli().args(["recover-all", &db]).output().unwrap();
-    assert!(recover_all.status.success());
+    assert!(!text.contains("advanced"));
+    assert!(!text.contains("__internal"));
+}
+
+#[test]
+fn recovery_is_explicit_scoped_and_does_not_replay() {
+    let root = project();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/exec_runtime.py");
+    for (id, role) in [("lead", "reasoner"), ("worker", "worker")] {
+        let registration = run(
+            &root,
+            &[
+                "agent",
+                "add",
+                id,
+                "--role",
+                role,
+                "--adapter",
+                "codex-exec",
+                "--",
+                fixture.to_str().unwrap(),
+            ],
+        );
+        assert!(registration.status.success(), "{}", text(&registration));
+    }
+    let mut db = board(&root);
+    let task = db
+        .create_task("interrupted root", None, TaskKind::Reasoning, None)
+        .unwrap();
+    db.assign(task, "lead").unwrap();
+    db.record_attempt(&TaskAttempt {
+        task_id: task,
+        attempt: 1,
+        agent_id: "lead".into(),
+        status: TaskStatus::Running,
+        result: None,
+        error: None,
+    })
+    .unwrap();
+    db.set_status(task, TaskStatus::Running).unwrap();
+    db.upsert_external_binding(&ExternalRuntimeBinding {
+        team_task_id: task,
+        attempt: 1,
+        agent_id: "lead".into(),
+        runtime_kind: "codex-exec".into(),
+        native_thread_id: Some("foreign-thread".into()),
+        native_turn_id: None,
+        lifecycle_state: "running".into(),
+    })
+    .unwrap();
+    let child = db
+        .create_task("interrupted child", Some(task), TaskKind::Bulk, None)
+        .unwrap();
+    db.assign(child, "worker").unwrap();
+    db.record_attempt(&TaskAttempt {
+        task_id: child,
+        attempt: 1,
+        agent_id: "worker".into(),
+        status: TaskStatus::Running,
+        result: None,
+        error: None,
+    })
+    .unwrap();
+    db.set_status(child, TaskStatus::Running).unwrap();
+    drop(db);
+    let resume = run(&root, &["run", "--resume", "1", "--json"]);
+    assert!(!resume.status.success());
     assert!(
-        String::from_utf8_lossy(&recover_all.stdout).contains(&format!("{second_interrupted}:1"))
+        text(&resume).contains("was not reclaimed"),
+        "{}",
+        text(&resume)
     );
-    let recovered_board = SqliteTaskBoard::open(Connection::open(&database).unwrap()).unwrap();
     assert_eq!(
-        recovered_board
-            .external_binding(second_interrupted, 1)
+        board(&root).task(task).unwrap().unwrap().status,
+        TaskStatus::Running
+    );
+    let invalid = run(&root, &["run", "--recover", "2"]);
+    assert!(!invalid.status.success());
+    assert!(text(&invalid).contains("not a run"));
+    let recovery = run(&root, &["run", "--recover", "1", "--json"]);
+    assert!(recovery.status.success(), "{}", text(&recovery));
+    assert!(recovery.stderr.is_empty());
+    let payload: serde_json::Value = serde_json::from_slice(&recovery.stdout).unwrap();
+    assert_eq!(payload["recovered_attempt"], 1);
+    let db = board(&root);
+    assert_eq!(db.task(task).unwrap().unwrap().status, TaskStatus::Failed);
+    assert_eq!(db.task(child).unwrap().unwrap().status, TaskStatus::Running);
+    assert_eq!(
+        db.external_binding(task, 1)
             .unwrap()
             .unwrap()
             .lifecycle_state,
         "interrupted"
     );
-    assert!(cli().args(["resume", &db, "2"]).status().unwrap().success());
-    assert!(cli().args(["cancel", &db, "1"]).status().unwrap().success());
-    assert!(cli().args(["resume", &db, "1"]).status().unwrap().success());
-    assert!(cli()
-        .args(["override", &db, "1", "worker-override"])
-        .status()
-        .unwrap()
-        .success());
-    let final_status = cli().args(["status", &db]).output().unwrap();
-    let text = String::from_utf8_lossy(&final_status.stdout);
-    assert!(text.contains("status=assigned"));
-    assert!(text.contains("assignee=worker-override"));
-    let _ = std::fs::remove_file(database);
+    assert_eq!(db.attempts(task).unwrap().len(), 1);
+    let again = run(&root, &["run", "--recover", "1", "--json"]);
+    assert!(again.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&again.stdout).unwrap()["recovered_attempt"],
+        serde_json::Value::Null
+    );
+    drop(db);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn run_modes_require_one_operation() {
+    let root = project();
+    for args in [
+        vec!["run"],
+        vec!["run", "--resume", "1", "--recover", "1"],
+        vec!["run", "--resume", "1", "new objective"],
+        vec!["run", "--recover", "1", "new objective"],
+    ] {
+        assert!(!run(&root, &args).status.success(), "{args:?}");
+    }
+    std::fs::remove_dir_all(root).unwrap();
 }

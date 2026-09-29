@@ -18,7 +18,6 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-const CODEX_MOCK: &str = env!("CARGO_BIN_EXE_codex_bridge_mock");
 const ACP_MOCK: &str = env!("CARGO_BIN_EXE_acp_m2_mock");
 
 const LEAD_ANSWER: &str = "lead synthesized final answer";
@@ -104,31 +103,39 @@ fn acp_agent(id: &str, tier: &str, artifact_paths: &[&str]) -> AgentRegistryReco
 }
 
 fn codex_agent(id: &str, fixture: &Fixture, replies: &[String]) -> AgentRegistryRecord {
-    let overrides = vec![
+    let script = fixture.root.join("lead.py");
+    let replies_file = fixture.root.join("replies.json");
+    std::fs::write(&replies_file, serde_json::to_string(replies).unwrap()).unwrap();
+    std::fs::write(&fixture.state, "0").unwrap();
+    std::fs::write(
+        &script,
         format!(
-            "codex_bridge_mock.replies={}",
-            serde_json::to_string(replies).unwrap()
+            r#"import json
+from pathlib import Path
+state = Path({state:?})
+index = int(state.read_text())
+state.write_text(str(index + 1))
+replies = json.loads(Path({replies:?}).read_text())
+reply = replies[min(index, len(replies) - 1)]
+print(json.dumps({{"type":"thread.started", "thread_id":"events-lead-thread"}}))
+print(json.dumps({{"type":"item.completed", "item":{{"type":"agent_message", "text":reply}}}}))
+"#,
+            state = fixture.state.to_string_lossy(),
+            replies = replies_file.to_string_lossy()
         ),
-        format!("codex_bridge_mock.state={}", fixture.state.display()),
-    ];
+    )
+    .unwrap();
     AgentRegistryRecord {
         id: id.into(),
         name: id.into(),
         tier: "reasoner".into(),
-        driver_kind: Some("codex-app-server".into()),
-        executable: Some(CODEX_MOCK.into()),
+        driver_kind: Some("codex-exec".into()),
+        executable: Some("/usr/bin/python3".into()),
         runtime_version: None,
-        driver_args_json: Some("[]".into()),
+        driver_args_json: Some(serde_json::to_string(&vec![script.to_string_lossy()]).unwrap()),
         max_concurrency: Some(1),
         tags_json: Some("[]".into()),
-        driver_config_json: Some(
-            json!({
-                "mcp_command": CODEX_MOCK,
-                "overrides": overrides,
-                "max_events": 64,
-            })
-            .to_string(),
-        ),
+        driver_config_json: None,
     }
 }
 

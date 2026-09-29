@@ -1,45 +1,14 @@
-//! Compatibility/experimental resident Codex app-server Lead brain.
-//!
-//! One Lead objective is one Codex thread. The brain spawns the local
-//! `codex app-server` once, starts a single `read-only` / `never` thread whose
-//! developer instructions state the strict decision contract, and then drives
-//! one bounded turn per Lead round — planning, follow-up, and final synthesis
-//! all happen in that one conversation. The thread holds no task state: every
-//! round's turn input is a freshly rendered, bounded view of the durable board
-//! ([`LeadContext`]).
-//!
-//! The model's reply is not trusted prose. After trimming ASCII whitespace only
-//! it must be exactly one JSON object matching the decision contract; anything
-//! else is rejected and re-asked exactly once, then reported as
-//! [`LeadBrainError::InvalidDecision`]. A decision naming an agent the
-//! scheduler cannot route to, an ungrounded completion, or a malformed artifact
-//! digest never reaches the Lead loop.
-
-use std::path::PathBuf;
-
+//! Bounded Lead prompt and strict decision contract, independent of transport.
 use agentmosaic_team::{
-    ArtifactMeta, LeadBrain, LeadBrainError, LeadContext, LeadDecision, SelectedArtifactRef,
-    TaskKind, TaskSpec, TeamResult,
+    ArtifactMeta, LeadBrainError, LeadContext, LeadDecision, SelectedArtifactRef, TaskKind,
+    TaskSpec, TeamResult,
 };
-use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
-
-use crate::{CodexAppServer, CodexBridgeError, CodexBridgeEvent, LaunchSpec};
-
-/// The Lead only reasons: its thread may not write the workspace and may never
-/// raise an approval prompt.
-const LEAD_SANDBOX: &str = "read-only";
-const LEAD_APPROVAL_POLICY: &str = "never";
-
-/// Reply bounds of the decision contract.
 const MAX_DELEGATED_TASKS: usize = 32;
 const MAX_SELECTED_IDS: usize = 256;
 const MAX_SELECTED_ARTIFACTS: usize = 256;
 const SHA256_HEX_LEN: usize = 64;
-
-/// The smallest prompt budget that still carries the whole reply instruction.
-const MIN_PROMPT_BYTES: usize = 1024;
 
 const PROMPT_PREFIX: &str = "Current lead context (compact JSON):\n";
 
@@ -74,156 +43,28 @@ const DEVELOPER_INSTRUCTIONS: &str = concat!(
     "shape are rejected.",
 );
 
-/// Configuration for the resident Codex Lead brain.
-#[derive(Debug, Clone)]
-pub struct CodexLeadConfig {
-    /// The configured runtime launch; the adapter appends `app-server --stdio`.
-    pub launch: LaunchSpec,
-    /// The directory the Lead thread runs in.
-    pub working_directory: PathBuf,
-    /// An optional model override (`-c model="..."`).
-    pub model: Option<String>,
-    /// Extra `codex -c` overrides.
-    pub overrides: Vec<String>,
-    /// Byte bound for one round's rendered context.
-    pub max_prompt_bytes: usize,
-    /// Byte bound for a final answer.
-    pub max_answer_bytes: usize,
-    /// Event bound for one turn's event pump.
-    pub max_events: usize,
-}
-
-impl CodexLeadConfig {
-    pub fn validate(&self) -> Result<(), String> {
-        self.launch.validate()?;
-        if !self.working_directory.is_dir() {
-            return Err("Codex lead working directory must exist".into());
-        }
-        if let Some(model) = &self.model {
-            if model.trim().is_empty() {
-                return Err("Codex lead model must be non-empty when set".into());
-            }
-        }
-        if self.max_prompt_bytes < MIN_PROMPT_BYTES {
-            return Err(format!(
-                "Codex lead max_prompt_bytes must be at least {MIN_PROMPT_BYTES}"
-            ));
-        }
-        if self.max_answer_bytes == 0 {
-            return Err("Codex lead max_answer_bytes must be positive".into());
-        }
-        if self.max_events == 0 {
-            return Err("Codex lead max_events must be positive".into());
-        }
-        Ok(())
-    }
-}
-
-/// A Codex-backed Lead brain with one resident thread.
-pub struct CodexLeadBrain {
-    config: CodexLeadConfig,
-    /// The agent ids the scheduler can route to; a decision naming any other
-    /// target is rejected.
+pub(crate) struct LeadContract {
+    max_prompt_bytes: usize,
+    max_answer_bytes: usize,
     candidates: Vec<String>,
-    server: Option<CodexAppServer>,
-    thread_id: Option<String>,
 }
-
-impl CodexLeadBrain {
-    /// Build a brain for `candidates`. The app server is spawned lazily on the
-    /// first `decide`, so constructing a brain starts no process.
-    pub fn new(config: CodexLeadConfig, candidates: Vec<String>) -> Result<Self, LeadBrainError> {
-        config.validate().map_err(LeadBrainError::Unavailable)?;
-        Ok(Self {
-            config,
+impl LeadContract {
+    pub(crate) fn new(
+        max_prompt_bytes: usize,
+        max_answer_bytes: usize,
+        candidates: Vec<String>,
+    ) -> Self {
+        Self {
+            max_prompt_bytes,
+            max_answer_bytes,
             candidates,
-            server: None,
-            thread_id: None,
-        })
-    }
-
-    /// Spawn the app server and the resident thread on the first call, and
-    /// return the thread id every later round reuses.
-    fn ensure_thread(&mut self) -> Result<String, LeadBrainError> {
-        if let Some(thread_id) = &self.thread_id {
-            return Ok(thread_id.clone());
-        }
-        let mut overrides = self.config.overrides.clone();
-        if let Some(model) = &self.config.model {
-            overrides.push(format!("model={model:?}"));
-        }
-        let working_directory = self
-            .config
-            .working_directory
-            .to_str()
-            .ok_or_else(|| {
-                LeadBrainError::Unavailable("Codex lead working directory is not UTF-8".into())
-            })?
-            .to_string();
-        let mut server = CodexAppServer::spawn_launch(self.config.launch.clone(), &overrides)
-            .map_err(|e| unavailable("spawn the codex app-server", e))?;
-        let started = server
-            .initialize("agentmosaic-codex-lead", "0.1")
-            .and_then(|_| {
-                server.start_thread_with_options(
-                    &working_directory,
-                    Some(DEVELOPER_INSTRUCTIONS),
-                    LEAD_SANDBOX,
-                    LEAD_APPROVAL_POLICY,
-                )
-            });
-        let thread_id = match started {
-            Ok(thread_id) => thread_id,
-            Err(error) => {
-                let _ = server.close();
-                return Err(unavailable("start the resident codex lead thread", error));
-            }
-        };
-        self.server = Some(server);
-        self.thread_id = Some(thread_id.clone());
-        Ok(thread_id)
-    }
-
-    /// Start one turn on the resident thread and return its bounded visible
-    /// reply.
-    fn run_turn(&mut self, prompt: &str) -> Result<String, LeadBrainError> {
-        let thread_id = self.ensure_thread()?;
-        let max_events = self.config.max_events;
-        let server = self.server.as_mut().ok_or_else(|| {
-            LeadBrainError::Unavailable("the codex lead app-server is not running".into())
-        })?;
-        let turn_id = server
-            .start_turn(&thread_id, prompt)
-            .map_err(|e| unavailable("start a codex lead turn", e))?;
-        pump_turn(server, &thread_id, &turn_id, max_events)
-    }
-
-    /// One Lead round: render the bounded context, run the turn, and parse the
-    /// reply strictly. A rejected reply earns exactly one correction turn on
-    /// the same thread; a second rejection is final.
-    fn decide_turn(&mut self, ctx: &LeadContext) -> Result<LeadDecision, LeadBrainError> {
-        let prompt = self.render_prompt(ctx)?;
-        let reply = self.run_turn(&prompt)?;
-        match self.parse_reply(&reply) {
-            Ok(decision) => Ok(decision),
-            Err(reason) => {
-                let correction = self.correction_prompt(&reason);
-                let second = self.run_turn(&correction)?;
-                self.parse_reply(&second).map_err(|second_reason| {
-                    LeadBrainError::InvalidDecision(format!(
-                        "codex lead reply rejected: {reason}; correction reply rejected: {second_reason}"
-                    ))
-                })
-            }
         }
     }
-
     /// The single correction turn's input: why the reply was rejected, then the
     /// contract again. The reason is bounded so this prompt also stays within
     /// `max_prompt_bytes`.
     pub(crate) fn correction_prompt(&self, reason: &str) -> String {
         let head_budget = self
-            .config
             .max_prompt_bytes
             .saturating_sub(PROMPT_SUFFIX.len() + 2);
         let head = bound_utf8(
@@ -235,24 +76,19 @@ impl CodexLeadBrain {
 
     /// Render one bounded turn input: the compact board context and the reply
     /// instruction. Only durable board facts are rendered (task ids, bounded
-    /// result summaries, artifact digests, bounded errors, messages) — never
+    /// result summaries, artifact digests, bounded errors) — never
     /// hidden model reasoning.
     pub(crate) fn render_prompt(&self, ctx: &LeadContext) -> Result<String, LeadBrainError> {
         let budget = self
-            .config
             .max_prompt_bytes
             .saturating_sub(PROMPT_PREFIX.len() + PROMPT_SUFFIX.len() + 2);
         let context = self.render_context(ctx, budget)?;
         Ok(format!("{PROMPT_PREFIX}{context}\n{PROMPT_SUFFIX}"))
     }
 
-    /// `codex app-server` receives this contract once as developer
-    /// instructions, but stateless `codex exec` has no equivalent thread
-    /// configuration. Include it in every Exec Lead turn so the rendered
-    /// context never refers to instructions that were not actually sent.
+    /// Include the fixed decision contract with every Exec Lead turn.
     pub(crate) fn render_exec_prompt(&self, ctx: &LeadContext) -> Result<String, LeadBrainError> {
-        // max_prompt_bytes bounds the context turn, as for app-server. Exec
-        // additionally transports this fixed contract on each normal turn.
+        // The context bound is independent of the fixed contract size.
         Ok(format!(
             "{DEVELOPER_INSTRUCTIONS}\n\n{}",
             self.render_prompt(ctx)?
@@ -318,17 +154,6 @@ impl CodexLeadBrain {
                 })
             })
             .collect();
-        let messages: Vec<Value> = ctx
-            .messages
-            .iter()
-            .map(|message| {
-                json!({
-                    "from": message.from_agent,
-                    "to": message.to_agent,
-                    "body": excerpt(&message.body, per_text),
-                })
-            })
-            .collect();
         let payload = json!({
             "root_task_id": ctx.root_task_id,
             "objective": excerpt(&ctx.objective, per_text),
@@ -337,7 +162,6 @@ impl CodexLeadBrain {
             "results": results,
             "artifacts": artifacts,
             "failures": failures,
-            "messages": messages,
         });
         payload.to_string()
     }
@@ -416,11 +240,11 @@ impl CodexLeadBrain {
         if answer.is_empty() {
             return Err("a complete answer must be non-empty".into());
         }
-        if answer.len() > self.config.max_answer_bytes {
+        if answer.len() > self.max_answer_bytes {
             return Err(format!(
                 "the complete answer is {} bytes, over the {}-byte bound",
                 answer.len(),
-                self.config.max_answer_bytes
+                self.max_answer_bytes
             ));
         }
         if selected_task_ids.is_empty() {
@@ -478,95 +302,6 @@ impl CodexLeadBrain {
         })
     }
 }
-
-#[async_trait]
-impl LeadBrain for CodexLeadBrain {
-    async fn decide(&mut self, ctx: &LeadContext) -> Result<LeadDecision, LeadBrainError> {
-        // The app-server client is a synchronous stdio conversation: a Lead
-        // turn is one request/response exchange, and no other work may touch
-        // the thread while it is in flight. `&mut self` cannot be moved into
-        // `spawn_blocking`, and the product runner drives the Lead from a
-        // current-thread runtime where nothing else needs this thread, so
-        // blocking directly here is the honest choice.
-        self.decide_turn(ctx)
-    }
-}
-
-impl Drop for CodexLeadBrain {
-    fn drop(&mut self) {
-        // `close` consumes the client, so take it out and kill the child: a
-        // dropped brain must not leave a Codex process behind.
-        if let Some(server) = self.server.take() {
-            let _ = server.close();
-        }
-    }
-}
-
-/// Pump one turn's events to completion and return its bounded visible reply.
-///
-/// The loop is bounded by `max_events` and fails closed when the bound is
-/// reached, so a wedged turn can never hang the Lead. Elicitations are answered
-/// through the single allowlisted RAS bridge and tool calls are refused: the
-/// Lead only reasons, and an unanswered request would hang the turn.
-fn pump_turn(
-    server: &mut CodexAppServer,
-    thread_id: &str,
-    turn_id: &str,
-    max_events: usize,
-) -> Result<String, LeadBrainError> {
-    for _ in 0..max_events {
-        match server
-            .next_event()
-            .map_err(|e| unavailable("read a codex lead event", e))?
-        {
-            CodexBridgeEvent::TurnCompleted {
-                thread_id: completed_thread,
-                turn_id: completed_turn,
-            } => {
-                // The app-server races events against correlated requests, so a
-                // queued completion of an earlier turn can surface first. Only
-                // the completion of the turn this round started carries this
-                // round's reply; anything else is skipped.
-                if !completed_turn.is_empty() && completed_turn != turn_id {
-                    continue;
-                }
-                if !completed_thread.is_empty() && completed_thread != thread_id {
-                    continue;
-                }
-                return server
-                    .final_agent_message(&completed_thread, &completed_turn)
-                    .map_err(|e| unavailable("read the completed codex lead turn", e));
-            }
-            CodexBridgeEvent::McpElicitation {
-                request_id,
-                server_name,
-            } => {
-                server
-                    .respond_ras_elicitation(request_id, &server_name)
-                    .map_err(|e| unavailable("answer a codex lead elicitation", e))?;
-            }
-            CodexBridgeEvent::ToolCall {
-                request_id, tool, ..
-            } => {
-                let refusal = format!("tool `{tool}` is not available to the lead");
-                server
-                    .respond_tool(request_id, false, &refusal)
-                    .map_err(|e| unavailable("refuse a codex lead tool call", e))?;
-            }
-            CodexBridgeEvent::Notification(_) => {}
-        }
-    }
-    Err(LeadBrainError::Unavailable(format!(
-        "the codex lead turn did not complete within {max_events} events"
-    )))
-}
-
-fn unavailable(action: &str, error: CodexBridgeError) -> LeadBrainError {
-    LeadBrainError::Unavailable(format!("codex lead failed to {action}: {error}"))
-}
-
-/// The strict decision wire. `deny_unknown_fields` plus a required field for
-/// every contract field makes both extra keys and missing keys a rejection.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum DecisionWire {
@@ -666,29 +401,13 @@ fn excerpt(text: &str, max_bytes: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
 
-    use agentmosaic_team::{
-        AgentMessage, AgentTaskResult, ArtifactMeta, LeadContext, SelectedArtifactRef,
-    };
+    use agentmosaic_team::{AgentTaskResult, ArtifactMeta, LeadContext, SelectedArtifactRef};
 
-    use super::{CodexLeadBrain, CodexLeadConfig};
-    use crate::LaunchSpec;
+    use super::LeadContract;
 
-    fn config(max_prompt_bytes: usize) -> CodexLeadConfig {
-        CodexLeadConfig {
-            launch: LaunchSpec::new("codex", Vec::new()).unwrap(),
-            working_directory: PathBuf::from("."),
-            model: None,
-            overrides: Vec::new(),
-            max_prompt_bytes,
-            max_answer_bytes: 4096,
-            max_events: 16,
-        }
-    }
-
-    fn brain() -> CodexLeadBrain {
-        CodexLeadBrain::new(config(4096), vec!["worker-a".into(), "reasoner-a".into()]).unwrap()
+    fn brain() -> LeadContract {
+        LeadContract::new(4096, 4096, vec!["worker-a".into(), "reasoner-a".into()])
     }
 
     fn context() -> LeadContext {
@@ -705,7 +424,6 @@ mod tests {
                             task_id: index + 2,
                             summary: format!("summary {index}"),
                             artifacts: Vec::new(),
-                            message: None,
                         },
                     )
                 })
@@ -718,11 +436,6 @@ mod tests {
                 },
             }],
             failures: vec![(99, "boom".into())],
-            messages: vec![AgentMessage {
-                from_agent: "worker-a".into(),
-                to_agent: "lead".into(),
-                body: "done".into(),
-            }],
         }
     }
 
@@ -738,48 +451,13 @@ mod tests {
                             task_id: index + 2,
                             summary: "s".repeat(4000),
                             artifacts: Vec::new(),
-                            message: None,
                         },
                     )
                 })
                 .collect(),
             failures: vec![(99, "boom".repeat(4000))],
-            messages: vec![AgentMessage {
-                from_agent: "worker-a".into(),
-                to_agent: "lead".into(),
-                body: "m".repeat(4000),
-            }],
             ..context()
         }
-    }
-
-    #[test]
-    fn config_fails_closed_before_any_process_starts() {
-        let mut broken = config(4096);
-        broken.launch = LaunchSpec {
-            program: "  ".into(),
-            args: Vec::new(),
-        };
-        assert!(broken.validate().is_err());
-        broken = config(4096);
-        broken.working_directory = PathBuf::from("definitely-not-a-directory");
-        assert!(broken.validate().is_err());
-        broken = config(4096);
-        broken.max_events = 0;
-        assert!(broken.validate().is_err());
-        broken = config(4096);
-        broken.max_answer_bytes = 0;
-        assert!(broken.validate().is_err());
-        broken = config(4096);
-        broken.model = Some("  ".into());
-        assert!(broken.validate().is_err());
-        assert!(config(4096).validate().is_ok());
-        // A budget too small to carry the contract is refused up front.
-        assert!(brain_config_error(16));
-    }
-
-    fn brain_config_error(max_prompt_bytes: usize) -> bool {
-        CodexLeadBrain::new(config(max_prompt_bytes), vec!["worker-a".into()]).is_err()
     }
 
     #[test]
@@ -792,7 +470,6 @@ mod tests {
         assert!(prompt.contains("\"results\""));
         assert!(prompt.contains("\"artifacts\""));
         assert!(prompt.contains("\"failures\""));
-        assert!(prompt.contains("\"messages\""));
         assert!(prompt
             .trim_end()
             .ends_with("developer instructions specify."));
@@ -800,7 +477,7 @@ mod tests {
 
     #[test]
     fn tiny_budget_refuses_context_that_cannot_preserve_all_references() {
-        let brain = CodexLeadBrain::new(config(1024), vec!["worker-a".into()]).unwrap();
+        let brain = LeadContract::new(1024, 4096, vec!["worker-a".into()]);
         let error = brain.render_prompt(&huge_context()).unwrap_err();
         assert!(error.to_string().contains("context capacity exceeded"));
         let correction = brain.correction_prompt(&"bad".repeat(4096));
@@ -810,7 +487,7 @@ mod tests {
 
     #[test]
     fn an_overflowing_context_is_truncated_within_the_bound() {
-        let brain = CodexLeadBrain::new(config(8192), vec!["worker-a".into()]).unwrap();
+        let brain = LeadContract::new(8192, 4096, vec!["worker-a".into()]);
         let prompt = brain.render_prompt(&huge_context()).unwrap();
         assert!(prompt.len() <= 8192, "prompt was {} bytes", prompt.len());
         let json = prompt
@@ -829,7 +506,7 @@ mod tests {
 
     #[test]
     fn default_task_budget_preserves_json_and_all_result_ids() {
-        let brain = CodexLeadBrain::new(config(32768), vec!["worker-a".into()]).unwrap();
+        let brain = LeadContract::new(32768, 4096, vec!["worker-a".into()]);
         for count in [8, 31, 32] {
             for text in ["x", "\"\\\n\t", "中文🦀"] {
                 let mut ctx = huge_context();
@@ -857,7 +534,7 @@ mod tests {
 
     #[test]
     fn artifact_identity_and_ownership_survive_text_reduction() {
-        let brain = CodexLeadBrain::new(config(8192), vec!["worker-a".into()]).unwrap();
+        let brain = LeadContract::new(8192, 4096, vec!["worker-a".into()]);
         let mut ctx = huge_context();
         let path = format!("{}result.json", "目录/".repeat(60));
         ctx.artifacts = vec![
@@ -887,16 +564,14 @@ mod tests {
 
     #[test]
     fn excessive_metadata_fails_before_spawning_a_lead() {
-        let mut brain = brain();
+        let brain = brain();
         let mut ctx = context();
         ctx.candidates.push("w".repeat(33000));
         assert!(brain
-            .decide_turn(&ctx)
+            .render_prompt(&ctx)
             .unwrap_err()
             .to_string()
             .contains("context capacity exceeded"));
-        assert!(brain.server.is_none());
-        assert!(brain.thread_id.is_none());
         assert!(brain.render_exec_prompt(&ctx).is_err());
 
         ctx = context();
@@ -950,24 +625,72 @@ mod tests {
     fn every_contract_violation_is_rejected() {
         let brain = brain();
         let cases = [
-            ("unknown top-level field", r#"{"action":"delegate","tasks":[{"kind":"bulk","target":null,"objective":"o"}],"note":"x"}"#),
-            ("unknown task field", r#"{"action":"delegate","tasks":[{"kind":"bulk","target":null,"objective":"o","parent":2}]}"#),
-            ("missing task field", r#"{"action":"delegate","tasks":[{"kind":"bulk","objective":"o"}]}"#),
-            ("missing complete field", r#"{"action":"complete","answer":"a","selected_task_ids":[2]}"#),
-            ("prose around the object", "here you go: {\"action\":\"delegate\",\"tasks\":[{\"kind\":\"bulk\",\"target\":null,\"objective\":\"o\"}]}"),
-            ("markdown fence", "```json\n{\"action\":\"delegate\",\"tasks\":[{\"kind\":\"bulk\",\"target\":null,\"objective\":\"o\"}]}\n```"),
-            ("empty objective", r#"{"action":"delegate","tasks":[{"kind":"bulk","target":null,"objective":"   "}]}"#),
+            (
+                "unknown top-level field",
+                r#"{"action":"delegate","tasks":[{"kind":"bulk","target":null,"objective":"o"}],"note":"x"}"#,
+            ),
+            (
+                "unknown task field",
+                r#"{"action":"delegate","tasks":[{"kind":"bulk","target":null,"objective":"o","parent":2}]}"#,
+            ),
+            (
+                "missing task field",
+                r#"{"action":"delegate","tasks":[{"kind":"bulk","objective":"o"}]}"#,
+            ),
+            (
+                "missing complete field",
+                r#"{"action":"complete","answer":"a","selected_task_ids":[2]}"#,
+            ),
+            (
+                "prose around the object",
+                "here you go: {\"action\":\"delegate\",\"tasks\":[{\"kind\":\"bulk\",\"target\":null,\"objective\":\"o\"}]}",
+            ),
+            (
+                "markdown fence",
+                "```json\n{\"action\":\"delegate\",\"tasks\":[{\"kind\":\"bulk\",\"target\":null,\"objective\":\"o\"}]}\n```",
+            ),
+            (
+                "empty objective",
+                r#"{"action":"delegate","tasks":[{"kind":"bulk","target":null,"objective":"   "}]}"#,
+            ),
             ("empty task list", r#"{"action":"delegate","tasks":[]}"#),
-            ("bad kind", r#"{"action":"delegate","tasks":[{"kind":"wizardry","target":null,"objective":"o"}]}"#),
+            (
+                "bad kind",
+                r#"{"action":"delegate","tasks":[{"kind":"wizardry","target":null,"objective":"o"}]}"#,
+            ),
             ("unknown action", r#"{"action":"ponder","tasks":[]}"#),
-            ("target not a candidate", r#"{"action":"delegate","tasks":[{"kind":"bulk","target":"rogue","objective":"o"}]}"#),
-            ("follow-up target not a candidate", r#"{"action":"follow_up","task":{"kind":"bulk","target":"rogue","objective":"o"}}"#),
-            ("empty answer", r#"{"action":"complete","answer":"  ","selected_task_ids":[2],"selected_artifacts":[]}"#),
-            ("no selected ids", r#"{"action":"complete","answer":"a","selected_task_ids":[],"selected_artifacts":[]}"#),
-            ("repeated id", r#"{"action":"complete","answer":"a","selected_task_ids":[2,2],"selected_artifacts":[]}"#),
-            ("malformed sha256", r#"{"action":"complete","answer":"a","selected_task_ids":[2],"selected_artifacts":[{"task_id":2,"path":"r.txt","sha256":"abc"}]}"#),
-            ("uppercase sha256", r#"{"action":"complete","answer":"a","selected_task_ids":[2],"selected_artifacts":[{"task_id":2,"path":"r.txt","sha256":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]}"#),
-            ("artifact for an unselected task", r#"{"action":"complete","answer":"a","selected_task_ids":[2],"selected_artifacts":[{"task_id":3,"path":"r.txt","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}"#),
+            (
+                "target not a candidate",
+                r#"{"action":"delegate","tasks":[{"kind":"bulk","target":"rogue","objective":"o"}]}"#,
+            ),
+            (
+                "follow-up target not a candidate",
+                r#"{"action":"follow_up","task":{"kind":"bulk","target":"rogue","objective":"o"}}"#,
+            ),
+            (
+                "empty answer",
+                r#"{"action":"complete","answer":"  ","selected_task_ids":[2],"selected_artifacts":[]}"#,
+            ),
+            (
+                "no selected ids",
+                r#"{"action":"complete","answer":"a","selected_task_ids":[],"selected_artifacts":[]}"#,
+            ),
+            (
+                "repeated id",
+                r#"{"action":"complete","answer":"a","selected_task_ids":[2,2],"selected_artifacts":[]}"#,
+            ),
+            (
+                "malformed sha256",
+                r#"{"action":"complete","answer":"a","selected_task_ids":[2],"selected_artifacts":[{"task_id":2,"path":"r.txt","sha256":"abc"}]}"#,
+            ),
+            (
+                "uppercase sha256",
+                r#"{"action":"complete","answer":"a","selected_task_ids":[2],"selected_artifacts":[{"task_id":2,"path":"r.txt","sha256":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]}"#,
+            ),
+            (
+                "artifact for an unselected task",
+                r#"{"action":"complete","answer":"a","selected_task_ids":[2],"selected_artifacts":[{"task_id":3,"path":"r.txt","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}"#,
+            ),
             ("empty reply", "   "),
         ];
         for (name, reply) in cases {
@@ -1007,7 +730,7 @@ mod tests {
     }
 
     #[test]
-    fn exec_prompt_carries_the_contract_that_app_server_gets_at_thread_start() {
+    fn exec_prompt_carries_the_strict_decision_contract() {
         let prompt = brain()
             .render_exec_prompt(&LeadContext {
                 root_task_id: 9,
@@ -1017,7 +740,6 @@ mod tests {
                 results: Vec::new(),
                 artifacts: Vec::new(),
                 failures: Vec::new(),
-                messages: Vec::new(),
             })
             .unwrap();
         assert!(prompt.contains("You are the Lead of a heterogeneous coding agent team"));
@@ -1027,9 +749,8 @@ mod tests {
 
     #[test]
     fn answer_over_the_bound_is_rejected() {
-        let mut config = config(4096);
-        config.max_answer_bytes = 8;
-        let brain = CodexLeadBrain::new(config, vec!["worker-a".into()]).unwrap();
+        let max_answer_bytes = 8;
+        let brain = LeadContract::new(4096, max_answer_bytes, vec!["worker-a".into()]);
         let reply = r#"{"action":"complete","answer":"0123456789","selected_task_ids":[2],"selected_artifacts":[]}"#;
         let error = brain.parse_reply(reply).unwrap_err();
         assert!(error.contains("over the 8-byte bound"), "{error}");

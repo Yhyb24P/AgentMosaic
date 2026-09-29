@@ -53,7 +53,10 @@ fn extended_binding_and_bounded_events_survive_reopen() {
     let task = seed_attempt(&path);
     {
         let mut board = SqliteTaskBoard::open(Connection::open(&path).unwrap()).unwrap();
-        assert_eq!(board.schema_version().unwrap(), 12);
+        assert_eq!(
+            board.schema_version().unwrap(),
+            agentmosaic_storage::SCHEMA_VERSION
+        );
         board
             .upsert_external_binding_extended(&ExtendedExternalRuntimeBinding {
                 binding: ExternalRuntimeBinding {
